@@ -1,83 +1,100 @@
 # ─────────────────────────────────────────────
-#  STEPS 3-5 — THE DECISION  (ties everything together)
+#  THE DECISION  — face-primary, body-fallback identity
 # ─────────────────────────────────────────────
-# Give it a segmented person crop, it returns:
-#   {person_id, label, name, confidence, confidence_pct, is_new, learned, error}
+# Give it a person crop (or pre-extracted embeddings) and it returns:
+#   {person_id, label, name, confidence, confidence_pct, matched_by, is_new,
+#    learned, error}
 #
-# Flow:  guard bad crops -> extract -> match -> threshold -> decide
-#        -> if matched but not near-perfect, LEARN the new view (raise confidence)
-#        -> else auto-enroll unknowns as new visitors.
+# Flow (mirrors the Brain's design — face first, body fallback):
+#   extract face (AdaFace) + body (OSNet)
+#   -> FACE match >= FACE_MATCH_THRESHOLD ? recognise by face
+#   -> else BODY match >= BODY_MATCH_THRESHOLD ? recognise by body
+#   -> else auto-enroll a new Visitor (with whatever embeddings we have)
+# On a recognise that isn't near-perfect, LEARN the new view (progressive confidence).
 
 from . import config
 from .extractor import Extractor
+from .face_extractor import FaceExtractor
 from .gallery import Gallery
 
 
 class Identifier:
     def __init__(self):
-        self.extractor = Extractor()
+        self.body = Extractor()        # OSNet body ReID (fallback signal)
+        self.face = FaceExtractor()    # AdaFace face embedding (primary signal)
         self.gallery = Gallery()
+        self.extractor = self.body     # backward-compat alias
 
     def _too_small(self, crop):
-        """A segmented crop too tiny/empty to trust for features."""
         if crop is None or crop.size == 0:
             return True
         h, w = crop.shape[:2]
         return h < config.MIN_CROP_SIDE or w < config.MIN_CROP_SIDE
 
-    def identify(self, person_bgr, match_threshold=None):
-        # ── STEP 0 — "couldn't extract features" guard ──
-        # If SAM 2 gave us nothing usable, don't invent an identity — say so.
-        if self._too_small(person_bgr):
-            return {
-                "person_id": None, "label": config.LABEL_UNKNOWN, "name": "",
-                "confidence": 0.0, "confidence_pct": 0.0,
-                "is_new": False, "learned": False,
-                "error": "no_features",   # segmentation failed / crop too small
-            }
+    def extract(self, person_bgr):
+        """Return (face_emb_or_None, body_emb_or_None) for a person crop."""
+        face = self.face.embed(person_bgr)
+        body = None if self._too_small(person_bgr) else self.body.embed(person_bgr)
+        return face, body
 
-        # ── STEP 1 — extract the 512-number embedding ──
-        emb = self.extractor.embed(person_bgr)
-        return self.identify_embedding(emb, match_threshold=match_threshold)
+    def identify(self, person_bgr, face_threshold=None):
+        face_emb, body_emb = self.extract(person_bgr)
+        return self.identify_features(face_emb, body_emb, face_threshold)
 
-    def identify_embedding(self, emb, match_threshold=None):
-        """Same decision as identify() but on an ALREADY-extracted embedding, so
-        the pipeline can compute the vector once (and reuse it to emit to the
-        Brain) and pass a per-camera threshold override.
+    def identify_features(self, face_emb, body_emb, face_threshold=None):
+        """Decide identity from already-extracted embeddings (so the pipeline can
+        compute them once and reuse them to emit to the Brain). `face_threshold`
+        overrides FACE_MATCH_THRESHOLD for this call (per-camera stricter/looser)."""
+        if face_emb is None and body_emb is None:
+            return self._result(None, config.LABEL_UNKNOWN, "", 0.0,
+                                 matched_by="none", error="no_features")
 
-        match_threshold=None → use the global config.MATCH_THRESHOLD. Passing a
-        higher value (e.g. 0.85) makes THIS camera stricter without touching the
-        others — that's how you 'raise the threshold' on a specific camera."""
-        threshold = config.MATCH_THRESHOLD if match_threshold is None else match_threshold
+        face_thr = config.FACE_MATCH_THRESHOLD if face_threshold is None else face_threshold
+        best_sim = 0.0
 
-        # ── STEP 2 — find the closest known person ──
-        match, sim = self.gallery.best_match(emb)
+        # ── FACE (primary) ──
+        if face_emb is not None:
+            p, sim = self.gallery.best_match_face(face_emb)
+            best_sim = max(best_sim, sim)
+            if p is not None and sim >= face_thr:
+                learned = self._maybe_learn(self.gallery.add_face_view, p, face_emb, sim)
+                # keep a body view too, so this person is still findable by body later
+                if body_emb is not None and not p.body_views:
+                    self.gallery.add_body_view(p, body_emb)
+                return self._result(p.id, p.label, p.name, sim,
+                                    matched_by="face", learned=learned)
 
-        # ── STEP 3 — recognized? (above the threshold) ──
-        if match is not None and sim >= threshold:
-            # PROGRESSIVE CONFIDENCE: matched, but not a near-duplicate → this is
-            # a fresh angle worth remembering, so next time the score is higher.
-            learned = False
-            if sim < config.LEARN_CEILING:
-                self.gallery.add_view(match, emb)
-                learned = True
-            return {
-                "person_id": match.id, "label": match.label, "name": match.name,
-                "confidence": round(sim, 4), "confidence_pct": round(sim * 100, 1),
-                "is_new": False, "learned": learned, "error": None,
-            }
+        # ── BODY (fallback) ──
+        if body_emb is not None:
+            p, sim = self.gallery.best_match_body(body_emb)
+            best_sim = max(best_sim, sim)
+            if p is not None and sim >= config.BODY_MATCH_THRESHOLD:
+                learned = self._maybe_learn(self.gallery.add_body_view, p, body_emb, sim)
+                # attach the face too if we now have one and they didn't before
+                if face_emb is not None and not p.face_views:
+                    self.gallery.add_face_view(p, face_emb)
+                return self._result(p.id, p.label, p.name, sim,
+                                    matched_by="body", learned=learned)
 
-        # ── STEP 4 — nobody matched well enough → Unknown ──
+        # ── nobody matched → new Visitor ──
         if config.AUTO_ENROLL_UNKNOWN:
-            new_person = self.gallery.add(emb, label=config.LABEL_VISITOR)
-            return {
-                "person_id": new_person.id, "label": config.LABEL_VISITOR, "name": "",
-                "confidence": round(sim, 4), "confidence_pct": round(sim * 100, 1),
-                "is_new": True, "learned": False, "error": None,
-            }
+            p = self.gallery.add(face_emb, body_emb, label=config.LABEL_VISITOR)
+            return self._result(p.id, config.LABEL_VISITOR, "", best_sim,
+                                matched_by="none", is_new=True)
 
+        return self._result(None, config.LABEL_UNKNOWN, "", best_sim, matched_by="none")
+
+    def _maybe_learn(self, add_view_fn, person, embedding, sim):
+        if sim < config.LEARN_CEILING:
+            add_view_fn(person, embedding)
+            return True
+        return False
+
+    def _result(self, pid, label, name, sim, matched_by, is_new=False,
+                learned=False, error=None):
         return {
-            "person_id": None, "label": config.LABEL_UNKNOWN, "name": "",
+            "person_id": pid, "label": label, "name": name,
             "confidence": round(sim, 4), "confidence_pct": round(sim * 100, 1),
-            "is_new": False, "learned": False, "error": None,
+            "matched_by": matched_by, "is_new": is_new, "learned": learned,
+            "error": error,
         }

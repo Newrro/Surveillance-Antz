@@ -15,7 +15,7 @@ log of everything that happened.
 
 | Part | Folder | Owner | Responsibility | Status |
 |---|---|---|---|---|
-| **1 — Perception** | [`surveillance_AI/`](surveillance_AI/) | Prithvi + Tushar | RTSP ingest → detect → segment (>80% conf) → **body ReID embedding** (face: TODO) → emits detection JSON | ✅ implemented |
+| **1 — Perception** | [`surveillance_AI/`](surveillance_AI/) | Prithvi + Tushar | RTSP ingest → detect → segment → **face (AdaFace) + body (OSNet) embeddings** → identity → emits detection JSON | ✅ implemented |
 | **1b — Camera config** | [`surveillance_Camera_config/`](surveillance_Camera_config/) | Prithvi + Tushar | Camera registry (uid, RTSP url, zone, is_exit) shared by Parts 1 & 2 | ✅ implemented |
 | **2 — Brain** | [`surveillance_brain/`](surveillance_brain/) | **Saaketh** | Identity resolution, tracking, dedup, DB (Postgres + **Qdrant** + Redis), logs, REST + WS API | ✅ implemented |
 | **3 — Interface** | [`surveillance_UI/`](surveillance_UI/) | Ammarath | Live feed, log table, person profiles, employee enrollment — reads Part 2's API only | 🟡 skeleton |

@@ -1,28 +1,32 @@
 # Part 1 — Perception Pipeline (`surveillance_AI`)
 
-> Owner: Prithvi + Tushar · Status: **implemented & validated on the live gate cameras**
-> (detect → segment → body ReID → identity)
+> Owner: Prithvi + Tushar · Status: **implemented & validated**
+> (detect → segment → **face (AdaFace) + body (OSNet)** → identity)
 
 Turns raw camera input into a person identity: detect people, segment them, extract
-a body feature vector, and assign **Employee / Visitor / Unknown + a confidence %**
-locally — with the option to also POST the detection to the Brain (Part 2).
+a **face** embedding (primary) and a **body** embedding (fallback), and assign
+**Employee / Visitor / Unknown + a confidence %** locally — with the option to also
+POST the detection to the Brain (Part 2).
 
-Validated end-to-end on all 7 RTSP cameras: `detect`-role cameras box people
-(detection only) and `identify`-role cameras label them Employee/Visitor/Unknown
-with a confidence %.
+Validated on the live RTSP cameras (detection + role split) and on recorded video
+(face-primary identity keeps the **same person on the same ID** across frames, where
+body-only ReID used to churn a new ID every frame).
 
-## The three models (no YOLO)
+## The models (no YOLO)
 
 | Stage | Model | Where |
 |---|---|---|
 | **Detection** — find people (boxes) | **FasterRCNN-MobileNetV3** | [`detector.py`](detector.py) |
 | **Segmentation** — mask each person | **SAM 2** (optional) | [`segmenter.py`](segmenter.py) |
-| **Body ReID + identity** — who is it | **OSNet** (torchreid) | [`feature_id/`](feature_id/) |
+| **Face embedding — PRIMARY identity** | **AdaFace IR-101 / WebFace12M** + MTCNN detector | [`feature_id/face_extractor.py`](feature_id/face_extractor.py) |
+| **Body ReID — FALLBACK identity** | **OSNet** (torchreid) | [`feature_id/extractor.py`](feature_id/extractor.py) |
 
-> SAM 2 is a *segmentation* model — it masks a region you point it at; it does not
-> detect "person" by itself. So a detector (FasterRCNN) finds the box, SAM 2 masks
-> it. This is exactly what the reference `sam2_people_live.py` did — now split into
-> reusable modules, so you don't run that script separately.
+> **Face first, body fallback** (matching the Brain's design): faces are far more
+> discriminative than body ReID, so a visible face gives a stable ID; when no usable
+> face is found (too small / turned away) we fall back to the body vector.
+> AdaFace is the recognition model (**not** InsightFace); MTCNN is used only as the
+> face detector. SAM 2 is *segmentation* — a detector (FasterRCNN) finds the box, SAM 2
+> masks it; this is what the reference `sam2_people_live.py` did, now split into modules.
 
 ## Modules
 
@@ -32,7 +36,7 @@ with a confidence %.
 | [`pano.py`](pano.py) | 360° (Insta360) support — reads one equirectangular stream and carves it into flat perspective views (front/right/back/left), each a normal camera with its own role. |
 | [`detector.py`](detector.py) | `PersonDetector` — FasterRCNN boxes + false-positive filters (min height, upright aspect) tuned on the outdoor gate feed. |
 | [`segmenter.py`](segmenter.py) | `SAM2Segmenter` — SAM 2 mask per person to blank the background before ReID. Heavy; opt-in (`--segment`). |
-| [`feature_id/`](feature_id/) | OSNet body ReID + the local identity gallery (Employee/Visitor/Unknown + confidence, progressive learning). See [`feature_id/README.md`](feature_id/README.md). |
+| [`feature_id/`](feature_id/) | Face (AdaFace) + body (OSNet) embeddings and the local identity gallery — face-primary/body-fallback, Employee/Visitor/Unknown + confidence, progressive learning. See [`feature_id/README.md`](feature_id/README.md). |
 | [`pipeline.py`](pipeline.py) | **The producer** — role-aware: detect-only on path cams, full detect→segment→ReID→identity on identify cams; optional `POST /events` to the Brain. |
 | [`live_view.py`](live_view.py) | Multi-camera detection viewer (grid + click-to-fullscreen). The "it works" demo. |
 | [`emit_example.py`](emit_example.py) | Mock producer with synthetic embeddings — test the Brain before the models are set up. |
@@ -79,16 +83,19 @@ RTX 4060 laptop install a CUDA build — the code auto-detects and uses the GPU)
 **Device** auto-detects: CUDA on the 4060 laptop, CPU otherwise. Force with
 `FEATURE_ID_DEVICE=cpu|cuda`. All three models (FasterRCNN, SAM 2, OSNet) fit in 6 GB.
 
-**OSNet (body ReID)** — weights live in [`models/`](models/), picked up in this order:
+All weights live in [`models/`](models/), which is **gitignored** — so they travel in
+a **zip** of the folder but not via `git clone`. If you clone, re-fetch them:
 
-1. `models/osnet_x1_0_market.pth` — **market1501-trained** (best for person ReID; bundled).
-2. `models/osnet_x1_0_imagenet.pth` — ImageNet-pretrained fallback (bundled, offline-safe).
-3. none → `torchreid` auto-downloads ImageNet weights on first run (needs internet).
+**AdaFace (face, primary)** — `models/adaface_ir101_webface12m.pt` (IR-101, WebFace12M).
+The model *code* is vendored ([`feature_id/adaface_net.py`](feature_id/adaface_net.py));
+only the weights download. To re-fetch and strip to model-only:
+```bash
+python -c "import gdown; gdown.download('https://drive.google.com/uc?id=1dswnavflETcnAuplZj1IOKKP0eM8ITgT','models/adaface.ckpt',quiet=False)"
+python -c "import torch; sd=torch.load('models/adaface.ckpt',map_location='cpu')['state_dict']; torch.save({k[6:]:v for k,v in sd.items() if k.startswith('model.')},'models/adaface_ir101_webface12m.pt')"
+```
 
-`models/*.pth` is **gitignored**, so the bundled weights travel in a **zip** of the
-folder but not via `git clone`. If you clone and the files are missing, re-fetch the
-market weights (best accuracy):
-
+**OSNet (body, fallback)** — picked up in order: `osnet_x1_0_market.pth` (market1501,
+best; bundled) → `osnet_x1_0_imagenet.pth` (bundled fallback) → torchreid auto-download.
 ```bash
 python -c "import gdown; gdown.download('https://drive.google.com/uc?id=1vduhq5DpN2q1g4fYEZfPI17MJeh9qyrA', 'models/osnet_x1_0_market.pth', quiet=False)"
 ```
@@ -131,8 +138,9 @@ to the Brain's `POST /events`:
 
 - `camera_id` = the camera's `camera_uid`.
 - `detection_conf` = the detector's score (`--conf`, default 0.50, gates person acceptance).
-- `body_embedding` = 512-dim OSNet ReID vector (L2-normalized).
-- `face_embedding` = `null` for now — no face model wired yet (contract requires only one).
+- `face_embedding` = 512-dim AdaFace vector when a face is visible (primary; else `null`).
+- `body_embedding` = 512-dim OSNet ReID vector (fallback; `null` if the crop was too small).
+- At least one of the two is always present (contract requirement).
 - `snapshot_path` = crop saved under the shared `storage/img/<camera_uid>/`.
 
 Detect-only cameras have no embedding, so they log detections but don't emit.

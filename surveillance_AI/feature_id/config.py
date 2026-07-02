@@ -48,15 +48,28 @@ if not DEVICE:
         DEVICE = "cpu"
 
 # ─────────────────────────────────────────────
-#  THE THRESHOLD  — the single most important number you own
+#  FACE MODEL  — the PRIMARY identity signal (AdaFace, NOT InsightFace)
 # ─────────────────────────────────────────────
-# Cosine similarity ranges 0..1 (1 = identical looking).
-# If the best match in the gallery scores >= MATCH_THRESHOLD, we trust it.
-# Otherwise the person is "Unknown".
-#   - too HIGH  → real matches get missed (same person called Unknown)
-#   - too LOW   → strangers get mislabeled as someone they aren't
-# 0.75 is a sane starting point; you'll tune it with calibrate.py on real crops.
-MATCH_THRESHOLD = 0.75
+# AdaFace IR-101 trained on WebFace12M: state-of-the-art face recognition, strong
+# on the low-quality / off-angle faces typical of CCTV. Face DETECTION + 5-point
+# landmarks come from facenet-pytorch's MTCNN (detector only); the embedding is
+# AdaFace. Face is matched first; body ReID (below) is the cross-camera fallback.
+FACE_BACKBONE = "ir_101"
+FACE_WEIGHTS = os.path.join(_MODELS_DIR, "adaface_ir101_webface12m.pt")
+FACE_MIN_SIZE = 40        # ignore faces smaller than this (px side) — too small to trust
+FACE_DET_CONF = 0.90      # MTCNN face-detection confidence floor
+
+# ─────────────────────────────────────────────
+#  THE THRESHOLDS  — the numbers that most control identity accuracy
+# ─────────────────────────────────────────────
+# Cosine similarity; a gallery match >= threshold is trusted, else the person is new.
+#   - too HIGH → real matches missed (same person keeps getting new ids)
+#   - too LOW  → strangers merged into someone they aren't
+# FACE (primary): AdaFace same-person cosine ~0.35+, different people usually < 0.2.
+# BODY (fallback): OSNet ReID, less discriminative, so a higher bar.
+FACE_MATCH_THRESHOLD = 0.30
+BODY_MATCH_THRESHOLD = 0.75
+MATCH_THRESHOLD = BODY_MATCH_THRESHOLD   # backward-compat alias (body)
 
 # When we see an Unknown person, should we automatically remember them as a
 # new Visitor so they're recognised next time? (Your gate→pathway design wants this.)

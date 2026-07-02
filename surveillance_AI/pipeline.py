@@ -91,15 +91,15 @@ def save_snapshot(camera_uid, crop_bgr, stamp_ms, idx):
     return f"storage/img/{camera_uid}/{fname}"
 
 
-def build_payload(camera_uid, score, body_embedding, snapshot_path, stamp_ms, idx):
+def build_payload(camera_uid, score, face_embedding, body_embedding, snapshot_path, stamp_ms, idx):
     """Part 1 → Part 2 detection payload (contracts/part1_to_part2.event.schema.json)."""
     return {
         "detection_id": f"{camera_uid}-{stamp_ms}-{idx}",
         "camera_id": camera_uid,
         "timestamp": utc_now_iso(),
         "detection_conf": round(float(score), 4),
-        "face_embedding": None,                       # no face model wired yet
-        "body_embedding": [float(x) for x in body_embedding],
+        "face_embedding": [float(x) for x in face_embedding] if face_embedding is not None else None,
+        "body_embedding": [float(x) for x in body_embedding] if body_embedding is not None else None,
         "snapshot_path": snapshot_path,
         "clip_path": None,                            # short-clip capture: TODO
     }
@@ -192,17 +192,18 @@ def main():
                     if crop is None:
                         continue
 
-                    emb = identifier.extractor.embed(crop)
-                    result = identifier.identify_embedding(emb, match_threshold=cam.match_threshold)
+                    face_emb, body_emb = identifier.extract(crop)
+                    result = identifier.identify_features(face_emb, body_emb,
+                                                          face_threshold=cam.match_threshold)
                     snap = save_snapshot(uid, crop, stamp_ms, i)
 
                     tag = "NEW " if result["is_new"] else ("learn " if result["learned"] else "")
                     print(f"[{uid}] {result['label']:8} {result['person_id']}  "
-                          f"conf={result['confidence_pct']}%  {tag}"
+                          f"conf={result['confidence_pct']}% via {result['matched_by']:4}  {tag}"
                           f"(det {box[4]:.2f})")
 
                     if args.emit and result["error"] != "no_features":
-                        payload = build_payload(uid, box[4], emb, snap, stamp_ms, i)
+                        payload = build_payload(uid, box[4], face_emb, body_emb, snap, stamp_ms, i)
                         try:
                             r = session.post(f"{args.brain_url}/events", json=payload, timeout=10)
                             print(f"    → POST /events {r.status_code}")

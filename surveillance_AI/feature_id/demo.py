@@ -35,9 +35,10 @@ def main():
     idf = Identifier()
 
     # Pre-enroll person A as an Employee (as enroll.py would from a photo).
-    empA = idf.extractor.embed(make_image("A"))
-    idf.gallery.add(empA, label=config.LABEL_EMPLOYEE, name="Test Person", person_id="EMP-TEST")
-    print("\nEnrolled EMP-TEST with 1 view.\n")
+    # Synthetic images have no real faces, so this demo exercises the BODY path.
+    empA = idf.body.embed(make_image("A"))
+    idf.gallery.add(body_emb=empA, label=config.LABEL_EMPLOYEE, name="Test Person", person_id="EMP-TEST")
+    print("\nEnrolled EMP-TEST with 1 body view.\n")
 
     # See A again from a "new angle" (noisy) → recognised; may LEARN the new view.
     show("A new-angle", idf.identify(make_image("A", noise=40)))

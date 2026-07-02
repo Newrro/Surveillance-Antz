@@ -11,5 +11,6 @@ torchvision
 opencv-python
 numpy
 requests
-torchreid
-gdown          # to fetch the market1501 OSNet weights (see README "Weights")
+torchreid            # OSNet body ReID (fallback identity)
+facenet-pytorch      # MTCNN face detector (recognition is AdaFace, vendored in feature_id/adaface_net.py)
+gdown                # to fetch the OSNet + AdaFace weights (see README "Weights")

@@ -1,0 +1,84 @@
+# ──────────────────────────────────────────────────────────────────────────
+# CI — runs the smoke test suite on every push and PR.
+# Spins up Postgres, Redis, and Qdrant as service containers.
+# ──────────────────────────────────────────────────────────────────────────
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: surveillance
+          POSTGRES_PASSWORD: surveillance
+          POSTGRES_DB: surveillance
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U surveillance"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      qdrant:
+        image: qdrant/qdrant:v1.12.1
+        ports:
+          - 6333:6333
+          - 6334:6334
+
+    env:
+      POSTGRES_USER: surveillance
+      POSTGRES_PASSWORD: surveillance
+      POSTGRES_DB: surveillance
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      QDRANT_HOST: localhost
+      QDRANT_PORT: 6333
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: changeme
+      ENABLE_MIDNIGHT_FLUSH: "0"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Run Alembic migrations
+        run: alembic upgrade head
+
+      - name: Run seed script
+        run: python scripts/seed.py
+
+      - name: Run smoke tests
+        run: pytest tests/ -v --tb=short

@@ -1,0 +1,108 @@
+# ── Monorepo root .gitignore (Project RUNG01 / Surveillance-Antz) ──────────
+# Per-part .gitignore files (e.g. surveillance_brain/.gitignore) also apply.
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECRETS & CREDENTIALS — never commit these
+# (only *.example / *.sample / *.template variants are allowed through below)
+# ═══════════════════════════════════════════════════════════════════════════
+# Environment / dotenv files
+.env
+.env.*
+*.env
+!.env.example
+!*.env.example
+!.env.sample
+!.env.template
+
+# Private keys, certs, keystores
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+*.ppk
+
+# Cloud / service credentials & tokens
+*credentials*.json
+*service-account*.json
+gcp-*.json
+aws-credentials
+.aws/
+.gcloud/
+*.pat
+*token*.txt
+*secret*.json
+secrets.*
+*.secrets
+.netrc
+.htpasswd
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Python
+# ═══════════════════════════════════════════════════════════════════════════
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ── Virtualenvs ────────────────────────────────────────────
+.venv/
+.venv_check/
+venv/
+env/
+ENV/
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Node / frontend (Part 3)
+# ═══════════════════════════════════════════════════════════════════════════
+node_modules/
+.next/
+.vite/
+*.local
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Shared runtime storage (snapshots, clips, JSON/JSONL archive)
+# ═══════════════════════════════════════════════════════════════════════════
+storage/
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ML weights / large artifacts (Part 1)
+# ═══════════════════════════════════════════════════════════════════════════
+*.pt
+*.pth
+*.onnx
+*.engine
+*.weights
+
+# ═══════════════════════════════════════════════════════════════════════════
+# IDE / editor / OS
+# ═══════════════════════════════════════════════════════════════════════════
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Logs ───────────────────────────────────────────────────
+*.log
+logs/

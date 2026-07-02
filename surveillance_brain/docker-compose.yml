@@ -1,0 +1,135 @@
+# ──────────────────────────────────────────────────────────────────────────
+# docker-compose.yml — Surveillance Brain (Project RUNG01 — Part 2)
+# ──────────────────────────────────────────────────────────────────────────
+# One-click boot of the entire Brain stack:
+#
+#     docker compose up --build
+#
+# Brings up:
+#   1. Postgres 16          (structured records + logs)
+#   2. Redis 7              (live presence cache + duplicate guard)
+#   3. Qdrant               (face + body embedding vector DB)
+#   4. FastAPI app          (built from ./Dockerfile)
+#
+# On first boot the app runs `alembic upgrade head` + `python scripts/seed.py`
+# then starts uvicorn.  Migrations + seed are idempotent.
+# ──────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ─── Postgres 16 ─────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: surveillance-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-surveillance}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-surveillance}
+      POSTGRES_DB: ${POSTGRES_DB:-surveillance}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-surveillance} -d ${POSTGRES_DB:-surveillance}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [surveillance_net]
+
+  # ─── Redis 7 ─────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: surveillance-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks: [surveillance_net]
+
+  # ─── Qdrant (vector DB) ──────────────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:v1.12.1
+    container_name: surveillance-qdrant
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"   # REST
+      - "6334:6334"                   # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks: [surveillance_net]
+
+  # ─── FastAPI app ─────────────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: surveillance-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-surveillance}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-surveillance}
+      POSTGRES_DB: ${POSTGRES_DB:-surveillance}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      DETECTION_CONF_THRESHOLD: ${DETECTION_CONF_THRESHOLD:-0.80}
+      FACE_SIMILARITY_THRESHOLD: ${FACE_SIMILARITY_THRESHOLD:-0.65}
+      BODY_SIMILARITY_THRESHOLD: ${BODY_SIMILARITY_THRESHOLD:-0.60}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-512}
+      SESSION_TIMEOUT_SECONDS: ${SESSION_TIMEOUT_SECONDS:-300}
+      DUPLICATE_WINDOW_SECONDS: ${DUPLICATE_WINDOW_SECONDS:-30}
+      MIDNIGHT_FLUSH_CRON: ${MIDNIGHT_FLUSH_CRON:-0 0 * * *}
+      ARCHIVE_CRON: ${ARCHIVE_CRON:-*/30 * * * *}
+      STORAGE_ROOT: storage
+      LOG_DIR: storage/logs
+      DATASHEET_DIR: storage/datasheet
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENVIRONMENT: ${ENVIRONMENT:-dev}
+      ENABLE_MIDNIGHT_FLUSH: "1"
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    volumes:
+      # Persist the JSON/JSONL archive on the host so it survives restarts.
+      - ./storage:/app/storage
+    networks: [surveillance_net]
+    command: >
+      sh -c "
+        alembic upgrade head &&
+        python scripts/seed.py &&
+        uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips '*'
+      "
+
+networks:
+  surveillance_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  qdrant_data:
+    driver: local

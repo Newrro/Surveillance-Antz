@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Newrro/Surveillance-Antz/contracts/part1_to_part2.event.schema.json",
+  "title": "Part 1 -> Part 2 detection payload",
+  "description": "One accepted person detection emitted by the Perception pipeline (Part 1) and POSTed to the Brain's POST /events endpoint. At least one of face_embedding / body_embedding must be present.",
+  "type": "object",
+  "required": ["camera_id", "timestamp", "detection_conf"],
+  "additionalProperties": false,
+  "properties": {
+    "detection_id": {
+      "type": ["string", "null"],
+      "maxLength": 64,
+      "description": "Stable per-detection id from Part 1 (one per accepted person crop)."
+    },
+    "camera_id": {
+      "type": "string",
+      "description": "Camera UID string, e.g. 'GATE-01'. Must exist in the cameras table."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO8601 UTC detection time from the edge device."
+    },
+    "detection_conf": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Detection confidence 0.0-1.0. Below the Brain's DETECTION_CONF_THRESHOLD (0.80) => classified Unknown, no vector search."
+    },
+    "face_embedding": {
+      "type": ["array", "null"],
+      "items": { "type": "number" },
+      "description": "Face embedding (length must equal EMBEDDING_DIMENSIONS, default 512). Primary identity signal."
+    },
+    "body_embedding": {
+      "type": ["array", "null"],
+      "items": { "type": "number" },
+      "description": "Body ReID embedding (length must equal EMBEDDING_DIMENSIONS, default 512). Cross-camera fallback."
+    },
+    "snapshot_path": {
+      "type": ["string", "null"],
+      "description": "Path/URL to the person snapshot in shared storage."
+    },
+    "clip_path": {
+      "type": ["string", "null"],
+      "description": "Path/URL to the short clip in shared storage."
+    }
+  },
+  "anyOf": [
+    { "required": ["face_embedding"] },
+    { "required": ["body_embedding"] }
+  ],
+  "examples": [
+    {
+      "detection_id": "det-abc-123",
+      "camera_id": "GATE-01",
+      "timestamp": "2026-07-01T09:14:22.501Z",
+      "detection_conf": 0.93,
+      "face_embedding": [0.12, -0.44, 0.03],
+      "body_embedding": [0.02, 0.31, -0.11],
+      "snapshot_path": "storage/img/abc.jpg",
+      "clip_path": "storage/vid/abc.mp4"
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+# ──────────────────────────────────────────────────────────────────────────
+# Surveillance Brain (Project RUNG01 — Part 2) — Python dependencies
+# Pinned to known-good versions; bump deliberately.
+# ──────────────────────────────────────────────────────────────────────────
+
+# --- Web framework ---------------------------------------------------------
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+websockets==14.1                # WS /live transport for uvicorn
+
+# --- Database (PostgreSQL 16) ----------------------------------------------
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+psycopg[binary]==3.2.3          # sync driver — used by Alembic only
+
+# --- Vector DB (Qdrant) ----------------------------------------------------
+qdrant-client==1.12.1
+
+# --- Redis (live presence + duplicate guard) -------------------------------
+redis[hiredis]==5.2.1
+
+# --- Migrations ------------------------------------------------------------
+alembic==1.14.0
+
+# --- Scheduling (midnight flush + archive workers) -------------------------
+apscheduler==3.11.0
+
+# --- Testing ---------------------------------------------------------------
+pytest==8.3.4
+httpx==0.28.1                   # required by fastapi.testclient
+
+# --- Dev tooling -----------------------------------------------------------
+python-dotenv==1.0.1

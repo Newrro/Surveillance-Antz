@@ -1,0 +1,9 @@
+{
+  "cameras": [
+    { "camera_uid": "GATE-01",   "name": "Main Gate — Entry",   "zone_id": "ZONE-GATE",   "is_exit_camera": false, "stream_url": "rtsp://gate-01.local/stream",   "is_active": true },
+    { "camera_uid": "GATE-EXIT", "name": "Main Gate — Exit",    "zone_id": "ZONE-EXIT",   "is_exit_camera": true,  "stream_url": "rtsp://gate-exit.local/stream", "is_active": true },
+    { "camera_uid": "LOBBY-01",  "name": "Reception Lobby",     "zone_id": "ZONE-LOBBY",  "is_exit_camera": false, "stream_url": "rtsp://lobby-01.local/stream",  "is_active": true },
+    { "camera_uid": "ZONE-A",    "name": "Zone A — Engineering","zone_id": "ZONE-A-ENG",  "is_exit_camera": false, "stream_url": "rtsp://zone-a.local/stream",    "is_active": true },
+    { "camera_uid": "ZONE-B",    "name": "Zone B — Cafeteria",  "zone_id": "ZONE-B-CAFE", "is_exit_camera": false, "stream_url": "rtsp://zone-b.local/stream",    "is_active": true }
+  ]
+}

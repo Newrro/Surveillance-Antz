@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Newrro/Surveillance-Antz/contracts/part2_to_part3.event.schema.json",
+  "title": "Part 2 -> Part 3 event object",
+  "description": "The canonical event object the Brain returns from POST /events, streams over WS /live, and lists from GET /events. Consumed by the Interface (Part 3).",
+  "type": "object",
+  "required": ["time", "camera", "label"],
+  "properties": {
+    "event_id": {
+      "type": ["integer", "null"],
+      "description": "Postgres detection_events PK. Null when the event was a suppressed duplicate."
+    },
+    "detection_id": { "type": ["string", "null"] },
+    "time": {
+      "type": "string",
+      "description": "ISO8601 detection time."
+    },
+    "camera": {
+      "type": ["string", "null"],
+      "description": "Camera UID, e.g. 'GATE-01'."
+    },
+    "camera_id": { "type": ["integer", "null"] },
+    "zone_id": { "type": ["string", "null"] },
+    "person_id": {
+      "type": ["string", "null"],
+      "description": "Display label, e.g. 'EMP-2026-0001' / 'VIS-2026-0007'. Null for Unknown."
+    },
+    "identity_id": {
+      "type": ["integer", "null"],
+      "description": "Internal surrogate identity id. Null for Unknown."
+    },
+    "label": {
+      "type": "string",
+      "enum": ["Employee", "Visitor", "Unknown"]
+    },
+    "name": { "type": ["string", "null"] },
+    "confidence": {
+      "type": ["number", "null"],
+      "description": "Part 1 detection_conf (0.0-1.0)."
+    },
+    "matched_by": {
+      "type": ["string", "null"],
+      "enum": ["face", "body", "none", null],
+      "description": "Which modality produced the identity match."
+    },
+    "similarity": {
+      "type": ["number", "null"],
+      "description": "Cosine similarity of the winning vector match."
+    },
+    "snapshot": { "type": ["string", "null"] },
+    "clip": { "type": ["string", "null"] },
+    "duplicate": {
+      "type": ["boolean", "null"],
+      "description": "True if suppressed by the short-window duplicate guard (not written to the ledger)."
+    }
+  },
+  "examples": [
+    {
+      "event_id": 42,
+      "detection_id": "det-abc-123",
+      "time": "2026-07-01T09:14:22.501000+00:00",
+      "camera": "GATE-01",
+      "camera_id": 1,
+      "zone_id": "ZONE-GATE",
+      "person_id": "EMP-2026-0001",
+      "identity_id": 1,
+      "label": "Employee",
+      "name": "Asha R.",
+      "confidence": 0.93,
+      "matched_by": "face",
+      "similarity": 0.94,
+      "snapshot": "storage/img/abc.jpg",
+      "clip": "storage/vid/abc.mp4",
+      "duplicate": false
+    }
+  ]
+}

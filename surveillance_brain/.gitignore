@@ -1,0 +1,48 @@
+# ── Python ─────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ── Virtualenvs ────────────────────────────────────────────
+.venv/
+.venv_check/
+venv/
+env/
+ENV/
+
+# ── Environment files ──────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.env
+
+# ── Local storage (runtime JSON/JSONL archive + media) ─────
+storage/
+
+# ── IDE / editor ───────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Docker ─────────────────────────────────────────────────
+docker-compose.override.yml
+
+# ── Logs / runtime ─────────────────────────────────────────
+*.log
+logs/
+surveillance_*.db

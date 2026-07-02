@@ -40,15 +40,30 @@ DEFAULT_ROLE = "detect"
 
 @dataclass
 class Camera:
-    """One camera, metadata + (if a secret exists) a ready-to-open RTSP URL."""
+    """One camera, metadata + (if a secret exists) a ready-to-open stream URL.
+
+    source_type decides how frames are obtained:
+      "rtsp"      → stream_url built from ip/user/pwd (Hikvision-style cams).
+      "url"       → stream_url is a direct HTTP/RTSP URL (e.g. an MJPEG feed).
+      "pano_view" → a flat view carved from a shared 360° source; stream_url is
+                    the source URL and yaw/pitch/fov/equi_* describe the view.
+    """
     camera_uid: str
     name: str
     zone_id: str
     is_exit_camera: bool
     is_active: bool
-    stream_url: Optional[str]           # None when no credentials are configured for it
+    stream_url: Optional[str]           # None when no connection is configured for it
     role: str = DEFAULT_ROLE            # "detect" or "identify"
     match_threshold: Optional[float] = None  # per-camera override of feature_id MATCH_THRESHOLD
+    source_type: str = "rtsp"           # "rtsp" | "url" | "pano_view"
+    # pano_view geometry (only used when source_type == "pano_view")
+    pano_group: Optional[str] = None    # parent 360 camera_uid (shared PanoStream)
+    yaw: float = 0.0
+    pitch: float = 0.0
+    fov: float = 90.0
+    equi_w: int = 2880
+    equi_h: int = 1440
 
     @property
     def label(self) -> str:
@@ -98,29 +113,70 @@ def load_cameras(active_only: bool = True, streamable_only: bool = False) -> lis
     default_stream_type = secrets_wrapper.get("stream_type", "sub")
     secrets = secrets_wrapper.get("cameras", {})
 
+    def _role(value):
+        if value not in VALID_ROLES:
+            print(f"[camera_config] WARNING: unknown role '{value}', "
+                  f"defaulting to '{DEFAULT_ROLE}'. Valid: {VALID_ROLES}.")
+            return DEFAULT_ROLE
+        return value
+
     cameras: list[Camera] = []
     for entry in meta:
         uid = entry["camera_uid"]
         if active_only and not entry.get("is_active", True):
             continue
 
-        stream_url = None
-        sec = secrets.get(uid)
-        if sec:
-            stream_url = build_stream_url(
-                ip=sec["ip"],
-                username=sec["username"],
-                password=sec["password"],
-                rtsp_path=sec.get("rtsp_path", "Streaming/Channels/101"),
-                stream_type=sec.get("stream_type", default_stream_type),
-                port=sec.get("port", DEFAULT_RTSP_PORT),
-            )
+        source = entry.get("source", {}) or {}
+        sec = secrets.get(uid, {}) or {}
 
-        role = entry.get("role", DEFAULT_ROLE)
-        if role not in VALID_ROLES:
-            print(f"[camera_config] WARNING: {uid} has unknown role '{role}', "
-                  f"defaulting to '{DEFAULT_ROLE}'. Valid: {VALID_ROLES}.")
-            role = DEFAULT_ROLE
+        # ── 360° panoramic source: expand into one camera per carved view ──
+        if source.get("type") == "pano":
+            url = sec.get("url")
+            equi_w = int(source.get("equi_w", 2880))
+            equi_h = int(source.get("equi_h", 1440))
+            default_fov = float(source.get("fov", 90.0))
+            for view in entry.get("views", []):
+                suffix = view["suffix"]
+                cam = Camera(
+                    camera_uid=f"{uid}-{suffix}",
+                    name=f"{entry.get('name', uid)} {suffix.title()}",
+                    zone_id=view.get("zone_id", entry.get("zone_id", "")),
+                    is_exit_camera=bool(view.get("is_exit_camera",
+                                                 entry.get("is_exit_camera", False))),
+                    is_active=True,
+                    stream_url=url,
+                    role=_role(view.get("role", entry.get("role", DEFAULT_ROLE))),
+                    match_threshold=view.get("match_threshold", entry.get("match_threshold")),
+                    source_type="pano_view",
+                    pano_group=uid,
+                    yaw=float(view.get("yaw", 0.0)),
+                    pitch=float(view.get("pitch", 0.0)),
+                    fov=float(view.get("fov", default_fov)),
+                    equi_w=equi_w,
+                    equi_h=equi_h,
+                )
+                if streamable_only and not cam.streamable:
+                    continue
+                cameras.append(cam)
+            continue
+
+        # ── direct URL source (HTTP/MJPEG feed, or any ready-made URL) ──
+        if source.get("type") == "url" or "url" in sec:
+            stream_url = sec.get("url")
+            source_type = "url"
+        # ── default: RTSP built from ip/user/pwd ──
+        else:
+            stream_url = None
+            if sec:
+                stream_url = build_stream_url(
+                    ip=sec["ip"],
+                    username=sec["username"],
+                    password=sec["password"],
+                    rtsp_path=sec.get("rtsp_path", "Streaming/Channels/101"),
+                    stream_type=sec.get("stream_type", default_stream_type),
+                    port=sec.get("port", DEFAULT_RTSP_PORT),
+                )
+            source_type = "rtsp"
 
         cam = Camera(
             camera_uid=uid,
@@ -129,8 +185,9 @@ def load_cameras(active_only: bool = True, streamable_only: bool = False) -> lis
             is_exit_camera=bool(entry.get("is_exit_camera", False)),
             is_active=bool(entry.get("is_active", True)),
             stream_url=stream_url,
-            role=role,
+            role=_role(entry.get("role", DEFAULT_ROLE)),
             match_threshold=entry.get("match_threshold"),
+            source_type=source_type,
         )
         if streamable_only and not cam.streamable:
             continue

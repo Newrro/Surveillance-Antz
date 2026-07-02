@@ -7,6 +7,18 @@
     { "camera_uid": "PATHWAY-FRONT",         "name": "Building Front Pathway",  "zone_id": "ZONE-PATHWAY",   "is_exit_camera": false, "is_active": true, "role": "detect" },
     { "camera_uid": "CAVILAND-FRONT",        "name": "Caviland Front",          "zone_id": "ZONE-CAVILAND",  "is_exit_camera": false, "is_active": true, "role": "detect" },
     { "camera_uid": "SANJEEVAN-INSIDE-FRONT","name": "Sanjeevan Inside Front",  "zone_id": "ZONE-SANJEEVAN", "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75 },
-    { "camera_uid": "SANJEEVAN-INSIDE",      "name": "Sanjeevan Inside",        "zone_id": "ZONE-SANJEEVAN", "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75 }
+    { "camera_uid": "SANJEEVAN-INSIDE",      "name": "Sanjeevan Inside",        "zone_id": "ZONE-SANJEEVAN", "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75 },
+
+    { "camera_uid": "LOCAL-STREAM", "name": "Local Stream", "zone_id": "ZONE-TEST", "is_exit_camera": false, "is_active": true, "role": "identify", "source": { "type": "url" } },
+
+    { "camera_uid": "INSTA360", "name": "Insta360", "zone_id": "ZONE-TEST", "is_active": true,
+      "source": { "type": "pano", "equi_w": 2880, "equi_h": 1440, "fov": 90 },
+      "views": [
+        { "suffix": "FRONT", "yaw": 0,   "role": "identify" },
+        { "suffix": "RIGHT", "yaw": 90,  "role": "detect" },
+        { "suffix": "BACK",  "yaw": 180, "role": "detect" },
+        { "suffix": "LEFT",  "yaw": 270, "role": "detect" }
+      ]
+    }
   ]
 }

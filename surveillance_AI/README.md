@@ -28,7 +28,8 @@ with a confidence %.
 
 | File | Role |
 |---|---|
-| [`nvr_stream.py`](nvr_stream.py) | RTSP ingest — one thread per camera, latest-frame + reconnect. Reads the shared [`surveillance_Camera_config`](../surveillance_Camera_config/) registry. |
+| [`nvr_stream.py`](nvr_stream.py) | Ingest — one thread per camera, latest-frame + reconnect, scheme-aware capture (RTSP vs HTTP). Reads the shared [`surveillance_Camera_config`](../surveillance_Camera_config/) registry. |
+| [`pano.py`](pano.py) | 360° (Insta360) support — reads one equirectangular stream and carves it into flat perspective views (front/right/back/left), each a normal camera with its own role. |
 | [`detector.py`](detector.py) | `PersonDetector` — FasterRCNN boxes + false-positive filters (min height, upright aspect) tuned on the outdoor gate feed. |
 | [`segmenter.py`](segmenter.py) | `SAM2Segmenter` — SAM 2 mask per person to blank the background before ReID. Heavy; opt-in (`--segment`). |
 | [`feature_id/`](feature_id/) | OSNet body ReID + the local identity gallery (Employee/Visitor/Unknown + confidence, progressive learning). See [`feature_id/README.md`](feature_id/README.md). |

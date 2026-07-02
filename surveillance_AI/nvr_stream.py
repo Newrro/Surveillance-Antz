@@ -41,6 +41,30 @@ if REPO_ROOT not in sys.path:
 from surveillance_Camera_config import load_cameras  # noqa: E402
 
 
+def open_capture(url):
+    """Open a VideoCapture with FFmpeg options matched to the URL scheme:
+      rtsp:// → force TCP transport + connection timeout (dead cams fail fast).
+      http(s) → low-latency, no-buffer (MJPEG / Insta360-via-Jetson / local feeds).
+    OPENCV_FFMPEG_CAPTURE_OPTIONS is process-global, so we set it just for this
+    open and restore it — otherwise RTSP options leak onto HTTP streams (and
+    break them) and vice-versa when several source types run together."""
+    if url.startswith("rtsp://"):
+        opts = "rtsp_transport;tcp|stimeout;5000000"
+    else:
+        opts = "fflags;nobuffer|flags;low_delay|reorder_queue_size;0"
+    prev = os.environ.get("OPENCV_FFMPEG_CAPTURE_OPTIONS")
+    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = opts
+    try:
+        cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+    finally:
+        if prev is None:
+            os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
+        else:
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = prev
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    return cap
+
+
 # ─────────────────────────────────────────────
 #  PER-CAMERA THREAD
 # ─────────────────────────────────────────────
@@ -62,14 +86,14 @@ class CameraStream(threading.Thread):
         if not self.url:
             print(f"[{self.camera_uid}] no stream_url configured — skipping.")
             return
-        cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
+        cap = open_capture(self.url)
         print(f"[{self.camera_uid}] Connecting: {self.label}")
 
         while self.running:
             if not cap.isOpened():
                 print(f"[{self.camera_uid}] Retrying in 3s...")
                 time.sleep(3)
-                cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
+                cap = open_capture(self.url)
                 continue
 
             ret, frame = cap.read()
@@ -77,7 +101,7 @@ class CameraStream(threading.Thread):
                 print(f"[{self.camera_uid}] Frame grab failed, reconnecting...")
                 cap.release()
                 time.sleep(2)
-                cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
+                cap = open_capture(self.url)
                 continue
 
             with self.lock:
@@ -94,11 +118,29 @@ class CameraStream(threading.Thread):
 
 
 def start_streams(cameras):
-    """Start a CameraStream thread for each camera; return the list of streams."""
-    streams = [CameraStream(c) for c in cameras]
-    for s in streams:
-        s.start()
-    return streams
+    """Start a frame-source per camera and return them. Each source exposes the
+    same interface (camera_uid, label, get_frame(), stop()).
+
+    - rtsp / url cameras  → a CameraStream (opens stream_url directly).
+    - pano_view cameras   → a PanoView sharing one PanoStream per 360 source, so
+                            the equirectangular feed is read only once.
+    """
+    sources = []
+    pano_streams = {}   # pano_group -> PanoStream (shared across its views)
+    for c in cameras:
+        if getattr(c, "source_type", "rtsp") == "pano_view":
+            from pano import PanoStream, PanoView
+            ps = pano_streams.get(c.pano_group)
+            if ps is None:
+                ps = PanoStream(c.stream_url, c.equi_w, c.equi_h)
+                ps.start()
+                pano_streams[c.pano_group] = ps
+            sources.append(PanoView(c, ps))
+        else:
+            s = CameraStream(c)
+            s.start()
+            sources.append(s)
+    return sources
 
 
 # ─────────────────────────────────────────────

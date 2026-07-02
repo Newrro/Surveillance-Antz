@@ -1,0 +1,8 @@
+# Part 1 local state / large artifacts (root .gitignore also covers *.pt, storage/)
+
+# SAM 2 checkpoints live here (downloaded, not committed)
+models/*.pt
+models/*.pth
+
+# feature_id local gallery + saved snapshots (runtime state, not source)
+feature_id/data/

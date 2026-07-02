@@ -15,14 +15,14 @@ log of everything that happened.
 
 | Part | Folder | Owner | Responsibility | Status |
 |---|---|---|---|---|
-| **1 — Perception** | [`surveillance_AI/`](surveillance_AI/) | Prithvi + Tushar | RTSP ingest → detect → segment (>80% conf) → **face + body embeddings** → emits detection JSON | 🟡 skeleton |
-| **1b — Camera config** | [`surveillance_Camera_config/`](surveillance_Camera_config/) | Prithvi + Tushar | Camera registry (uid, RTSP url, zone, is_exit) shared by Parts 1 & 2 | 🟡 skeleton |
+| **1 — Perception** | [`surveillance_AI/`](surveillance_AI/) | Prithvi + Tushar | RTSP ingest → detect → segment (>80% conf) → **body ReID embedding** (face: TODO) → emits detection JSON | ✅ implemented |
+| **1b — Camera config** | [`surveillance_Camera_config/`](surveillance_Camera_config/) | Prithvi + Tushar | Camera registry (uid, RTSP url, zone, is_exit) shared by Parts 1 & 2 | ✅ implemented |
 | **2 — Brain** | [`surveillance_brain/`](surveillance_brain/) | **Saaketh** | Identity resolution, tracking, dedup, DB (Postgres + **Qdrant** + Redis), logs, REST + WS API | ✅ implemented |
 | **3 — Interface** | [`surveillance_UI/`](surveillance_UI/) | Ammarath | Live feed, log table, person profiles, employee enrollment — reads Part 2's API only | 🟡 skeleton |
 
-> **This repository's implemented deliverable is Part 2 (the Brain).** Parts 1
-> and 3 are scaffolded (README + contract) so their teams start from the same
-> base; their code is intentionally left as skeletons.
+> **Parts 1, 1b and 2 are implemented; Part 3 (Interface) is scaffolded**
+> (README + contract) so its team starts from the same base. Part 1's
+> perception pipeline is built on the working gate-camera detector.
 
 ## How the parts connect — the two contracts
 

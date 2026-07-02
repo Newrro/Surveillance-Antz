@@ -1,0 +1,15 @@
+# Part 1 — Perception pipeline dependencies.
+#
+# torch / torchvision: install the build that matches your machine/GPU from
+#   https://pytorch.org/get-started/locally/  (CPU wheels are the default below).
+# SAM 2 is NOT on PyPI as `sam2` for all versions — install from the SAM 2 repo
+#   (see README: "Segmentation (SAM 2) setup"). Only needed for --segment / masks.
+# torchreid provides the OSNet body-ReID model used by feature_id/extractor.py.
+
+torch
+torchvision
+opencv-python
+numpy
+requests
+torchreid
+gdown          # to fetch the market1501 OSNet weights (see README "Weights")

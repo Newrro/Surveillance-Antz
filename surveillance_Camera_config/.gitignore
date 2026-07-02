@@ -1,0 +1,8 @@
+# Real camera credentials — never commit.
+cameras.secrets.json
+cameras.secrets.*.json
+cameras.secrets.py
+
+# ...but DO commit the template. The monorepo-root .gitignore ignores
+# *secret*.json, so re-include the example explicitly.
+!cameras.secrets.example.json

@@ -55,9 +55,9 @@ Part 1 (perception) only — not sent to the Brain:
   (detect + segment + OSNet ReID + identity — high-res gate/back cams). Controls how
   much of the pipeline runs on that camera, so you don't do feature extraction
   everywhere. Default `"detect"`.
-- `match_threshold` — optional per-camera override of `feature_id`'s global
-  `MATCH_THRESHOLD`. Raise it (e.g. `0.85`) to make one camera stricter without
-  touching the others. Omit to use the global value.
+- `match_threshold` — optional per-camera override of the **face** match threshold
+  (`feature_id`'s `FACE_MATCH_THRESHOLD`, the primary identity signal). Raise it to make
+  one camera stricter without touching the others. Omit to use the global value.
 
 > The 7 cameras in `cameras.json` were imported from the gate build. **Review
 > `role`, `zone_id`, and `is_exit_camera` for your site** — I set the gate + Sanjeevan

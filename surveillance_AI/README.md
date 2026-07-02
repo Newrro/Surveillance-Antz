@@ -56,11 +56,13 @@ feature extraction. Adding cameras is two JSON lines (metadata + secret) — see
 
 ## Thresholds & confidence
 
-- The **identity confidence %** comes from OSNet cosine similarity to the gallery.
-  A person is recognised when it's `>= threshold`, else Unknown (auto-enrolled Visitor).
+- **Face first, body fallback.** The confidence % is cosine similarity to the gallery:
+  AdaFace for a visible face (recognised at `>= FACE_MATCH_THRESHOLD`, default **0.30**),
+  else OSNet body (`>= BODY_MATCH_THRESHOLD`, default **0.75**). No match → Unknown
+  (auto-enrolled Visitor). Both thresholds live in [`feature_id/config.py`](feature_id/config.py).
 - **Per-camera threshold:** set `match_threshold` on a camera in `cameras.json` to
-  override the global `feature_id/config.py` `MATCH_THRESHOLD`. Raise it to make that
-  camera stricter — no code change, and other cameras are unaffected.
+  override the **face** threshold for that camera only — raise it to make one camera
+  stricter, no code change, others unaffected.
 - **Progressive confidence:** when a known person matches above threshold but below
   `LEARN_CEILING` (0.92), the new view is learned, so their score climbs on future
   sightings (e.g. someone first seen at ~60% rises toward 90%+). Details in
@@ -81,7 +83,7 @@ RTX 4060 laptop install a CUDA build — the code auto-detects and uses the GPU)
 ### Weights
 
 **Device** auto-detects: CUDA on the 4060 laptop, CPU otherwise. Force with
-`FEATURE_ID_DEVICE=cpu|cuda`. All three models (FasterRCNN, SAM 2, OSNet) fit in 6 GB.
+`FEATURE_ID_DEVICE=cpu|cuda`. All four models (FasterRCNN, SAM 2, AdaFace, OSNet) fit in 6 GB.
 
 All weights live in [`models/`](models/), which is **gitignored** — so they travel in
 a **zip** of the folder but not via `git clone`. If you clone, re-fetch them:
@@ -129,6 +131,17 @@ python pipeline.py --show       # + annotated window
 python pipeline.py --cameras GATE-RIGHT        # one camera
 python pipeline.py --emit --brain-url http://localhost:8000   # also POST to the Brain
 ```
+
+### Testing without live cameras
+
+No cameras on the LAN? Drive the models off a **recorded video** or the **laptop
+webcam** — both are ordinary OpenCV sources (this is how identity was validated).
+
+- **Detector filter gotcha:** the shape filters in [`detector.py`](detector.py)
+  (`MIN_ASPECT`, `MIN_HEIGHT_FRAC`) are tuned for full-body gate views and will reject
+  close-ups — a webcam head-and-shoulders box is *wider than tall*. For close-up
+  testing, relax them at the top of your script:
+  `import detector; detector.MIN_ASPECT = 0.3`.
 
 ## Deliverable — hand-off to Part 2 (optional `--emit`)
 

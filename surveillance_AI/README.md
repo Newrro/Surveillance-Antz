@@ -16,7 +16,7 @@ body-only ReID used to churn a new ID every frame).
 
 | Stage | Model | Where |
 |---|---|---|
-| **Detection** — find people (boxes) | **FasterRCNN-MobileNetV3** | [`detector.py`](detector.py) |
+| **Detection** — find people (boxes) | **RT-DETR** (default; swappable via `DETECTOR_MODEL`, not YOLO) | [`detector.py`](detector.py) |
 | **Segmentation** — mask each person | **SAM 2** (optional) | [`segmenter.py`](segmenter.py) |
 | **Face embedding — PRIMARY identity** | **AdaFace IR-101 / WebFace12M** + MTCNN detector | [`feature_id/face_extractor.py`](feature_id/face_extractor.py) |
 | **Body ReID — FALLBACK identity** | **OSNet** (torchreid) | [`feature_id/extractor.py`](feature_id/extractor.py) |
@@ -25,8 +25,9 @@ body-only ReID used to churn a new ID every frame).
 > discriminative than body ReID, so a visible face gives a stable ID; when no usable
 > face is found (too small / turned away) we fall back to the body vector.
 > AdaFace is the recognition model (**not** InsightFace); MTCNN is used only as the
-> face detector. SAM 2 is *segmentation* — a detector (FasterRCNN) finds the box, SAM 2
-> masks it; this is what the reference `sam2_people_live.py` did, now split into modules.
+> face detector. SAM 2 is *segmentation* — the detector finds the box, SAM 2 masks it.
+> The person detector is **swappable** via `DETECTOR_MODEL` (`rtdetr` default,
+> `fasterrcnn_resnet50`, or the light `fasterrcnn_mobilenet`).
 
 ## Modules
 
@@ -34,7 +35,7 @@ body-only ReID used to churn a new ID every frame).
 |---|---|
 | [`nvr_stream.py`](nvr_stream.py) | Ingest — one thread per camera, latest-frame + reconnect, scheme-aware capture (RTSP vs HTTP). Reads the shared [`surveillance_Camera_config`](../surveillance_Camera_config/) registry. |
 | [`pano.py`](pano.py) | 360° (Insta360) support — reads one equirectangular stream and carves it into flat perspective views (front/right/back/left), each a normal camera with its own role. |
-| [`detector.py`](detector.py) | `PersonDetector` — FasterRCNN boxes + false-positive filters (min height, upright aspect) tuned on the outdoor gate feed. |
+| [`detector.py`](detector.py) | `PersonDetector` — person boxes from RT-DETR (default) or a FasterRCNN backend (`DETECTOR_MODEL`), plus false-positive shape filters (min height, upright aspect) tuned on the outdoor gate feed. |
 | [`segmenter.py`](segmenter.py) | `SAM2Segmenter` — SAM 2 mask per person to blank the background before ReID. Heavy; opt-in (`--segment`). |
 | [`feature_id/`](feature_id/) | Face (AdaFace) + body (OSNet) embeddings and the local identity gallery — face-primary/body-fallback, Employee/Visitor/Unknown + confidence, progressive learning. See [`feature_id/README.md`](feature_id/README.md). |
 | [`pipeline.py`](pipeline.py) | **The producer** — role-aware: detect-only on path cams, full detect→segment→ReID→identity on identify cams; optional `POST /events` to the Brain. |
@@ -46,7 +47,7 @@ body-only ReID used to churn a new ID every frame).
 Each camera's `role` (in [`../surveillance_Camera_config/cameras.json`](../surveillance_Camera_config/cameras.json))
 decides how much runs on it:
 
-- **`detect`** → FasterRCNN detection only. Cheap. For path / perimeter cameras.
+- **`detect`** → person detection only. Cheap. For path / perimeter cameras.
 - **`identify`** → detect + (SAM 2) + OSNet + identity. For high-res gate/back cameras
   where you actually recognise people.
 
@@ -56,10 +57,14 @@ feature extraction. Adding cameras is two JSON lines (metadata + secret) — see
 
 ## Thresholds & confidence
 
-- **Face first, body fallback.** The confidence % is cosine similarity to the gallery:
-  AdaFace for a visible face (recognised at `>= FACE_MATCH_THRESHOLD`, default **0.30**),
-  else OSNet body (`>= BODY_MATCH_THRESHOLD`, default **0.75**). No match → Unknown
-  (auto-enrolled Visitor). Both thresholds live in [`feature_id/config.py`](feature_id/config.py).
+- **Quality gate first → Unknown.** If the detection is weak (`detection_conf <
+  DETECTION_CONF_THRESHOLD`, default **0.80**) or no usable face/body could be
+  extracted, the sighting is **Unknown** — we don't guess. Mirrors the Brain's design.
+- **Then search: face first, body fallback.** Above the gate we match the gallery:
+  AdaFace face (`>= FACE_MATCH_THRESHOLD`, default **0.30**), else OSNet body
+  (`>= BODY_MATCH_THRESHOLD`, default **0.75**) → the person's label (Employee /
+  Visitor) + a real confidence %. No match → a **new Visitor**. A % shows only on a
+  real match. All thresholds live in [`feature_id/config.py`](feature_id/config.py).
 - **Per-camera threshold:** set `match_threshold` on a camera in `cameras.json` to
   override the **face** threshold for that camera only — raise it to make one camera
   stricter, no code change, others unaffected.

@@ -37,28 +37,37 @@ class Identifier:
         body = None if self._too_small(person_bgr) else self.body.embed(person_bgr)
         return face, body
 
-    def identify(self, person_bgr, face_threshold=None):
+    def identify(self, person_bgr, detection_conf=None, face_threshold=None):
         face_emb, body_emb = self.extract(person_bgr)
-        return self.identify_features(face_emb, body_emb, face_threshold)
+        return self.identify_features(face_emb, body_emb, detection_conf, face_threshold)
 
-    def identify_features(self, face_emb, body_emb, face_threshold=None):
+    def identify_features(self, face_emb, body_emb, detection_conf=None, face_threshold=None):
         """Decide identity from already-extracted embeddings (so the pipeline can
-        compute them once and reuse them to emit to the Brain). `face_threshold`
-        overrides FACE_MATCH_THRESHOLD for this call (per-camera stricter/looser)."""
+        compute them once and reuse them to emit to the Brain).
+
+        Flow (mirrors the Brain):
+          detection weak / no features  → Unknown (we're not sure — don't guess)
+          otherwise search the gallery:  face first, then body
+            match       → that person's label (Employee / Visitor) + confidence
+            no match    → a NEW Visitor (confidently a person, just not seen before)
+
+        `detection_conf` is the detector's score; `face_threshold` overrides
+        FACE_MATCH_THRESHOLD for this call (per-camera stricter/looser)."""
+        # ── QUALITY GATE → Unknown when we're not sure enough to identify ──
+        if detection_conf is not None and detection_conf < config.DETECTION_CONF_THRESHOLD:
+            return self._result(None, config.LABEL_UNKNOWN, "", 0.0,
+                                matched_by="none", error="low_confidence")
         if face_emb is None and body_emb is None:
             return self._result(None, config.LABEL_UNKNOWN, "", 0.0,
-                                 matched_by="none", error="no_features")
+                                matched_by="none", error="no_features")
 
         face_thr = config.FACE_MATCH_THRESHOLD if face_threshold is None else face_threshold
-        best_sim = 0.0
 
         # ── FACE (primary) ──
         if face_emb is not None:
             p, sim = self.gallery.best_match_face(face_emb)
-            best_sim = max(best_sim, sim)
             if p is not None and sim >= face_thr:
                 learned = self._maybe_learn(self.gallery.add_face_view, p, face_emb, sim)
-                # keep a body view too, so this person is still findable by body later
                 if body_emb is not None and not p.body_views:
                     self.gallery.add_body_view(p, body_emb)
                 return self._result(p.id, p.label, p.name, sim,
@@ -67,20 +76,19 @@ class Identifier:
         # ── BODY (fallback) ──
         if body_emb is not None:
             p, sim = self.gallery.best_match_body(body_emb)
-            best_sim = max(best_sim, sim)
             if p is not None and sim >= config.BODY_MATCH_THRESHOLD:
                 learned = self._maybe_learn(self.gallery.add_body_view, p, body_emb, sim)
-                # attach the face too if we now have one and they didn't before
                 if face_emb is not None and not p.face_views:
                     self.gallery.add_face_view(p, face_emb)
                 return self._result(p.id, p.label, p.name, sim,
                                     matched_by="body", learned=learned)
 
-        # ── nobody matched → new Visitor ──
+        # ── good detection + features, but no match → a NEW Visitor ──
         if config.AUTO_ENROLL_UNKNOWN:
             p = self.gallery.add(face_emb, body_emb, label=config.LABEL_VISITOR)
-            return self._result(p.id, config.LABEL_VISITOR, "", best_sim,
+            return self._result(p.id, config.LABEL_VISITOR, "", 0.0,
                                 matched_by="none", is_new=True)
+        return self._result(None, config.LABEL_UNKNOWN, "", 0.0, matched_by="none")
 
         return self._result(None, config.LABEL_UNKNOWN, "", best_sim, matched_by="none")
 

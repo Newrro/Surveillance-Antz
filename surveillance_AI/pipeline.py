@@ -193,16 +193,23 @@ def main():
                         continue
 
                     face_emb, body_emb = identifier.extract(crop)
-                    result = identifier.identify_features(face_emb, body_emb,
-                                                          face_threshold=cam.match_threshold)
+                    result = identifier.identify_features(
+                        face_emb, body_emb, detection_conf=box[4],
+                        face_threshold=cam.match_threshold)
                     snap = save_snapshot(uid, crop, stamp_ms, i)
 
-                    tag = "NEW " if result["is_new"] else ("learn " if result["learned"] else "")
-                    print(f"[{uid}] {result['label']:8} {result['person_id']}  "
-                          f"conf={result['confidence_pct']}% via {result['matched_by']:4}  {tag}"
-                          f"(det {box[4]:.2f})")
+                    # Show a % only on a real match; "(new)" for a fresh Visitor; else Unknown.
+                    if result["matched_by"] in ("face", "body"):
+                        disp = f"{result['label']} {result['confidence_pct']:.0f}% [{result['matched_by']}]"
+                    elif result["is_new"]:
+                        disp = f"{result['label']} (new)"
+                    else:
+                        disp = "Unknown"
+                    learn = " learn" if result["learned"] else ""
+                    print(f"[{uid}] {disp}  {result['person_id'] or ''}{learn}  (det {box[4]:.2f})")
 
-                    if args.emit and result["error"] != "no_features":
+                    # Emit whenever we have an embedding — the Brain re-resolves identity.
+                    if args.emit and (face_emb is not None or body_emb is not None):
                         payload = build_payload(uid, box[4], face_emb, body_emb, snap, stamp_ms, i)
                         try:
                             r = session.post(f"{args.brain_url}/events", json=payload, timeout=10)
@@ -212,10 +219,11 @@ def main():
 
                     if args.show:
                         x1, y1, x2, y2 = box[:4]
-                        cv2.rectangle(vis, (int(x1), int(y1)), (int(x2), int(y2)), (0, 200, 0), 2)
-                        cv2.putText(vis, f"{result['label']} {result['confidence_pct']}%",
-                                    (int(x1), max(14, int(y1) - 6)),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                        color = (0, 200, 0) if result["matched_by"] in ("face", "body") \
+                            else ((0, 200, 255) if result["is_new"] else (60, 60, 220))
+                        cv2.rectangle(vis, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
+                        cv2.putText(vis, disp, (int(x1), max(14, int(y1) - 6)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
                 if args.show:
                     cv2.putText(vis, f"{uid} [identify]",

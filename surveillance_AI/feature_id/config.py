@@ -75,6 +75,14 @@ MATCH_THRESHOLD = BODY_MATCH_THRESHOLD   # backward-compat alias (body)
 # new Visitor so they're recognised next time? (Your gate→pathway design wants this.)
 AUTO_ENROLL_UNKNOWN = True
 
+# ── THE QUALITY GATE — when are we "sure enough" to identify at all? ──
+# Mirrors the Brain (DETECTION_CONF_THRESHOLD): if the person detection is weaker
+# than this, or we can't extract any usable features, we DON'T guess an identity —
+# we report UNKNOWN. Only above this do we search the gallery (Employee → Visitor).
+#   detection_conf >= this  → search: match ? Employee/Visitor : new Visitor
+#   detection_conf <  this  → Unknown (not sure it's even a clean person)
+DETECTION_CONF_THRESHOLD = 0.80
+
 # ─────────────────────────────────────────────
 #  PROGRESSIVE CONFIDENCE  — "raise the score with new angles"
 # ─────────────────────────────────────────────

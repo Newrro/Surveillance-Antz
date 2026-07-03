@@ -10,7 +10,9 @@ torch
 torchvision
 opencv-python
 numpy
+pillow               # image handling for the RT-DETR image processor
 requests
+transformers         # RT-DETR person detector (default detector; not YOLO)
 torchreid            # OSNet body ReID (fallback identity)
 facenet-pytorch      # MTCNN face detector (recognition is AdaFace, vendored in feature_id/adaface_net.py)
 gdown                # to fetch the OSNet + AdaFace weights (see README "Weights")

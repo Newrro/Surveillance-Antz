@@ -218,6 +218,8 @@ CONTENT_TYPES = {
     ".png":  "image/png",
     ".ico":  "image/x-icon",
     ".svg":  "image/svg+xml",
+    ".jpg":  "image/jpeg",
+    ".jpeg": "image/jpeg",
 }
 
 
@@ -238,7 +240,28 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_stream(unquote(path[len("/stream/"):]))
         if path.startswith("/snapshot/"):
             return self._send_snapshot(unquote(path[len("/snapshot/"):]))
+        if path.startswith("/storage/"):
+            return self._send_media(path)          # real person-crop snapshots
         return self._send_static(path)
+
+    # --- /storage/... (person-crop snapshots written by Part 1) --------------
+    def _send_media(self, path):
+        root = os.path.dirname(HERE)               # repo root — storage/ lives here
+        rel = posixpath.normpath(path).lstrip("/")
+        full = os.path.join(root, rel)
+        if not os.path.abspath(full).startswith(root) or not os.path.isfile(full):
+            return self._send_error(404, "Not found")
+        ext = os.path.splitext(full)[1].lower()
+        ctype = CONTENT_TYPES.get(ext, "application/octet-stream")
+        with open(full, "rb") as f:
+            body = f.read()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "max-age=3600")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
 
     # --- /api/cameras ---------------------------------------------------
     def _send_cameras(self):

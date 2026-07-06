@@ -51,6 +51,7 @@ import numpy as np
 # flat sibling modules
 from detector import PersonDetector, draw_boxes
 from feature_id.identify import Identifier
+from tracker import SimpleTracker
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
@@ -260,81 +261,80 @@ def main():
     start_preview_writer(streams)          # serve REAL annotated frames to the dashboard
     roles = {c.camera_uid: c for c in cameras}
     detect_interval = float(os.environ.get("DETECT_INTERVAL", "0.25"))
+    resolve_interval = float(os.environ.get("RESOLVE_INTERVAL", "1.0"))
 
-    # Shared state between the fast DETECTION loop (below) and the background
-    # IDENTITY worker. Decoupling them is what removes the lag: detection updates
-    # boxes every ~detect_interval and never blocks on the slow identity pass.
+    # Per-camera trackers give each person a stable track, so identity is resolved
+    # ONCE per track (then locked) instead of per frame — no Unknown/Visitor churn,
+    # one database id per person. Detection (fast) and identity (background) share
+    # the tracks under this lock.
     state_lock = threading.Lock()
-    cur = {}          # uid -> (ts, frame, boxes)   latest detection, for the identity worker
-    id_labels = {}    # uid -> [(box, disp, color)] latest identity results, for drawing
+    trackers = {c.camera_uid: SimpleTracker() for c in cameras}
+    frames = {}          # uid -> latest frame (for the identity worker to crop from)
     stop_flag = threading.Event()
 
     def identity_worker():
-        """Runs identity (embeddings + Brain resolve) on its own cadence, off the
-        detection path. Labels come from the Brain's POST /events response, so they
-        match the database (Employee/Visitor + real id)."""
-        last_id = {c.camera_uid: 0.0 for c in id_cams}
+        """Resolve identity ONCE per track, then lock it. Labels come from the
+        Brain's POST /events response (authoritative database id)."""
         while not stop_flag.is_set():
             ran = False
             for cam in id_cams:
                 uid = cam.camera_uid
                 now = time.time()
-                if now - last_id[uid] < args.cooldown:
-                    continue
                 with state_lock:
-                    entry = cur.get(uid)
-                if not entry:
+                    frame = frames.get(uid)
+                    # First attempt after resolve_interval; if still Unknown, back off
+                    # to 5s so unknown/distant people don't spam the log.
+                    pend = [(t, tuple(t.box)) for t in trackers[uid].tracks
+                            if not t.resolved and t.misses == 0
+                            and now - t.last_resolve >= (5.0 if t.emitted else resolve_interval)]
+                if frame is None or not pend:
                     continue
-                ts, frame, boxes = entry
-                if frame is None or not boxes:
-                    continue
-                last_id[uid] = now
-                ran = True
-                if segmenter is not None:
-                    segmenter.set_frame(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                stamp_ms = int(ts * 1000)
-                results = []
-                for i, box in enumerate(boxes):
-                    mask = segmenter.mask_for_box(box) if segmenter is not None else None
-                    crop = crop_person(frame, box, mask=mask)
+                for t, box in pend:
+                    t.last_resolve = now
+                    crop = crop_person(frame, box)
                     if crop is None:
                         continue
                     face_emb, body_emb = identifier.extract(crop)
                     if face_emb is None and body_emb is None:
-                        results.append((box, "Unknown", _COL_UNKNOWN))
-                        continue
-                    snap = save_snapshot(uid, crop, stamp_ms, i)
+                        continue                 # no usable features yet — stays 'Unknown', retry
+                    ran = True
+                    t.emitted = True
+                    stamp_ms = int(now * 1000)
+                    snap = save_snapshot(uid, crop, stamp_ms, t.id)
                     disp = color = None
+                    locked = False
                     if args.emit:
-                        payload = build_payload(uid, box[4], face_emb, body_emb, snap, stamp_ms, i)
+                        payload = build_payload(uid, box[4], face_emb, body_emb, snap, stamp_ms, t.id)
                         try:
-                            r = session.post(f"{args.brain_url}/events", json=payload, timeout=10)
-                            disp, color = _display_from_brain(r.json())
+                            j = session.post(f"{args.brain_url}/events", json=payload, timeout=10).json()
+                            disp, color = _display_from_brain(j)
+                            locked = j.get("label") in ("Visitor", "Employee")
                         except Exception as e:  # noqa: BLE001 — keep the loop alive
                             print(f"    → POST failed: {e}")
-                    if disp is None:   # offline / no --emit → local gallery
+                    if disp is None:             # offline / no --emit → local gallery
                         res = identifier.identify_features(
                             face_emb, body_emb, detection_conf=box[4],
                             face_threshold=cam.match_threshold)
                         if res["label"] == "Employee":
-                            disp, color = f"Employee {res['name'] or res['person_id'] or ''}".strip(), _COL_EMP
+                            disp, color, locked = f"Employee {res['name'] or res['person_id'] or ''}".strip(), _COL_EMP, True
                         elif res["label"] == "Visitor":
-                            disp, color = f"Visitor {res['person_id'] or ''}".strip(), _COL_VIS
+                            disp, color, locked = f"Visitor {res['person_id'] or ''}".strip(), _COL_VIS, True
                         else:
                             disp, color = "Unknown", _COL_UNKNOWN
-                    results.append((box, disp, color))
-                    print(f"[{uid}] {disp}  (det {box[4]:.2f})")
-                with state_lock:
-                    id_labels[uid] = results
+                    with state_lock:
+                        t.label, t.color = disp, color
+                        if locked:
+                            t.resolved = True    # lock: never re-classified → no churn, one id
+                    print(f"[{uid}] track#{t.id} -> {disp}  (det {box[4]:.2f})")
             if not ran:
-                time.sleep(0.05)
+                time.sleep(0.1)
 
     if id_cams:
         threading.Thread(target=identity_worker, daemon=True).start()
 
     last_detect = {c.camera_uid: 0.0 for c in cameras}
-    print(f"Running (boxes ~{1/detect_interval:.0f} fps/cam, identity every "
-          f"{args.cooldown}s, preview -> {SHM_DIR}). Ctrl-C to stop.")
+    print(f"Running (boxes ~{1/detect_interval:.0f} fps/cam, tracker-based identity, "
+          f"preview -> {SHM_DIR}). Ctrl-C to stop.")
     try:
         while True:
             did_work = False
@@ -351,19 +351,15 @@ def main():
                 did_work = True
 
                 boxes = detector.detect(frame, conf=args.conf, normalized=False)
-                if cam.runs_identity:
-                    with state_lock:
-                        cur[uid] = (now, frame, boxes)   # hand the frame to the identity worker
-                if not boxes:
-                    set_annotations(uid, [])
-                    continue
-                if not cam.runs_identity:
-                    set_annotations(uid, [(*b[:4], "person", _COL_PERSON) for b in boxes])
-                    continue
-                # identify cams: label each fresh box from the latest identity pass
                 with state_lock:
-                    labels = id_labels.get(uid, [])
-                set_annotations(uid, [(*b[:4], *_label_for_box(b, labels)) for b in boxes])
+                    frames[uid] = frame
+                    tks = trackers[uid].update(boxes)
+                if cam.runs_identity:
+                    # unresolved tracks show 'Unknown' (red) until identity locks them
+                    annos = [(*t.box[:4], t.label or "Unknown", t.color or _COL_UNKNOWN) for t in tks]
+                else:
+                    annos = [(*t.box[:4], "person", _COL_PERSON) for t in tks]
+                set_annotations(uid, annos)
 
             if not did_work:
                 time.sleep(0.02)                  # avoid busy-spin when nothing is due

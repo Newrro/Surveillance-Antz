@@ -134,8 +134,12 @@ const Brain = (() => {
   // from the camera they were seen on (served by server.py's /snapshot/<uid>,
   // same origin as this page). Returns null when neither is available.
   function photoFor(evt) {
-    if (evt.snapshot && /^https?:\/\//i.test(evt.snapshot)) return evt.snapshot;
-    const camUid = evt.camera || null;   // /snapshot keys on the string UID
+    const s = evt.snapshot;
+    if (s) {
+      if (/^https?:\/\//i.test(s)) return s;          // already a full URL
+      return '/' + String(s).replace(/^\/+/, '');     // 'storage/img/..' -> '/storage/img/..' (server.py serves it)
+    }
+    const camUid = evt.camera || null;                // fallback: live camera still
     if (camUid) return `/snapshot/${encodeURIComponent(camUid)}`;
     return null;
   }

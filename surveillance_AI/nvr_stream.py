@@ -172,10 +172,12 @@ class FFmpegCameraStream(threading.Thread):
 
     def _spawn(self):
         # -fflags +discardcorrupt : drop corrupt HEVC packets instead of stalling
-        # -rw_timeout 10s          : exit if the stream goes silent, so run() respawns
+        # -timeout 10s (rtsp us)   : exit if the stream goes silent, so run() respawns
+        #   (NOTE: rtsp uses -timeout, NOT -rw_timeout — the latter is "Option not
+        #    found" for the rtsp demuxer and kills the stream instantly.)
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
                "-fflags", "+discardcorrupt", "-rtsp_transport", "tcp",
-               "-rw_timeout", "10000000", "-hwaccel", "cuda", "-c:v", GPU_DECODE_CODEC,
+               "-timeout", "10000000", "-hwaccel", "cuda", "-c:v", GPU_DECODE_CODEC,
                "-i", self.url, "-an",
                "-vf", f"fps={self.fps},scale={self.w}:{self.h}",
                "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]

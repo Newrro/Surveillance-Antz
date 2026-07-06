@@ -167,9 +167,10 @@ class CameraStream(threading.Thread):
         CPU free even with many 1440p HEVC cameras."""
         w, h = UI_DECODE_W, UI_DECODE_H
         fsz = w * h * 3
+        # rtsp stall timeout uses -timeout (us), NOT -rw_timeout (invalid for rtsp).
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
                "-fflags", "+discardcorrupt", "-rtsp_transport", "tcp",
-               "-rw_timeout", "10000000", "-hwaccel", "cuda", "-c:v", GPU_DECODE_CODEC,
+               "-timeout", "10000000", "-hwaccel", "cuda", "-c:v", GPU_DECODE_CODEC,
                "-i", self.url, "-an",
                "-vf", f"fps={UI_DECODE_FPS},scale={w}:{h}",
                "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]

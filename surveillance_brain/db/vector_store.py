@@ -80,6 +80,18 @@ async def close_client() -> None:
 # ---------------------------------------------------------------------------
 # Collection bootstrap
 # ---------------------------------------------------------------------------
+async def clear_all() -> None:
+    """Drop and recreate the face + body collections — wipes ALL vectors.
+    Used by the admin reset endpoint."""
+    client = get_client()
+    existing = {c.name for c in (await client.get_collections()).collections}
+    for name in (config.QDRANT_FACE_COLLECTION, config.QDRANT_BODY_COLLECTION):
+        if name in existing:
+            await client.delete_collection(collection_name=name)
+            logger.info("Dropped Qdrant collection %r", name)
+    await ensure_collections()
+
+
 async def ensure_collections() -> None:
     """
     Create the face + body collections if they don't already exist.

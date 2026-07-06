@@ -22,7 +22,9 @@ import numpy as np
 import torch
 
 PERSON_CLASS = 1        # COCO 'person' label id in torchvision detection models
-DET_MAX_SIDE = 800      # FasterRCNN input is downscaled to this longest side (speed)
+# Detector input is downscaled to this longest side. Lower = faster (less lag)
+# at some cost to small/distant detections. Tunable via DET_MAX_SIDE.
+DET_MAX_SIDE = int(os.environ.get("DET_MAX_SIDE", "800"))
 
 # false-positive filters (the "leaves / clutter" problem on outdoor cameras)
 MIN_HEIGHT_FRAC = 0.05  # a person box must be >= 5% of frame height

@@ -261,6 +261,16 @@
             <button class="btn btn-primary" onclick="addDepartment()">Add department</button>
           </div>
         </div>
+
+        <div class="settings-card" style="border:1px solid #e0533d33">
+          <h2 style="color:#d64533">Danger zone</h2>
+          <p class="desc">Permanently delete <strong>all</strong> people, visitors, employees,
+             events, sessions and face/body embeddings from the database. Cameras are kept.
+             This cannot be undone.</p>
+          <button class="btn" id="btn-wipe" style="background:#d64533;color:#fff" onclick="wipeDatabase()">
+            Delete entire database
+          </button>
+        </div>
       </section>
 
     </div>

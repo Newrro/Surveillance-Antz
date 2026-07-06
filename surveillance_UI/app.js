@@ -860,6 +860,22 @@ function addDepartment() {
   renderDepartments();
   renderRecords(); // refresh department dropdown
 }
+
+/* Danger zone: wipe the entire Brain database (people/events/embeddings). */
+async function wipeDatabase() {
+  if (!confirm('Delete the ENTIRE database — all people, visitors, employees, '
+             + 'events, sessions and embeddings? Cameras are kept. This cannot be undone.')) return;
+  const btn = document.getElementById('btn-wipe');
+  if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
+  try {
+    await Brain.resetDatabase({ user: AUTH.username, pass: AUTH.password });
+    alert('Database wiped. Cameras kept.');
+    location.reload();   // reconnect to the now-empty Brain for a clean slate
+  } catch (e) {
+    alert('Wipe failed: ' + e.message + '\n(Is the Brain reachable and admin auth correct?)');
+    if (btn) { btn.disabled = false; btn.textContent = 'Delete entire database'; }
+  }
+}
 function removeDepartment(i) {
   DEPARTMENTS.splice(i, 1);
   renderDepartments();

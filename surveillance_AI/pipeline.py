@@ -130,10 +130,48 @@ def start_preview_writer(streams):
 
 
 # Box colours (BGR) by identity outcome.
-_COL_MATCH = (0, 200, 0)      # recognised (face/body match) → green
-_COL_NEW = (0, 170, 255)      # new visitor → orange
-_COL_UNKNOWN = (60, 60, 220)  # unknown / below gate → red
-_COL_PERSON = (0, 200, 255)   # detect-only person → yellow
+_COL_EMP = (0, 200, 0)        # Employee → green
+_COL_VIS = (0, 170, 255)      # Visitor → orange
+_COL_UNKNOWN = (60, 60, 220)  # Unknown / below gate → red
+_COL_PERSON = (200, 200, 200) # detected, not yet identified → grey
+
+
+def _iou(a, b):
+    """IoU of two (x1,y1,x2,y2) boxes."""
+    ax1, ay1, ax2, ay2 = a[:4]
+    bx1, by1, bx2, by2 = b[:4]
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    ua = (ax2 - ax1) * (ay2 - ay1) + (bx2 - bx1) * (by2 - by1) - inter
+    return inter / ua if ua > 0 else 0.0
+
+
+def _label_for_box(box, id_labels):
+    """Pick the identity label whose (older) box best overlaps this fresh box.
+    Falls back to a plain grey 'person' marker until identity catches up."""
+    best, best_iou = None, 0.30
+    for (lbox, disp, color) in id_labels:
+        v = _iou(box, lbox)
+        if v > best_iou:
+            best, best_iou = (disp, color), v
+    return best if best else ("person", _COL_PERSON)
+
+
+def _display_from_brain(j):
+    """Build a box label from the Brain's POST /events response (authoritative,
+    matches the database). Returns (text, color)."""
+    label = (j.get("label") or "Unknown")
+    name = j.get("name")
+    pid = j.get("person_id")
+    if label == "Employee":
+        return (f"Employee {name or pid or ''}".strip(), _COL_EMP)
+    if label == "Visitor":
+        return (f"Visitor {pid or ''}".strip(), _COL_VIS)
+    return ("Unknown", _COL_UNKNOWN)
 
 
 def utc_now_iso():
@@ -220,11 +258,81 @@ def main():
 
     streams = nvr.start_streams(cameras)
     start_preview_writer(streams)          # serve REAL annotated frames to the dashboard
-    last_detect = {c.camera_uid: 0.0 for c in cameras}   # fast: box positions
-    last_id = {c.camera_uid: 0.0 for c in cameras}       # slow: identity + emit
     roles = {c.camera_uid: c for c in cameras}
-    detect_interval = float(os.environ.get("DETECT_INTERVAL", "0.3"))
+    detect_interval = float(os.environ.get("DETECT_INTERVAL", "0.25"))
 
+    # Shared state between the fast DETECTION loop (below) and the background
+    # IDENTITY worker. Decoupling them is what removes the lag: detection updates
+    # boxes every ~detect_interval and never blocks on the slow identity pass.
+    state_lock = threading.Lock()
+    cur = {}          # uid -> (ts, frame, boxes)   latest detection, for the identity worker
+    id_labels = {}    # uid -> [(box, disp, color)] latest identity results, for drawing
+    stop_flag = threading.Event()
+
+    def identity_worker():
+        """Runs identity (embeddings + Brain resolve) on its own cadence, off the
+        detection path. Labels come from the Brain's POST /events response, so they
+        match the database (Employee/Visitor + real id)."""
+        last_id = {c.camera_uid: 0.0 for c in id_cams}
+        while not stop_flag.is_set():
+            ran = False
+            for cam in id_cams:
+                uid = cam.camera_uid
+                now = time.time()
+                if now - last_id[uid] < args.cooldown:
+                    continue
+                with state_lock:
+                    entry = cur.get(uid)
+                if not entry:
+                    continue
+                ts, frame, boxes = entry
+                if frame is None or not boxes:
+                    continue
+                last_id[uid] = now
+                ran = True
+                if segmenter is not None:
+                    segmenter.set_frame(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                stamp_ms = int(ts * 1000)
+                results = []
+                for i, box in enumerate(boxes):
+                    mask = segmenter.mask_for_box(box) if segmenter is not None else None
+                    crop = crop_person(frame, box, mask=mask)
+                    if crop is None:
+                        continue
+                    face_emb, body_emb = identifier.extract(crop)
+                    if face_emb is None and body_emb is None:
+                        results.append((box, "Unknown", _COL_UNKNOWN))
+                        continue
+                    snap = save_snapshot(uid, crop, stamp_ms, i)
+                    disp = color = None
+                    if args.emit:
+                        payload = build_payload(uid, box[4], face_emb, body_emb, snap, stamp_ms, i)
+                        try:
+                            r = session.post(f"{args.brain_url}/events", json=payload, timeout=10)
+                            disp, color = _display_from_brain(r.json())
+                        except Exception as e:  # noqa: BLE001 — keep the loop alive
+                            print(f"    → POST failed: {e}")
+                    if disp is None:   # offline / no --emit → local gallery
+                        res = identifier.identify_features(
+                            face_emb, body_emb, detection_conf=box[4],
+                            face_threshold=cam.match_threshold)
+                        if res["label"] == "Employee":
+                            disp, color = f"Employee {res['name'] or res['person_id'] or ''}".strip(), _COL_EMP
+                        elif res["label"] == "Visitor":
+                            disp, color = f"Visitor {res['person_id'] or ''}".strip(), _COL_VIS
+                        else:
+                            disp, color = "Unknown", _COL_UNKNOWN
+                    results.append((box, disp, color))
+                    print(f"[{uid}] {disp}  (det {box[4]:.2f})")
+                with state_lock:
+                    id_labels[uid] = results
+            if not ran:
+                time.sleep(0.05)
+
+    if id_cams:
+        threading.Thread(target=identity_worker, daemon=True).start()
+
+    last_detect = {c.camera_uid: 0.0 for c in cameras}
     print(f"Running (boxes ~{1/detect_interval:.0f} fps/cam, identity every "
           f"{args.cooldown}s, preview -> {SHM_DIR}). Ctrl-C to stop.")
     try:
@@ -243,65 +351,26 @@ def main():
                 did_work = True
 
                 boxes = detector.detect(frame, conf=args.conf, normalized=False)
+                if cam.runs_identity:
+                    with state_lock:
+                        cur[uid] = (now, frame, boxes)   # hand the frame to the identity worker
                 if not boxes:
-                    set_annotations(uid, [])          # clear boxes when nobody's there
+                    set_annotations(uid, [])
                     continue
-
-                # ── DETECT-ONLY cameras: real-time person boxes, no identity ──
                 if not cam.runs_identity:
                     set_annotations(uid, [(*b[:4], "person", _COL_PERSON) for b in boxes])
                     continue
-
-                # ── IDENTIFY cameras: keep boxes real-time; run the heavy identity
-                #    (SAM2 + AdaFace/OSNet + emit) on its own slower cadence. ──
-                if now - last_id[uid] < args.cooldown:
-                    set_annotations(uid, [(*b[:4], "person", _COL_PERSON) for b in boxes])
-                    continue
-                last_id[uid] = now
-
-                if segmenter is not None:
-                    segmenter.set_frame(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                stamp_ms = int(now * 1000)
-                annos = []
-                for i, box in enumerate(boxes):
-                    mask = segmenter.mask_for_box(box) if segmenter is not None else None
-                    crop = crop_person(frame, box, mask=mask)
-                    if crop is None:
-                        annos.append((*box[:4], "person", _COL_PERSON))
-                        continue
-
-                    face_emb, body_emb = identifier.extract(crop)
-                    result = identifier.identify_features(
-                        face_emb, body_emb, detection_conf=box[4],
-                        face_threshold=cam.match_threshold)
-                    snap = save_snapshot(uid, crop, stamp_ms, i)
-
-                    if result["matched_by"] in ("face", "body"):
-                        disp = f"{result['label']} {result['confidence_pct']:.0f}%"
-                        color = _COL_MATCH
-                    elif result["is_new"]:
-                        disp = f"{result['label']} (new)"
-                        color = _COL_NEW
-                    else:
-                        disp = "Unknown"
-                        color = _COL_UNKNOWN
-                    annos.append((*box[:4], disp, color))
-                    print(f"[{uid}] {disp}  {result['person_id'] or ''}  (det {box[4]:.2f})")
-
-                    # Emit whenever we have an embedding — the Brain re-resolves identity.
-                    if args.emit and (face_emb is not None or body_emb is not None):
-                        payload = build_payload(uid, box[4], face_emb, body_emb, snap, stamp_ms, i)
-                        try:
-                            session.post(f"{args.brain_url}/events", json=payload, timeout=10)
-                        except Exception as e:  # noqa: BLE001 — keep the loop alive
-                            print(f"    → POST failed: {e}")
-                set_annotations(uid, annos)
+                # identify cams: label each fresh box from the latest identity pass
+                with state_lock:
+                    labels = id_labels.get(uid, [])
+                set_annotations(uid, [(*b[:4], *_label_for_box(b, labels)) for b in boxes])
 
             if not did_work:
                 time.sleep(0.02)                  # avoid busy-spin when nothing is due
     except KeyboardInterrupt:
         print("\nStopping...")
     finally:
+        stop_flag.set()
         for s in streams:
             s.stop()
 

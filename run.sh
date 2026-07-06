@@ -30,9 +30,13 @@ AI_PY="$ROOT/surveillance_AI/venv/bin/python"
 BRAIN_DIR="$ROOT/surveillance_brain"
 BRAIN_PY="$BRAIN_DIR/.venv/bin/uvicorn"
 
-# Pipeline options (override via env). Default: SAM2 segmentation + emit to Brain.
-PIPELINE_ARGS="${PIPELINE_ARGS:---segment --emit}"
-CAMERAS="${CAMERAS:-}"   # empty = all cameras in cameras.json
+# Pipeline options (override via env). Default: emit to Brain, NO SAM2 (SAM2 is
+# heavy and only marginally helps ReID — add --segment to PIPELINE_ARGS if wanted).
+PIPELINE_ARGS="${PIPELINE_ARGS:---emit}"
+CAMERAS="${CAMERAS:-}"          # empty = all cameras in cameras.json
+export DET_MAX_SIDE="${DET_MAX_SIDE:-640}"   # smaller detector input = less lag
+export DETECT_INTERVAL="${DETECT_INTERVAL:-0.2}"
+export PYTHONUNBUFFERED=1                     # live logs (no block-buffering to the log file)
 
 log()  { printf '\033[36m▶ %s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m✓ %s\033[0m\n' "$*"; }

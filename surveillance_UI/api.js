@@ -290,10 +290,19 @@ const Brain = (() => {
     return getJSON('/search?q=' + encodeURIComponent(q));
   }
 
+  // Wipe the whole database (people/events/sessions/embeddings). Admin Basic auth.
+  async function resetDatabase(auth) {
+    const headers = {};
+    if (auth) headers.Authorization = 'Basic ' + btoa(`${auth.user}:${auth.pass}`);
+    const res = await fetch(BASE + '/admin/reset', { method: 'POST', headers });
+    if (!res.ok) throw new Error(`POST /admin/reset -> HTTP ${res.status}`);
+    return res.json();
+  }
+
   return {
     get base() { return state.base; },
     get connected() { return state.connected; },
-    health, hydrate, connectLive, applyLiveEvent, enrollEmployee, findLive,
+    health, hydrate, connectLive, applyLiveEvent, enrollEmployee, findLive, resetDatabase,
     // exposed for reuse/testing
     _map: { splitTime, locationFor, personKey, upsertPerson },
   };

@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
     QDRANT_API_KEY: Optional[str] = None
+    # Docker-free / embedded mode: when set, the client runs Qdrant in-process
+    # against this on-disk path instead of connecting to a server (host/port are
+    # then ignored). Only one process may hold the path at a time — seed runs to
+    # completion and closes before the API opens it. Leave empty for a server.
+    QDRANT_LOCAL_PATH: Optional[str] = None
     # Two collections — one per embedding modality.
     QDRANT_FACE_COLLECTION: str = "faces"
     QDRANT_BODY_COLLECTION: str = "bodies"
@@ -144,6 +149,7 @@ DATABASE_DSN: Final[str] = _settings.DATABASE_DSN
 DATABASE_DSN_SYNC: Final[str] = _settings.DATABASE_DSN_SYNC
 REDIS_URL: Final[str] = _settings.REDIS_URL
 QDRANT_URL: Final[str] = _settings.QDRANT_URL
+QDRANT_LOCAL_PATH: Final[Optional[str]] = _settings.QDRANT_LOCAL_PATH
 QDRANT_API_KEY: Final[Optional[str]] = _settings.QDRANT_API_KEY
 QDRANT_FACE_COLLECTION: Final[str] = _settings.QDRANT_FACE_COLLECTION
 QDRANT_BODY_COLLECTION: Final[str] = _settings.QDRANT_BODY_COLLECTION

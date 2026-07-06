@@ -106,3 +106,7 @@ Thumbs.db
 # ── Logs ───────────────────────────────────────────────────
 *.log
 logs/
+
+# local run state (PID files + logs)
+runtime/
+scratchpad_vtest.avi

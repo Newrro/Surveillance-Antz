@@ -48,7 +48,14 @@ class FaceExtractor:
         print("[face] ready.")
 
     def _largest_face_landmarks(self, rgb):
-        boxes, probs, lms = self.mtcnn.detect(rgb, landmarks=True)
+        try:
+            boxes, probs, lms = self.mtcnn.detect(rgb, landmarks=True)
+        except RuntimeError:
+            # facenet-pytorch's MTCNN.detect can raise "torch.cat(): expected a
+            # non-empty list of Tensors" instead of returning None when no face
+            # candidates survive its first stage (common on faceless / distant
+            # crops). Treat that as "no usable face" → caller falls back to body.
+            return None
         if boxes is None:
             return None
         best, best_area = None, 0.0

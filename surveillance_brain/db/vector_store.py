@@ -56,12 +56,16 @@ def get_client() -> AsyncQdrantClient:
     """Return the shared async Qdrant client (singleton)."""
     global _client
     if _client is None:
-        _client = AsyncQdrantClient(
-            url=config.QDRANT_URL,
-            api_key=config.QDRANT_API_KEY,
-            prefer_grpc=False,
-            timeout=5.0,
-        )
+        if config.QDRANT_LOCAL_PATH:
+            # Docker-free embedded mode: Qdrant runs in-process on-disk (no server).
+            _client = AsyncQdrantClient(path=config.QDRANT_LOCAL_PATH)
+        else:
+            _client = AsyncQdrantClient(
+                url=config.QDRANT_URL,
+                api_key=config.QDRANT_API_KEY,
+                prefer_grpc=False,
+                timeout=5.0,
+            )
     return _client
 
 

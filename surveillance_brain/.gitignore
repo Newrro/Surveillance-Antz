@@ -31,6 +31,9 @@ ENV/
 # ── Local storage (runtime JSON/JSONL archive + media) ─────
 storage/
 
+# ── Native (Docker-free) run: embedded Qdrant on-disk data ─
+runtime/
+
 # ── IDE / editor ───────────────────────────────────────────
 .vscode/
 .idea/

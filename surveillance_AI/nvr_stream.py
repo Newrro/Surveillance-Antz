@@ -29,10 +29,48 @@ os.environ.setdefault(
 import sys
 import time
 import math
+import shutil
 import threading
+import subprocess
 
 import cv2
 import numpy as np
+
+# ── GPU (NVDEC) hardware decode ────────────────────────────────────────────
+# Many 1440p HEVC streams saturate the CPU under OpenCV's software decoder. When
+# a system ffmpeg with *_cuvid decoders is present, we decode on the GPU instead
+# (a per-camera ffmpeg subprocess, downscaled), dropping decode from ~1 core per
+# camera to ~0.1. Auto-enabled for rtsp:// URLs; force off with GPU_DECODE=0.
+GPU_DECODE = os.environ.get("GPU_DECODE", "auto").lower()      # auto | 1 | 0
+GPU_DECODE_CODEC = os.environ.get("GPU_DECODE_CODEC", "hevc_cuvid")
+GPU_DECODE_W = int(os.environ.get("GPU_DECODE_W", "1280"))     # output width  (16:9 → 1280x720)
+GPU_DECODE_H = int(os.environ.get("GPU_DECODE_H", "720"))      # output height
+GPU_DECODE_FPS = os.environ.get("GPU_DECODE_FPS", "6")         # decode fps cap (cooldown gates processing anyway)
+
+_gpu_ok_cache = None
+
+
+def gpu_decode_available():
+    """True if a system ffmpeg with the configured *_cuvid decoder exists."""
+    global _gpu_ok_cache
+    if _gpu_ok_cache is not None:
+        return _gpu_ok_cache
+    if GPU_DECODE == "0":
+        _gpu_ok_cache = False
+        return False
+    ok = False
+    ff = shutil.which("ffmpeg")
+    if ff:
+        try:
+            out = subprocess.run([ff, "-hide_banner", "-decoders"],
+                                 capture_output=True, text=True, timeout=10)
+            ok = GPU_DECODE_CODEC in out.stdout
+        except Exception:
+            ok = False
+    if GPU_DECODE == "1" and not ok:
+        print("[nvr] GPU_DECODE=1 but ffmpeg/*_cuvid unavailable — using CPU decode.")
+    _gpu_ok_cache = ok
+    return ok
 
 # ── import the shared camera registry (sibling folder in the monorepo) ──
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -117,16 +155,81 @@ class CameraStream(threading.Thread):
         self.running = False
 
 
+class FFmpegCameraStream(threading.Thread):
+    """Latest-frame reader that decodes on the GPU (NVDEC) via an ffmpeg
+    subprocess, downscaled to WxH. Same interface as CameraStream so it is a
+    drop-in replacement (camera_uid, label, get_frame(), stop())."""
+
+    def __init__(self, camera, width=GPU_DECODE_W, height=GPU_DECODE_H, fps=GPU_DECODE_FPS):
+        super().__init__(daemon=True)
+        self.camera_uid = camera.camera_uid
+        self.label = camera.label
+        self.url = camera.stream_url
+        self.w, self.h, self.fps = width, height, fps
+        self.frame = None
+        self.lock = threading.Lock()
+        self.running = True
+
+    def _spawn(self):
+        # -fflags +discardcorrupt : drop corrupt HEVC packets instead of stalling
+        # -rw_timeout 10s          : exit if the stream goes silent, so run() respawns
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
+               "-fflags", "+discardcorrupt", "-rtsp_transport", "tcp",
+               "-rw_timeout", "10000000", "-hwaccel", "cuda", "-c:v", GPU_DECODE_CODEC,
+               "-i", self.url, "-an",
+               "-vf", f"fps={self.fps},scale={self.w}:{self.h}",
+               "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
+        return subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, bufsize=self.w * self.h * 3)
+
+    def run(self):
+        if not self.url:
+            print(f"[{self.camera_uid}] no stream_url configured — skipping.")
+            return
+        fsz = self.w * self.h * 3
+        print(f"[{self.camera_uid}] Connecting (GPU decode): {self.label}")
+        proc = self._spawn()
+        while self.running:
+            buf = proc.stdout.read(fsz)
+            if len(buf) != fsz:                      # ffmpeg exited / stream dropped
+                if not self.running:
+                    break
+                print(f"[{self.camera_uid}] stream ended, reconnecting...")
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                time.sleep(2)
+                proc = self._spawn()
+                continue
+            with self.lock:
+                self.frame = np.frombuffer(buf, np.uint8).reshape(self.h, self.w, 3)
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+    def get_frame(self):
+        with self.lock:
+            return self.frame.copy() if self.frame is not None else None
+
+    def stop(self):
+        self.running = False
+
+
 def start_streams(cameras):
     """Start a frame-source per camera and return them. Each source exposes the
     same interface (camera_uid, label, get_frame(), stop()).
 
-    - rtsp / url cameras  → a CameraStream (opens stream_url directly).
+    - rtsp cameras (GPU)  → an FFmpegCameraStream (NVDEC decode) when a cuvid
+                            ffmpeg is available; else a CameraStream (OpenCV/CPU).
+    - url / file cameras  → a CameraStream (opens stream_url directly).
     - pano_view cameras   → a PanoView sharing one PanoStream per 360 source, so
                             the equirectangular feed is read only once.
     """
     sources = []
     pano_streams = {}   # pano_group -> PanoStream (shared across its views)
+    use_gpu = gpu_decode_available()
     for c in cameras:
         if getattr(c, "source_type", "rtsp") == "pano_view":
             from pano import PanoStream, PanoView
@@ -137,7 +240,10 @@ def start_streams(cameras):
                 pano_streams[c.pano_group] = ps
             sources.append(PanoView(c, ps))
         else:
-            s = CameraStream(c)
+            if use_gpu and (c.stream_url or "").startswith("rtsp://"):
+                s = FFmpegCameraStream(c)
+            else:
+                s = CameraStream(c)
             s.start()
             sources.append(s)
     return sources

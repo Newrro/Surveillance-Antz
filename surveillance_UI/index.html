@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sentinel — Surveillance Console</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tabler-icons/2.47.0/iconfont/tabler-icons.min.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ===================== LOGIN ===================== -->
+<div class="login-screen" id="view-login">
+  <div class="login-card">
+    <div class="login-logo">S</div>
+    <p class="login-title">Sentinel console</p>
+    <p class="login-sub">Sign in to access live monitoring</p>
+    <div class="field">
+      <label>Operator ID</label>
+      <input type="text" id="login-user" placeholder="Operator ID" autocomplete="username"
+             onkeydown="if(event.key==='Enter')login()">
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input type="password" id="login-pass" placeholder="Password" autocomplete="current-password"
+             onkeydown="if(event.key==='Enter')login()">
+    </div>
+    <p class="login-error hidden" id="login-error">Incorrect operator ID or password.</p>
+    <button class="btn btn-primary btn-block" onclick="login()">Sign in</button>
+  </div>
+</div>
+
+<!-- ===================== APP SHELL ===================== -->
+<div class="app hidden" id="app-shell">
+
+  <nav class="nav">
+    <div class="nav-logo">S</div>
+    <button class="nav-item active" data-view="grid" onclick="showView('grid')">
+      <i class="ti ti-layout-grid"></i><span>Grid</span>
+    </button>
+    <button class="nav-item" data-view="log" onclick="showView('log')">
+      <i class="ti ti-list-details"></i><span>Log</span>
+    </button>
+    <button class="nav-item" data-view="report" onclick="showView('report')">
+      <i class="ti ti-report"></i><span>Report</span>
+    </button>
+    <button class="nav-item" data-view="settings" onclick="showView('settings')">
+      <i class="ti ti-settings"></i><span>Settings</span>
+    </button>
+  </nav>
+
+  <div class="main">
+    <div class="topbar">
+      <div class="topbar-search">
+        <i class="ti ti-search"></i>
+        <input type="text" id="global-search" placeholder="Search…" oninput="onSearch(this.value)">
+      </div>
+      <div class="topbar-spacer"></div>
+      <div class="topbar-clock" id="clock">--:--:--</div>
+      <div class="topbar-operator">
+        <div class="avatar">AD</div>
+        <span id="operator-name">admin</span>
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- ---------- Live grid ---------- -->
+      <section class="view" id="view-grid">
+        <div class="view-header">
+          <div class="grid-header-left">
+            <div class="grid-titles">
+              <h1 class="view-title">Live monitoring</h1>
+              <p class="view-sub">All camera feeds · click a tile to open</p>
+            </div>
+            <div class="stat-row">
+              <div class="inside-stat visits-stat">
+                <span class="inside-num" id="visits-count">0</span>
+                <div class="inside-meta">
+                  <div class="inside-title">No. of visits today</div>
+                  <div class="inside-sub">people who entered the premises</div>
+                </div>
+              </div>
+              <div class="inside-stat">
+                <span class="inside-num" id="inside-count">0</span>
+                <div class="inside-meta">
+                  <div class="inside-title">Currently inside</div>
+                  <div class="inside-sub">personnel who haven't exited</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="grid" id="camera-grid"></div>
+      </section>
+
+      <!-- ---------- Individual camera ---------- -->
+      <section class="view hidden" id="view-camera">
+        <div class="view-header">
+          <div>
+            <h1 class="view-title" id="camera-title">Camera</h1>
+            <p class="view-sub" id="camera-sub">Location</p>
+          </div>
+          <button class="btn" onclick="showView('grid')"><i class="ti ti-arrow-left"></i> Back to grid</button>
+        </div>
+        <div class="camera-view">
+          <div class="feed-frame" id="feed-frame"></div>
+        </div>
+      </section>
+
+      <!-- ---------- Log ---------- -->
+      <section class="view hidden" id="view-log">
+        <div class="view-header">
+          <div>
+            <h1 class="view-title">Log</h1>
+            <p class="view-sub">Pick a day on the calendar · search a person or location to narrow it</p>
+          </div>
+        </div>
+
+        <div class="log-layout">
+          <!-- Left: month/year, calendar, then filters -->
+          <div class="log-controls">
+            <div class="log-monthyear">
+              <span class="log-my-label">Select month &amp; year</span>
+              <select id="log-month" onchange="onLogMonthYear()"></select>
+              <select id="log-year" onchange="onLogMonthYear()"></select>
+            </div>
+
+            <div class="cal">
+              <div class="cal-weekdays"><span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span></div>
+              <div class="cal-grid" id="log-cal"></div>
+            </div>
+
+            <div class="log-filters">
+              <div class="filter-field">
+                <label>Search person</label>
+                <input type="text" id="log-person" placeholder="Name or ID…" oninput="renderLogSheet()">
+              </div>
+              <div class="filter-field">
+                <label>Location</label>
+                <select id="log-loc" onchange="renderLogSheet()"></select>
+              </div>
+              <div class="filter-field">
+                <label>Time range</label>
+                <div class="time-range">
+                  <input type="time" id="log-time-from" onchange="renderLogSheet()">
+                  <span class="time-range-sep">to</span>
+                  <input type="time" id="log-time-to" onchange="renderLogSheet()">
+                </div>
+              </div>
+              <div class="filter-field">
+                <label>Category</label>
+                <select id="log-category" onchange="renderLogSheet()">
+                  <option value="">All categories</option>
+                  <option>Employee</option>
+                  <option>Visitor</option>
+                  <option>Unknown</option>
+                </select>
+              </div>
+              <button class="btn btn-block" onclick="clearLogFilters()"><i class="ti ti-filter-off"></i> Clear all filters</button>
+            </div>
+          </div>
+
+          <!-- Right: datasheet only (fills the column) -->
+          <div class="log-sheet">
+            <div class="log-sheet-head">
+              <div>
+                <div class="log-sheet-date" id="log-sheet-date">—</div>
+                <div class="log-sheet-day" id="log-sheet-day">—</div>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Photo</th><th>Name</th><th>Category</th><th>Time</th><th>Location</th></tr>
+                </thead>
+                <tbody id="log-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- Report ---------- -->
+      <section class="view hidden" id="view-report">
+        <div class="view-header">
+          <div>
+            <h1 class="view-title">Report</h1>
+            <p class="view-sub">Grouped by category · click anyone to open their full log</p>
+          </div>
+        </div>
+        <div id="report-groups"></div>
+      </section>
+
+      <!-- ---------- Records ---------- -->
+      <section class="view hidden" id="view-records">
+        <div class="view-header">
+          <div>
+            <h1 class="view-title">Records</h1>
+            <p class="view-sub">Registered employee &amp; visitor datasheets</p>
+          </div>
+        </div>
+        <div class="filters">
+          <input type="text" id="records-search" placeholder="Search by name or employee ID…" style="min-width:240px" oninput="renderRecords()">
+          <select id="records-dept" onchange="renderRecords()"></select>
+        </div>
+        <div class="records-grid" id="records-grid"></div>
+      </section>
+
+      <!-- ---------- Settings ---------- -->
+      <section class="view hidden" id="view-settings">
+        <div class="view-header">
+          <div>
+            <h1 class="view-title">Settings</h1>
+            <p class="view-sub">Operator accounts, reclassification &amp; departments</p>
+          </div>
+          <button class="btn" onclick="logout()"><i class="ti ti-logout"></i> Log out</button>
+        </div>
+
+        <div class="settings-section">
+          <h2>Operator accounts</h2>
+          <p class="desc">Manage who can sign in to the console.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Username</th><th>Role</th><th>Last login</th><th style="text-align:right">Actions</th></tr></thead>
+              <tbody id="operators-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h2>Add operator</h2>
+          <p class="desc">Create a new operator account.</p>
+          <div class="form-inline">
+            <div class="field"><label>Username</label><input type="text" id="op-new-user" placeholder="e.g. a.mehta"></div>
+            <div class="field"><label>Role</label>
+              <select id="op-new-role"><option>Operator</option><option>Senior operator</option><option>Administrator</option></select>
+            </div>
+            <div class="field"><label>Password</label><input type="password" id="op-new-pass" placeholder="Set a password"></div>
+            <button class="btn btn-primary" onclick="addOperator()">Add operator</button>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h2>Reclassify persons</h2>
+          <p class="desc">Confirm an identity by moving a person between categories, or delete a record entirely.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Photo</th><th>Name / ID</th><th>Category</th><th>First seen</th><th style="text-align:right">Actions</th></tr></thead>
+              <tbody id="unclassified-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h2>Departments</h2>
+          <p class="desc">Departments available when registering or reclassifying employees.</p>
+          <div class="chip-list" id="dept-list"></div>
+          <div class="form-inline">
+            <div class="field"><label>New department</label><input type="text" id="dept-new" placeholder="e.g. Housekeeping"></div>
+            <button class="btn btn-primary" onclick="addDepartment()">Add department</button>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<!-- ===================== Person sidebar (from a camera detection) ===================== -->
+<div class="overlay" id="overlay" onclick="closeSidebar()"></div>
+<aside class="sidebar-panel" id="person-sidebar">
+  <div class="sidebar-head">
+    <div class="avatar" id="ps-avatar">--</div>
+    <div class="who">
+      <div class="name" id="ps-name">—</div>
+      <div class="id" id="ps-id">—</div>
+    </div>
+    <button class="sidebar-close" onclick="closeSidebar()"><i class="ti ti-x"></i></button>
+  </div>
+  <div class="sidebar-body">
+    <div class="kv"><span class="k">Category</span><span class="v" id="ps-category">—</span></div>
+    <div class="kv"><span class="k">Employee ID</span><span class="v" id="ps-empid">—</span></div>
+    <div class="kv"><span class="k">Entry time</span><span class="v" id="ps-entry">—</span></div>
+
+    <div class="sidebar-section-title">Places visited today</div>
+    <ul class="trail" id="ps-trail"></ul>
+  </div>
+  <div class="sidebar-foot">
+    <button class="btn btn-primary btn-block" onclick="openPersonLogFromSidebar()"><i class="ti ti-route"></i> Track</button>
+  </div>
+</aside>
+
+<!-- ===================== Person log modal (Report / sidebar) ===================== -->
+<div class="modal-backdrop" id="plog-modal" onclick="closePersonLogIfBackdrop(event)">
+  <div class="modal modal-plog">
+    <div class="modal-head plog-head">
+      <div class="avatar plog-avatar-clickable" id="plog-avatar" onclick="openPhotoPopup()" title="View photo">--</div>
+      <div class="plog-who">
+        <div class="name" id="plog-name">—</div>
+        <div class="id" id="plog-id">—</div>
+      </div>
+      <span id="plog-badge"></span>
+      <button class="sidebar-close" onclick="closePersonLog()"><i class="ti ti-x"></i></button>
+    </div>
+
+    <div class="plog-body-grid">
+      <!-- LEFT: details · weekly report · month/year + day tiles -->
+      <div class="plog-left">
+        <div class="plog-card plog-details" id="plog-details"></div>
+
+        <div class="plog-card">
+          <div class="plog-card-title">Weekly report</div>
+          <div class="plog-chart" id="plog-chart"></div>
+          <div class="plog-hours" id="plog-hours"></div>
+        </div>
+
+        <div class="plog-card">
+          <div class="plog-monthyear">
+            <span class="plog-my-label">Month &amp; year</span>
+            <select id="plog-month" onchange="onPlogMonthYear()"></select>
+            <select id="plog-year" onchange="onPlogMonthYear()"></select>
+          </div>
+          <div class="plog-daygrid" id="plog-daygrid"></div>
+        </div>
+      </div>
+
+      <!-- RIGHT: date/day · time & location filters · movement log w/ photo -->
+      <div class="plog-right">
+        <div class="plog-right-head">
+          <div class="plog-sel-date" id="plog-sel-date">—</div>
+          <div class="plog-sel-day" id="plog-sel-day">—</div>
+        </div>
+        <div class="plog-filters">
+          <div class="filter-field">
+            <label>Time range</label>
+            <div class="time-range">
+              <input type="time" id="plog-time-from" onchange="renderPersonLog()">
+              <span class="time-range-sep">to</span>
+              <input type="time" id="plog-time-to" onchange="renderPersonLog()">
+            </div>
+          </div>
+          <div class="filter-field">
+            <label>Location</label>
+            <select id="plog-loc" onchange="renderPersonLog()"></select>
+          </div>
+          <button class="btn btn-block" onclick="clearPersonLogFilters()"><i class="ti ti-filter-off"></i> Clear all filters</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Time</th><th>Location</th><th>Photo</th></tr></thead>
+            <tbody id="plog-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== Photo popup (person's photo, from Report) ===================== -->
+<div class="photo-backdrop" id="photo-popup" onclick="closePhotoPopupIfBackdrop(event)">
+  <div class="photo-popup-card">
+    <button class="sidebar-close photo-popup-close" onclick="closePhotoPopup()"><i class="ti ti-x"></i></button>
+    <div class="avatar photo-popup-avatar" id="photo-popup-avatar">--</div>
+    <div class="photo-popup-name" id="photo-popup-name">—</div>
+    <div class="photo-popup-id" id="photo-popup-id">—</div>
+  </div>
+</div>
+
+<!-- ===================== Edit operator modal ===================== -->
+<div class="modal-backdrop" id="op-modal" onclick="closeOpEditIfBackdrop(event)">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Edit operator</h3>
+      <button class="sidebar-close" onclick="closeOpEdit()"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="field"><label>Username</label><input type="text" id="op-edit-user"></div>
+    <div class="field"><label>Role</label>
+      <select id="op-edit-role"><option>Operator</option><option>Senior operator</option><option>Administrator</option></select>
+    </div>
+    <div class="field"><label>Password</label><input type="text" id="op-edit-pass"></div>
+    <div class="modal-actions">
+      <button class="btn btn-danger" onclick="deleteOperator()"><i class="ti ti-trash"></i> Delete user</button>
+      <span style="flex:1"></span>
+      <button class="btn" onclick="closeOpEdit()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveOperator()">Save changes</button>
+    </div>
+  </div>
+</div>
+
+<script src="data.js"></script>
+<script src="api.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

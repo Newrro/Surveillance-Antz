@@ -190,7 +190,10 @@ function renderGrid() {
   if (vc) vc.textContent = countVisitsToday();
   const grid = document.getElementById('camera-grid');
   grid.innerHTML = LIVE_CAMERAS.map(cam => {
-    const dets = DETECTIONS[cam.id] || [];
+    // Detection boxes are drawn on the video by Part 1 (real detector output),
+    // so the UI no longer overlays its own. This count is just recent live
+    // activity from the Brain's event stream (rolling window).
+    const n = liveDetCount(cam.id);
     const offline = cam.status === 'offline';
     return `
       <div class="tile-wrap" data-name="${cam.name.toLowerCase()}">
@@ -203,15 +206,21 @@ function renderGrid() {
           ${feedImg(cam.id, 'tile-feed')}
           <span class="bracket tl"></span><span class="bracket tr"></span>
           <span class="bracket bl"></span><span class="bracket br"></span>
-          ${dets.map(d => {
-            const p = PEOPLE[d.personId];
-            return `<div class="detbox category-${p.category}" style="top:${d.box.top}%;left:${d.box.left}%;width:${d.box.w}%;height:${d.box.h}%"></div>`;
-          }).join('')}
-          <span class="tile-count">${dets.length ? dets.length + ' detected' : 'No activity'}</span>
+          <span class="tile-count">${n ? n + ' detected' : 'No activity'}</span>
           <span class="tile-time">${offline ? 'signal lost' : nowTime()}</span>
         </div>
       </div>`;
   }).join('');
+}
+
+/* Recent live-activity count for a camera — entries fold in over WS /live and
+   expire after a short window, so the badge reflects current activity rather
+   than an ever-growing total. No pixel boxes (those are drawn on the video). */
+function liveDetCount(camId) {
+  const now = Date.now();
+  const arr = (DETECTIONS[camId] || []).filter(d => now - (d.t || 0) < 8000);
+  DETECTIONS[camId] = arr;
+  return arr.length;
 }
 
 function filterGrid(q) {
@@ -247,7 +256,8 @@ function openCamera(camId) {
   document.getElementById('camera-title').textContent = cam.name;
   document.getElementById('camera-sub').textContent = cam.location;
 
-  const dets = DETECTIONS[camId] || [];
+  // Boxes + labels are drawn on the video itself by Part 1 (real detector),
+  // so no HTML overlay here.
   const frame = document.getElementById('feed-frame');
   frame.innerHTML = `
     ${feedImg(camId, 'feed-video')}
@@ -255,15 +265,6 @@ function openCamera(camId) {
     <span class="bracket bl"></span><span class="bracket br"></span>
     <span class="feed-label">${cam.name}</span>
     <span class="feed-time">${nowTime()}</span>
-    ${dets.map(d => {
-      const p = PEOPLE[d.personId];
-      const label = p.category === 'Employee' ? p.name : p.category;
-      return `<div class="detbox-live category-${p.category}"
-                   style="top:${d.box.top}%;left:${d.box.left}%;width:${d.box.w}%;height:${d.box.h}%"
-                   onclick="openPerson('${d.personId}')">
-                <span class="tag">${label}</span>
-              </div>`;
-    }).join('')}
   `;
 
   showViewRaw('camera');

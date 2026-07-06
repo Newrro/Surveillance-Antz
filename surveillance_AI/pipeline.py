@@ -40,6 +40,7 @@ import os
 import sys
 import time
 import argparse
+import threading
 from datetime import datetime, timezone
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
@@ -60,6 +61,79 @@ import nvr_stream as nvr  # noqa: E402
 
 STORAGE_IMG = os.path.join(REPO_ROOT, "storage", "img")
 MIN_CROP_SIDE = 24  # skip crops too tiny to embed reliably
+
+# ── Live annotated preview (REAL boxes on the dashboard) ───────────────────
+# The pipeline is the single camera consumer: it decodes, detects and identifies,
+# then draws the REAL boxes on the frame and writes a small JPEG per camera to
+# shared memory. The UI bridge (surveillance_UI/server.py) serves those JPEGs as
+# MJPEG — so the dashboard shows the actual detector output (not fabricated
+# boxes), and the UI no longer decodes RTSP itself (frees the GPU).
+SHM_DIR = os.environ.get("SENTINEL_SHM", "/dev/shm/sentinel")
+PREVIEW_FPS = float(os.environ.get("PREVIEW_FPS", "8"))
+PREVIEW_W = int(os.environ.get("PREVIEW_W", "640"))
+PREVIEW_H = int(os.environ.get("PREVIEW_H", "360"))
+
+_annot = {}                 # camera_uid -> list of (x1, y1, x2, y2, label, color)
+_annot_lock = threading.Lock()
+
+
+def set_annotations(uid, annos):
+    with _annot_lock:
+        _annot[uid] = annos
+
+
+def get_annotations(uid):
+    with _annot_lock:
+        return list(_annot.get(uid, ()))
+
+
+def start_preview_writer(streams):
+    """Background thread: for each camera, overlay the latest boxes on the latest
+    frame and write a JPEG to SHM at PREVIEW_FPS — smooth video, boxes update at
+    the detection rate. Decouples display FPS from the (slower) detection loop."""
+    os.makedirs(SHM_DIR, exist_ok=True)
+    period = 1.0 / max(1.0, PREVIEW_FPS)
+    enc = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
+
+    def loop():
+        while True:
+            t0 = time.time()
+            for s in streams:
+                frame = s.get_frame()
+                if frame is None:
+                    continue
+                vis = frame.copy()
+                for (x1, y1, x2, y2, label, color) in get_annotations(s.camera_uid):
+                    cv2.rectangle(vis, (int(x1), int(y1)), (int(x2), int(y2)), color, 3)
+                    if label:
+                        cv2.putText(vis, label, (int(x1), max(18, int(y1) - 8)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                small = cv2.resize(vis, (PREVIEW_W, PREVIEW_H))
+                ok, buf = cv2.imencode(".jpg", small, enc)
+                if not ok:
+                    continue
+                tmp = os.path.join(SHM_DIR, f".{s.camera_uid}.tmp")
+                final = os.path.join(SHM_DIR, f"{s.camera_uid}.jpg")
+                try:
+                    with open(tmp, "wb") as f:
+                        f.write(buf.tobytes())
+                    os.replace(tmp, final)   # atomic swap so readers never see a half-written file
+                except OSError:
+                    pass
+            dt = time.time() - t0
+            if dt < period:
+                time.sleep(period - dt)
+
+    th = threading.Thread(target=loop, daemon=True)
+    th.start()
+    return th
+
+
+# Box colours (BGR) by identity outcome.
+_COL_MATCH = (0, 200, 0)      # recognised (face/body match) → green
+_COL_NEW = (0, 170, 255)      # new visitor → orange
+_COL_UNKNOWN = (60, 60, 220)  # unknown / below gate → red
+_COL_PERSON = (0, 200, 255)   # detect-only person → yellow
 
 
 def utc_now_iso():
@@ -145,51 +219,55 @@ def main():
         session = requests.Session()
 
     streams = nvr.start_streams(cameras)
-    last_pass = {c.camera_uid: 0.0 for c in cameras}
+    start_preview_writer(streams)          # serve REAL annotated frames to the dashboard
+    last_detect = {c.camera_uid: 0.0 for c in cameras}   # fast: box positions
+    last_id = {c.camera_uid: 0.0 for c in cameras}       # slow: identity + emit
     roles = {c.camera_uid: c for c in cameras}
+    detect_interval = float(os.environ.get("DETECT_INTERVAL", "0.3"))
 
-    win = "Part 1 — pipeline"
-    if args.show:
-        cv2.namedWindow(win, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
-
-    print("Running. Ctrl-C to stop.")
+    print(f"Running (boxes ~{1/detect_interval:.0f} fps/cam, identity every "
+          f"{args.cooldown}s, preview -> {SHM_DIR}). Ctrl-C to stop.")
     try:
         while True:
+            did_work = False
             for stream in streams:
                 uid = stream.camera_uid
                 cam = roles[uid]
                 now = time.time()
-                if now - last_pass[uid] < args.cooldown:
+                if now - last_detect[uid] < detect_interval:
                     continue
                 frame = stream.get_frame()
                 if frame is None:
                     continue
+                last_detect[uid] = now
+                did_work = True
 
                 boxes = detector.detect(frame, conf=args.conf, normalized=False)
                 if not boxes:
+                    set_annotations(uid, [])          # clear boxes when nobody's there
                     continue
-                last_pass[uid] = now
-                vis = frame.copy() if args.show else None
 
-                # ── DETECT-ONLY cameras: no feature extraction ──
+                # ── DETECT-ONLY cameras: real-time person boxes, no identity ──
                 if not cam.runs_identity:
-                    print(f"[{uid}] detect-only: {len(boxes)} person(s)")
-                    if args.show:
-                        draw_boxes(vis, boxes, normalized=False)
-                        cv2.putText(vis, f"{uid} [detect]  {len(boxes)} ppl",
-                                    (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2)
-                        cv2.imshow(win, vis)
+                    set_annotations(uid, [(*b[:4], "person", _COL_PERSON) for b in boxes])
                     continue
 
-                # ── IDENTIFY cameras: detect → (segment) → embed → ID ──
+                # ── IDENTIFY cameras: keep boxes real-time; run the heavy identity
+                #    (SAM2 + AdaFace/OSNet + emit) on its own slower cadence. ──
+                if now - last_id[uid] < args.cooldown:
+                    set_annotations(uid, [(*b[:4], "person", _COL_PERSON) for b in boxes])
+                    continue
+                last_id[uid] = now
+
                 if segmenter is not None:
                     segmenter.set_frame(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-
                 stamp_ms = int(now * 1000)
+                annos = []
                 for i, box in enumerate(boxes):
                     mask = segmenter.mask_for_box(box) if segmenter is not None else None
                     crop = crop_person(frame, box, mask=mask)
                     if crop is None:
+                        annos.append((*box[:4], "person", _COL_PERSON))
                         continue
 
                     face_emb, body_emb = identifier.extract(crop)
@@ -198,47 +276,34 @@ def main():
                         face_threshold=cam.match_threshold)
                     snap = save_snapshot(uid, crop, stamp_ms, i)
 
-                    # Show a % only on a real match; "(new)" for a fresh Visitor; else Unknown.
                     if result["matched_by"] in ("face", "body"):
-                        disp = f"{result['label']} {result['confidence_pct']:.0f}% [{result['matched_by']}]"
+                        disp = f"{result['label']} {result['confidence_pct']:.0f}%"
+                        color = _COL_MATCH
                     elif result["is_new"]:
                         disp = f"{result['label']} (new)"
+                        color = _COL_NEW
                     else:
                         disp = "Unknown"
-                    learn = " learn" if result["learned"] else ""
-                    print(f"[{uid}] {disp}  {result['person_id'] or ''}{learn}  (det {box[4]:.2f})")
+                        color = _COL_UNKNOWN
+                    annos.append((*box[:4], disp, color))
+                    print(f"[{uid}] {disp}  {result['person_id'] or ''}  (det {box[4]:.2f})")
 
                     # Emit whenever we have an embedding — the Brain re-resolves identity.
                     if args.emit and (face_emb is not None or body_emb is not None):
                         payload = build_payload(uid, box[4], face_emb, body_emb, snap, stamp_ms, i)
                         try:
-                            r = session.post(f"{args.brain_url}/events", json=payload, timeout=10)
-                            print(f"    → POST /events {r.status_code}")
+                            session.post(f"{args.brain_url}/events", json=payload, timeout=10)
                         except Exception as e:  # noqa: BLE001 — keep the loop alive
                             print(f"    → POST failed: {e}")
+                set_annotations(uid, annos)
 
-                    if args.show:
-                        x1, y1, x2, y2 = box[:4]
-                        color = (0, 200, 0) if result["matched_by"] in ("face", "body") \
-                            else ((0, 200, 255) if result["is_new"] else (60, 60, 220))
-                        cv2.rectangle(vis, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
-                        cv2.putText(vis, disp, (int(x1), max(14, int(y1) - 6)),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-                if args.show:
-                    cv2.putText(vis, f"{uid} [identify]",
-                                (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                    cv2.imshow(win, vis)
-
-            if args.show and (cv2.waitKey(1) & 0xFF) == ord('q'):
-                break
+            if not did_work:
+                time.sleep(0.02)                  # avoid busy-spin when nothing is due
     except KeyboardInterrupt:
         print("\nStopping...")
     finally:
         for s in streams:
             s.stop()
-        if args.show:
-            cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":

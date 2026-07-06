@@ -53,6 +53,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # 1440p HEVC streams decoded on the CPU (OpenCV) saturate the machine when many
 # run at once. If a system ffmpeg with *_cuvid decoders is present we decode on
 # the GPU at tile resolution instead. Force off with GPU_DECODE=0.
+# The perception pipeline (Part 1) decodes + detects + draws REAL boxes and writes
+# an annotated JPEG per camera here. This bridge just serves those as MJPEG — so it
+# does NOT decode RTSP itself (no duplicate decode / GPU use), and the dashboard
+# shows the actual detector output. If the pipeline isn't running, tiles show a
+# "connecting" placeholder.
+SHM_DIR = os.environ.get("SENTINEL_SHM", "/dev/shm/sentinel")
+SHM_READ_FPS = float(os.environ.get("SHM_READ_FPS", "10"))
+
 import shutil as _shutil
 GPU_DECODE = os.environ.get("GPU_DECODE", "auto").lower()      # auto | 1 | 0
 GPU_DECODE_CODEC = os.environ.get("GPU_DECODE_CODEC", "hevc_cuvid")
@@ -157,75 +165,22 @@ class CameraStream(threading.Thread):
             self._cond.notify_all()
 
     def run(self):
-        if self.url and self.url.startswith("rtsp://") and gpu_decode_available():
-            self._run_gpu()
-        else:
-            self._run_cpu()
-
-    def _run_gpu(self):
-        """Decode on the GPU (NVDEC) via ffmpeg, at tile resolution — keeps the
-        CPU free even with many 1440p HEVC cameras."""
-        w, h = UI_DECODE_W, UI_DECODE_H
-        fsz = w * h * 3
-        # rtsp stall timeout uses -timeout (us), NOT -rw_timeout (invalid for rtsp).
-        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
-               "-fflags", "+discardcorrupt", "-rtsp_transport", "tcp",
-               "-timeout", "10000000", "-hwaccel", "cuda", "-c:v", GPU_DECODE_CODEC,
-               "-i", self.url, "-an",
-               "-vf", f"fps={UI_DECODE_FPS},scale={w}:{h}",
-               "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
-        print(f"[{self.id}] Connecting (GPU decode): {self.name}")
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=fsz)
+        """Serve the annotated JPEG the pipeline writes to shared memory. The
+        pipeline is the single RTSP consumer (decode + detect + draw); this bridge
+        only re-publishes its output, so no RTSP/decode happens here."""
+        shm = os.path.join(SHM_DIR, f"{self.id}.jpg")
+        period = 1.0 / max(1.0, SHM_READ_FPS)
         while self.running:
-            buf = proc.stdout.read(fsz)
-            if len(buf) != fsz:
-                if not self.running:
-                    break
-                self._publish(_placeholder(f"{self.name} — reconnecting..."), real=False)
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-                time.sleep(2)
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=fsz)
-                continue
-            frame = np.frombuffer(buf, np.uint8).reshape(h, w, 3)
-            frame = run_ai_model(frame, self.id)
-            ok, jbuf = cv2.imencode(".jpg", frame, self._encode)
-            if ok:
-                self._publish(jbuf.tobytes(), real=True)
-        try:
-            proc.kill()
-        except Exception:
-            pass
-
-    def _run_cpu(self):
-        cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
-        print(f"[{self.id}] Connecting: {self.name}")
-
-        while self.running:
-            if not cap.isOpened():
-                self._publish(_placeholder(f"{self.name} — reconnecting..."), real=False)
-                print(f"[{self.id}] Retrying in 3s...")
-                time.sleep(3)
-                cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
-                continue
-
-            ret, frame = cap.read()
-            if not ret:
-                self._publish(_placeholder(f"{self.name} — signal lost"), real=False)
-                print(f"[{self.id}] Frame grab failed, reconnecting...")
-                cap.release()
-                time.sleep(2)
-                cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
-                continue
-
-            frame = run_ai_model(frame, self.id)
-            ok, buf = cv2.imencode(".jpg", frame, self._encode)
-            if ok:
-                self._publish(buf.tobytes(), real=True)
-
-        cap.release()
+            try:
+                with open(shm, "rb") as f:
+                    data = f.read()
+                if data:
+                    self._publish(data, real=True)
+            except FileNotFoundError:
+                self._publish(_placeholder(f"{self.name} — connecting..."), real=False)
+            except OSError:
+                pass
+            time.sleep(period)
 
     # --- consumer -------------------------------------------------------
     def wait_for_frame(self, last_seq, timeout=5.0):

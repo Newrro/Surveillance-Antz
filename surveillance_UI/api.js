@@ -260,17 +260,15 @@ const Brain = (() => {
     // pixel box, so we place a centered marker; Part 1 can later send real boxes.
     const camId = evt.camera || (evt.camera_id != null ? String(evt.camera_id) : null);
     if (camId) {
-      // Overlay markers are TTL'd + capped so they reflect RECENT activity, not a
-      // forever-growing pile (the Brain event carries no pixel box, so these are
-      // placeholder positions until Part 1 sends real boxes).
+      // Record recent activity for the tile's "N detected" badge only — NO pixel
+      // box. The real detection boxes are drawn on the video by Part 1; entries
+      // here are TTL'd so the badge shows current activity, not a running total.
       const now = Date.now();
-      const TTL = 8000;   // drop a marker 8s after that person was last seen here
-      const CAP = 8;      // never show more than this many at once
+      const TTL = 8000;
       const arr = (DETECTIONS[camId] || [])
-        .filter(d => now - (d.ts || 0) < TTL && d.personId !== key);
-      const n = arr.length;
-      arr.push({ personId: key, ts: now, box: { top: 26, left: 20 + (n * 18) % 60, w: 13, h: 40 } });
-      DETECTIONS[camId] = arr.slice(-CAP);
+        .filter(d => now - (d.t || 0) < TTL && d.personId !== key);
+      arr.push({ personId: key, t: now });
+      DETECTIONS[camId] = arr;
     }
     return { key, person, loc, camId };
   }

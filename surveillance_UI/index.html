@@ -3,27 +3,29 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Sentinel — Surveillance Console</title>
+<title>Antz Surveillance Systems</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tabler-icons/2.47.0/iconfont/tabler-icons.min.css">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
+<!-- Interactive HUD grid backdrop (brightens under the cursor) -->
+<div id="bg-fx"></div>
+
 <!-- ===================== LOGIN ===================== -->
 <div class="login-screen" id="view-login">
+  <div class="login-forest" aria-hidden="true"></div>
   <div class="login-card">
-    <div class="login-logo">S</div>
-    <p class="login-title">Sentinel console</p>
-    <p class="login-sub">Sign in to access live monitoring</p>
+    <img class="login-logo" src="static/logo.png" alt="Antz Systems">
+    <h1 class="login-title">Surveillance Systems</h1>
+    <p class="login-sub">Sign in to the access console</p>
     <div class="field">
-      <label>Operator ID</label>
-      <input type="text" id="login-user" placeholder="Operator ID" autocomplete="username"
-             onkeydown="if(event.key==='Enter')login()">
+      <label>Username</label>
+      <input type="text" id="login-user" placeholder="Enter username" autocomplete="username">
     </div>
     <div class="field">
       <label>Password</label>
-      <input type="password" id="login-pass" placeholder="Password" autocomplete="current-password"
-             onkeydown="if(event.key==='Enter')login()">
+      <input type="password" id="login-pass" placeholder="Enter password" autocomplete="current-password">
     </div>
     <p class="login-error hidden" id="login-error">Incorrect operator ID or password.</p>
     <button class="btn btn-primary btn-block" onclick="login()">Sign in</button>
@@ -35,17 +37,17 @@
 
   <nav class="nav">
     <div class="nav-logo">S</div>
-    <button class="nav-item active" data-view="grid" onclick="showView('grid')">
-      <i class="ti ti-layout-grid"></i><span>Grid</span>
+    <button class="nav-item active" data-view="grid" onclick="showView('grid')" title="Grid">
+      <span class="nav-ico"><i class="ti ti-layout-grid"></i></span><span class="nav-label">Grid</span>
     </button>
-    <button class="nav-item" data-view="log" onclick="showView('log')">
-      <i class="ti ti-list-details"></i><span>Log</span>
+    <button class="nav-item" data-view="log" onclick="showView('log')" title="Log">
+      <span class="nav-ico"><i class="ti ti-calendar-event"></i></span><span class="nav-label">Log</span>
     </button>
-    <button class="nav-item" data-view="report" onclick="showView('report')">
-      <i class="ti ti-report"></i><span>Report</span>
+    <button class="nav-item" data-view="report" onclick="showView('report')" title="Report">
+      <span class="nav-ico"><i class="ti ti-chart-bar"></i></span><span class="nav-label">Report</span>
     </button>
-    <button class="nav-item" data-view="settings" onclick="showView('settings')">
-      <i class="ti ti-settings"></i><span>Settings</span>
+    <button class="nav-item" data-view="settings" onclick="showView('settings')" title="Settings">
+      <span class="nav-ico"><i class="ti ti-settings"></i></span><span class="nav-label">Settings</span>
     </button>
   </nav>
 
@@ -55,11 +57,14 @@
         <i class="ti ti-search"></i>
         <input type="text" id="global-search" placeholder="Search…" oninput="onSearch(this.value)">
       </div>
+      <div class="topbar-TRACK">
+        <button class="btn btn-primary" onclick="openTrackInside()"><i class="ti ti-route"></i> TRACK</button>
+      </div>
       <div class="topbar-spacer"></div>
       <div class="topbar-clock" id="clock">--:--:--</div>
       <div class="topbar-operator">
-        <div class="avatar">AD</div>
-        <span id="operator-name">admin</span>
+        <div class="avatar">RS</div>
+        <span id="operator-name">R.singh</span>
       </div>
     </div>
 
@@ -73,8 +78,8 @@
               <h1 class="view-title">Live monitoring</h1>
               <p class="view-sub">All camera feeds · click a tile to open</p>
             </div>
-            <div class="stat-row">
-              <div class="inside-stat visits-stat">
+            <div class="grid-stats">
+              <div class="inside-stat">
                 <span class="inside-num" id="visits-count">0</span>
                 <div class="inside-meta">
                   <div class="inside-title">No. of visits today</div>
@@ -104,7 +109,7 @@
           <button class="btn" onclick="showView('grid')"><i class="ti ti-arrow-left"></i> Back to grid</button>
         </div>
         <div class="camera-view">
-          <div class="feed-frame" id="feed-frame"></div>
+          <div class="feed-frame" id="feed-frame" onclick="toggleFeedFullscreen(this)"></div>
         </div>
       </section>
 
@@ -237,7 +242,7 @@
               <select id="op-new-role"><option>Operator</option><option>Senior operator</option><option>Administrator</option></select>
             </div>
             <div class="field"><label>Password</label><input type="password" id="op-new-pass" placeholder="Set a password"></div>
-            <button class="btn btn-primary" onclick="addOperator()">Add operator</button>
+            <button class="btn btn-primary" onclick="addOperator()"><i class="ti ti-user-plus"></i> Add operator</button>
           </div>
         </div>
 
@@ -258,18 +263,8 @@
           <div class="chip-list" id="dept-list"></div>
           <div class="form-inline">
             <div class="field"><label>New department</label><input type="text" id="dept-new" placeholder="e.g. Housekeeping"></div>
-            <button class="btn btn-primary" onclick="addDepartment()">Add department</button>
+            <button class="btn btn-primary" onclick="addDepartment()"><i class="ti ti-plus"></i> Add department</button>
           </div>
-        </div>
-
-        <div class="settings-card" style="border:1px solid #e0533d33">
-          <h2 style="color:#d64533">Danger zone</h2>
-          <p class="desc">Permanently delete <strong>all</strong> people, visitors, employees,
-             events, sessions and face/body embeddings from the database. Cameras are kept.
-             This cannot be undone.</p>
-          <button class="btn" id="btn-wipe" style="background:#d64533;color:#fff" onclick="wipeDatabase()">
-            Delete entire database
-          </button>
         </div>
       </section>
 
@@ -305,7 +300,7 @@
 <div class="modal-backdrop" id="plog-modal" onclick="closePersonLogIfBackdrop(event)">
   <div class="modal modal-plog">
     <div class="modal-head plog-head">
-      <div class="avatar plog-avatar-clickable" id="plog-avatar" onclick="openPhotoPopup()" title="View photo">--</div>
+      <div class="avatar plog-avatar-clickable" id="plog-avatar" onclick="openPersonPhoto()" title="View photo">--</div>
       <div class="plog-who">
         <div class="name" id="plog-name">—</div>
         <div class="id" id="plog-id">—</div>
@@ -367,22 +362,22 @@
   </div>
 </div>
 
-<!-- ===================== Photo popup (person's photo, from Report) ===================== -->
-<div class="photo-backdrop" id="photo-popup" onclick="closePhotoPopupIfBackdrop(event)">
-  <div class="photo-popup-card">
-    <button class="sidebar-close photo-popup-close" onclick="closePhotoPopup()"><i class="ti ti-x"></i></button>
-    <div class="photo-popup-imgs">
-      <figure class="photo-popup-fig" id="photo-popup-face-fig">
-        <img class="photo-popup-img" id="photo-popup-face-img" alt="face">
+<!-- ===================== Person photo popup ===================== -->
+<div class="modal-backdrop" id="photo-modal" onclick="closePersonPhotoIfBackdrop(event)">
+  <div class="photo-pop">
+    <button class="sidebar-close" onclick="closePersonPhoto()"><i class="ti ti-x"></i></button>
+    <div class="photo-imgs">
+      <figure class="photo-fig" id="photo-face-fig">
+        <img class="photo-img" id="photo-face-img" alt="face">
         <figcaption>Face</figcaption>
       </figure>
-      <figure class="photo-popup-fig" id="photo-popup-body-fig">
-        <img class="photo-popup-img" id="photo-popup-body-img" alt="full body">
+      <figure class="photo-fig" id="photo-body-fig">
+        <img class="photo-img" id="photo-body-img" alt="full body">
         <figcaption>Full body</figcaption>
       </figure>
     </div>
-    <div class="photo-popup-name" id="photo-popup-name">—</div>
-    <div class="photo-popup-id" id="photo-popup-id">—</div>
+    <div class="photo-name" id="photo-name">—</div>
+    <div class="photo-sub" id="photo-sub">—</div>
   </div>
 </div>
 
@@ -401,8 +396,56 @@
     <div class="modal-actions">
       <button class="btn btn-danger" onclick="deleteOperator()"><i class="ti ti-trash"></i> Delete user</button>
       <span style="flex:1"></span>
-      <button class="btn" onclick="closeOpEdit()">Cancel</button>
-      <button class="btn btn-primary" onclick="saveOperator()">Save changes</button>
+      <button class="btn" onclick="closeOpEdit()"><i class="ti ti-x"></i> Cancel</button>
+      <button class="btn btn-primary" onclick="saveOperator()"><i class="ti ti-device-floppy"></i> Save changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== Track: people currently inside ===================== -->
+<div class="modal-backdrop" id="track-modal" onclick="closeTrackIfBackdrop(event)">
+  <div class="modal modal-track">
+    <div class="modal-head track-head">
+      <h3><i class="ti ti-route"></i> Track — currently inside</h3>
+      <span class="track-count" id="track-count">0</span>
+      <button class="sidebar-close" onclick="closeTrack()"><i class="ti ti-x"></i></button>
+    </div>
+    <p class="desc">Personnel who entered today and haven't exited through a gate. Click a name to auto-track their path across the cameras.</p>
+    <div class="track-search">
+      <i class="ti ti-search"></i>
+      <input type="text" id="track-search-input" placeholder="Search name or ID…" oninput="renderTrackInside()">
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Photo</th><th>Name / ID</th><th>Category</th><th>Entry</th><th>Last seen</th><th style="text-align:right">Track</th></tr>
+        </thead>
+        <tbody id="track-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== Auto-track simulation ===================== -->
+<div class="modal-backdrop" id="autotrack-modal" onclick="closeAutoTrackIfBackdrop(event)">
+  <div class="modal modal-autotrack">
+    <div class="modal-head autotrack-head">
+      <button class="btn at-back" onclick="backToTrackList()"><i class="ti ti-arrow-left"></i></button>
+      <div class="avatar" id="at-avatar">--</div>
+      <div class="plog-who">
+        <div class="name" id="at-name">—</div>
+        <div class="id" id="at-id">—</div>
+      </div>
+      <span class="at-status acquiring" id="at-status"><span class="at-status-dot"></span><span id="at-status-text">ACQUIRING…</span></span>
+      <button class="sidebar-close" onclick="closeAutoTrack()"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="autotrack-body">
+      <div class="feed-frame at-feed" id="at-feed" onclick="toggleFeedFullscreen(this)"></div>
+      <div class="at-side">
+        <div class="sidebar-section-title">Live trail</div>
+        <ul class="trail at-trail" id="at-trail"></ul>
+        <div class="at-progress" id="at-progress"></div>
+      </div>
     </div>
   </div>
 </div>

@@ -48,7 +48,7 @@ function onLiveEvent(evt) {
   liveRefreshQueued = true;
   requestAnimationFrame(() => {
     liveRefreshQueued = false;
-    renderGrid();
+    updateGridBadges();   // NOT renderGrid — never recreate the feed <img> (flicker)
     if (currentView === 'log') renderLog();
     if (currentView === 'report') renderReport();
     if (currentView === 'records') renderRecords();
@@ -56,14 +56,12 @@ function onLiveEvent(evt) {
 }
 
 /* Live camera feed as a POLLED STILL (not an infinite MJPEG stream).
-   Why: an MJPEG <img src="/stream/..."> holds ONE HTTP connection open forever.
-   With 7 cameras that's 7 permanent connections, but browsers allow only ~6 per
-   origin — so every other request to :8080 (the page's own HTML/CSS/JS on reload,
-   and the person photos) is queued behind connections that never free, and the
-   page "reloads forever". Polling a single JPEG uses short, reused connections
-   that always release, so the pool never starves. The pipeline already writes an
-   annotated frame per camera to shared memory at PREVIEW_FPS; /snapshot/<id>
-   serves the latest one. pollFeeds() refreshes only the VISIBLE feeds. */
+   An MJPEG <img src="/stream/..."> holds one HTTP connection open forever; with
+   many cameras that exhausts the browser's ~6-per-origin limit and the page
+   (on reload) or its photos can never fetch — the tab "reloads forever". We poll
+   a single JPEG per tile instead: short, reused connections that always release.
+   The pipeline writes an annotated frame per camera to shared memory; server.py
+   serves the latest at /snapshot/<id>. pollFeeds() refreshes only VISIBLE feeds. */
 function feedImg(camId, cls) {
   if (!SERVED) return '';
   return `<img class="${cls}" alt="" data-cam="${camId}" data-feed>`;
@@ -71,28 +69,42 @@ function feedImg(camId, cls) {
 
 function pollFeeds() {
   document.querySelectorAll('img[data-feed]').forEach(img => {
-    // offsetParent === null → the element (or an ancestor view) is hidden; don't
-    // poll feeds the operator isn't looking at.
-    if (!img.isConnected || img.offsetParent === null) return;
-    if (img.dataset.loading === '1') return;   // a fetch is still in flight — don't pile up
+    if (!img.isConnected || img.offsetParent === null) return;  // hidden view — skip
+    if (img.dataset.loading === '1') return;                    // fetch in flight — don't pile up
     img.dataset.loading = '1';
     fetch(`/snapshot/${encodeURIComponent(img.dataset.cam)}?t=${Date.now()}`, { cache: 'no-store' })
       .then(r => r.ok ? r.blob() : Promise.reject(new Error(r.status)))
       .then(blob => {
-        // Swap to a decoded local blob so there's no network gap between frames,
-        // and only AFTER it loads — a failed poll keeps the last good frame
-        // (no blank flash). Revoke the previous blob to avoid a memory leak.
+        // Swap to a decoded local blob only AFTER it loads, so a failed poll
+        // keeps the last good frame (no blank flash). Revoke the previous blob.
         const url = URL.createObjectURL(blob);
         const prev = img.dataset.blob;
         img.onload = () => { if (prev) URL.revokeObjectURL(prev); };
         img.src = url;
         img.dataset.blob = url;
       })
-      .catch(() => { /* keep the last good frame */ })
+      .catch(() => { /* keep last good frame */ })
       .finally(() => { img.dataset.loading = '0'; });
   });
 }
 setInterval(pollFeeds, 350);
+
+/* ---------- Person photo helpers ----------
+   The Brain gives each person a snapshot crop (api.js sets p.photo). Paint it as
+   the avatar background with the initials text as the fallback shown until (or if)
+   the image loads. Returns '' when there's no photo. */
+function photoCss(p) {
+  return (p && p.photo)
+    ? `background-image:url('${p.photo}');background-size:cover;background-position:center;`
+    : '';
+}
+function setAvatar(el, p) {
+  if (!el) return;
+  el.textContent = (p && p.initials) || '?';
+  el.style.backgroundImage = (p && p.photo) ? `url('${p.photo}')` : '';
+  el.style.backgroundSize = 'cover';
+  el.style.backgroundPosition = 'center';
+}
 
 /* ---------- Auth ---------- */
 /* The single valid operator. Real deployments should verify against the Brain,
@@ -138,24 +150,6 @@ function initialsFromUsername(u) {
   return (part[0] || 'U').toUpperCase() + (u.split('.')[1] ? u.split('.')[1][0].toUpperCase() : '');
 }
 
-/* ---------- Person photo (snapshot / camera still) ----------
-   CSS declarations that paint a person's photo as an avatar background. The
-   initials stay in the element as the fallback shown if the image fails to load
-   (an opaque snapshot covers them when it does). Returns '' when no photo. */
-function photoCss(p) {
-  return (p && p.photo)
-    ? `background-image:url('${p.photo}');background-size:cover;background-position:center;`
-    : '';
-}
-/* Same, for an existing avatar element set imperatively (sidebar, modals). */
-function setAvatar(el, p) {
-  if (!el) return;
-  el.textContent = (p && p.initials) || '?';
-  el.style.backgroundImage = (p && p.photo) ? `url('${p.photo}')` : '';
-  el.style.backgroundSize = 'cover';
-  el.style.backgroundPosition = 'center';
-}
-
 /* ---------- Clock ---------- */
 function tickClock() {
   const el = document.getElementById('clock');
@@ -191,6 +185,10 @@ function showView(name) {
   const topSearch = document.querySelector('.topbar-search');
   if (topSearch) topSearch.style.visibility = (name === 'log') ? 'hidden' : 'visible';
 
+  // TRACK belongs to the live grid only — hide it everywhere else.
+  const topTrack = document.querySelector('.topbar-TRACK');
+  if (topTrack) topTrack.style.display = (name === 'grid') ? '' : 'none';
+
   // Reset each view's own filter as we arrive, so search starts clean.
   if (name === 'grid') filterGrid('');
   if (name === 'log') renderLog();
@@ -208,13 +206,11 @@ function onSearch(val) {
 /* ---------- Live grid ---------- */
 function renderGrid() {
   const grid = document.getElementById('camera-grid');
-  // Build the tile DOM ONLY when the camera set changes. Live events fire many
-  // times a second; rebuilding innerHTML each time would destroy and recreate
-  // every feed <img>, which (with polled stills) blanks the tile until the next
-  // poll → constant flicker. So we build once and only refresh the badges below.
-  // SERVED is in the signature so the grid rebuilds once the backend is
-  // confirmed (feedImg only emits an <img> when SERVED) — otherwise a build that
-  // happened before SERVED flipped would leave imgless tiles forever.
+  // Build tile DOM only when the camera set changes. Live events fire many times
+  // a second; rebuilding innerHTML each time would destroy/recreate the polled
+  // feed <img> → blank until the next poll → constant flicker. Build once, then
+  // only refresh the badges. (No HTML detbox overlay: Part 1 draws the REAL boxes
+  // on the video frame the feed already shows.)
   const sig = (SERVED ? 's:' : 'n:') + LIVE_CAMERAS.map(c => c.id).join(',');
   if (grid.dataset.sig !== sig) {
     grid.innerHTML = LIVE_CAMERAS.map(cam => `
@@ -237,8 +233,8 @@ function renderGrid() {
   updateGridBadges();
 }
 
-/* Refresh only the dynamic per-tile text (detection count, time, offline state)
-   WITHOUT touching the feed <img> — safe to call on every live event. */
+/* Refresh only the dynamic per-tile text WITHOUT touching the feed <img> — safe
+   to call on every live event. */
 function updateGridBadges() {
   const ic = document.getElementById('inside-count');
   if (ic) ic.textContent = countInside();
@@ -248,22 +244,12 @@ function updateGridBadges() {
     const wrap = document.querySelector(`#camera-grid .tile-wrap[data-cam="${cam.id}"]`);
     if (!wrap) return;
     const offline = cam.status === 'offline';
-    const n = liveDetCount(cam.id);
+    const n = (DETECTIONS[cam.id] || []).length;
     wrap.querySelector('.tile-status').classList.toggle('off', offline);
     wrap.querySelector('.tile').classList.toggle('offline', offline);
     wrap.querySelector('.tile-count').textContent = n ? n + ' detected' : 'No activity';
     wrap.querySelector('.tile-time').textContent = offline ? 'signal lost' : nowTime();
   });
-}
-
-/* Recent live-activity count for a camera — entries fold in over WS /live and
-   expire after a short window, so the badge reflects current activity rather
-   than an ever-growing total. No pixel boxes (those are drawn on the video). */
-function liveDetCount(camId) {
-  const now = Date.now();
-  const arr = (DETECTIONS[camId] || []).filter(d => now - (d.t || 0) < 8000);
-  DETECTIONS[camId] = arr;
-  return arr.length;
 }
 
 function filterGrid(q) {
@@ -299,8 +285,7 @@ function openCamera(camId) {
   document.getElementById('camera-title').textContent = cam.name;
   document.getElementById('camera-sub').textContent = cam.location;
 
-  // Boxes + labels are drawn on the video itself by Part 1 (real detector),
-  // so no HTML overlay here.
+  const dets = DETECTIONS[camId] || [];
   const frame = document.getElementById('feed-frame');
   frame.innerHTML = `
     ${feedImg(camId, 'feed-video')}
@@ -308,16 +293,149 @@ function openCamera(camId) {
     <span class="bracket bl"></span><span class="bracket br"></span>
     <span class="feed-label">${cam.name}</span>
     <span class="feed-time">${nowTime()}</span>
+    ${xrayHTML(dets)}
+    <button class="feed-fs" title="Toggle fullscreen"
+            onclick="event.stopPropagation(); toggleFeedFullscreen(document.getElementById('feed-frame'))">
+      <i class="ti ti-maximize"></i>
+    </button>
   `;
 
   showViewRaw('camera');
 }
+
+/* ---------- X-Ray: top-right panel of everyone detected on the feed ----------
+   A top-right "X-Ray" box drops down a list of detected people, each expandable to
+   full details. It lives inside the feed element so it also renders in fullscreen,
+   where the normal person sidebar can't appear (native fullscreen paints only the
+   feed + its descendants). Available in both the normal camera view and fullscreen. */
+function xrayHTML(dets) {
+  return `
+    <button class="xray-btn" title="X-Ray — detected people"
+            onclick="event.stopPropagation(); toggleXray()">
+      <i class="ti ti-scan-eye"></i> X-Ray<span class="xray-count">${dets.length}</span>
+    </button>
+    <div class="xray-panel" id="xray-panel" onclick="event.stopPropagation()">
+      <div class="xray-panel-head">Detected on feed <span>${dets.length}</span></div>
+      <div class="xray-list">
+        ${dets.length
+          ? dets.map(d => xrayItemHTML(d.personId)).join('')
+          : `<div class="xray-empty"><i class="ti ti-mood-empty"></i> No one detected on this feed.</div>`}
+      </div>
+    </div>`;
+}
+
+function xrayItemHTML(personId) {
+  const p = PEOPLE[personId];
+  const entries = todayEntries(p);
+  const rows = [];
+  rows.push(['Category', p.category]);
+  if (p.employeeId) rows.push(['Employee ID', p.employeeId]);
+  if (p.department) rows.push(['Department', p.department]);
+  if (p.gender)     rows.push(['Gender', p.gender]);
+  if (p.age)        rows.push(['Age', String(p.age)]);
+  if (p.height)     rows.push(['Height', p.height]);
+  if (p.features)   rows.push(['Features', p.features]);
+  if (entries[0])   rows.push(['Entry time', to12h(entries[0].time)]);
+  const last = entries[entries.length - 1];
+  if (last)         rows.push(['Last seen', `${last.location} · ${to12h(last.time)}`]);
+
+  return `
+    <div class="xray-item" data-pid="${p.userId}">
+      <button class="xray-item-head" onclick="event.stopPropagation(); toggleXrayItem(this)">
+        <span class="avatar" style="${photoCss(p)}">${p.initials}</span>
+        <span class="xray-item-who">
+          <span class="xray-item-name">${personName(p)}</span>
+          <span class="xray-item-id">${p.userId}</span>
+        </span>
+        <span class="badge badge-${p.category}">${p.category}</span>
+        <i class="ti ti-chevron-down xray-caret"></i>
+      </button>
+      <div class="xray-item-body">
+        ${rows.map(([k, v]) => `<div class="kv"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('')}
+        <button class="btn btn-block xray-log-btn"
+                onclick="event.stopPropagation(); openXrayPersonLog('${p.userId}')">
+          <i class="ti ti-route"></i> Full movement log
+        </button>
+      </div>
+    </div>`;
+}
+
+/* Detection-box click: in fullscreen open the X-Ray panel on that person
+   (the sidebar can't render over the fullscreen feed); otherwise open the sidebar. */
+function onDetboxClick(e, personId) {
+  e.stopPropagation();
+  if (isFeedFullscreen()) openXrayForPerson(personId);
+  else openPerson(personId);
+}
+
+function isFeedFullscreen() {
+  return !!(document.fullscreenElement || document.webkitFullscreenElement);
+}
+
+function toggleXray() {
+  const panel = document.getElementById('xray-panel');
+  if (!panel) return;
+  const open = panel.classList.toggle('open');
+  document.querySelector('.xray-btn')?.classList.toggle('active', open);
+}
+
+function toggleXrayItem(btn) {
+  btn.closest('.xray-item')?.classList.toggle('open');
+}
+
+function openXrayForPerson(personId) {
+  const panel = document.getElementById('xray-panel');
+  if (!panel) return;
+  panel.classList.add('open');
+  document.querySelector('.xray-btn')?.classList.add('active');
+  const item = panel.querySelector(`.xray-item[data-pid="${personId}"]`);
+  if (item) { item.classList.add('open'); item.scrollIntoView({ block: 'nearest' }); }
+}
+
+/* Full log lives in a modal outside the feed, so leave fullscreen first. */
+function openXrayPersonLog(personId) {
+  if (isFeedFullscreen()) {
+    (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+    setTimeout(() => openPersonLog(personId), 140);
+  } else {
+    openPersonLog(personId);
+  }
+}
+
+/* Toggle a camera feed to/from fullscreen (native Fullscreen API). */
+function toggleFeedFullscreen(el) {
+  if (!el) return;
+  const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+  if (fsEl) {
+    (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+  } else {
+    (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el);
+  }
+}
+
+/* Keep every feed's maximize/minimize icon in sync with the fullscreen state,
+   and close the X-Ray panel whenever we drop out of fullscreen. */
+function onFeedFullscreenChange() {
+  const on = !!(document.fullscreenElement || document.webkitFullscreenElement);
+  document.querySelectorAll('.feed-fs i').forEach(i => {
+    i.className = on ? 'ti ti-minimize' : 'ti ti-maximize';
+  });
+  if (!on) {
+    document.getElementById('xray-panel')?.classList.remove('open');
+    document.querySelectorAll('.xray-btn').forEach(b => b.classList.remove('active'));
+  }
+}
+document.addEventListener('fullscreenchange', onFeedFullscreenChange);
+document.addEventListener('webkitfullscreenchange', onFeedFullscreenChange);
 
 /* like showView but without the search reset (camera has no search context) */
 function showViewRaw(name) {
   document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
   document.getElementById('view-' + name).classList.remove('hidden');
   currentView = name;
+  // TRACK belongs to the live grid only — the camera view isn't the grid.
+  const topTrack = document.querySelector('.topbar-TRACK');
+  if (topTrack) topTrack.style.display = (name === 'grid') ? '' : 'none';
 }
 
 /* ---------- Person sidebar (from a camera detection) ---------- */
@@ -405,41 +523,6 @@ function openPersonLog(userId) {
   clearPersonLogFilters();   // resets time/location and renders the table
   renderPlogSide();          // details column: chart, hours, day grid
   document.getElementById('plog-modal').classList.add('open');
-}
-
-/* Photo popup — enlarged FULL-BODY crop + FACE crop (when one was captured).
-   The face image lives next to the body crop as <stem>_face.jpg (written by
-   Part 1 only when a face was found), so we derive its URL and hide the figure
-   if it 404s (distant / back-turned sightings have no face). */
-function openPhotoPopup() {
-  const p = PEOPLE[plogPersonId];
-  if (!p) return;
-  const bodyUrl = p.photo || '';
-  const bodyFig = document.getElementById('photo-popup-body-fig');
-  const bodyImg = document.getElementById('photo-popup-body-img');
-  if (bodyUrl) { bodyImg.src = bodyUrl; bodyFig.style.display = ''; }
-  else { bodyFig.style.display = 'none'; }
-
-  const faceFig = document.getElementById('photo-popup-face-fig');
-  const faceImg = document.getElementById('photo-popup-face-img');
-  const faceUrl = bodyUrl ? bodyUrl.replace(/\.jpg(\?.*)?$/i, '_face.jpg') : '';
-  faceFig.style.display = 'none';
-  if (faceUrl) {
-    faceImg.onload = () => { faceFig.style.display = ''; };
-    faceImg.onerror = () => { faceFig.style.display = 'none'; };
-    faceImg.src = faceUrl;
-  }
-
-  document.getElementById('photo-popup-name').textContent = personName(p);
-  document.getElementById('photo-popup-id').textContent =
-    p.employeeId ? `${p.userId} · ${p.employeeId}` : p.userId;
-  document.getElementById('photo-popup').classList.add('open');
-}
-function closePhotoPopup() {
-  document.getElementById('photo-popup').classList.remove('open');
-}
-function closePhotoPopupIfBackdrop(e) {
-  if (e.target.id === 'photo-popup') closePhotoPopup();
 }
 
 function onPlogMonthYear() {
@@ -575,6 +658,234 @@ function clearPersonLogFilters() {
 function closePersonLog() { document.getElementById('plog-modal').classList.remove('open'); }
 function closePersonLogIfBackdrop(e) { if (e.target.id === 'plog-modal') closePersonLog(); }
 
+/* Enlarged photo popup — opened from the avatar in the person-details modal. */
+function openPersonPhoto() {
+  const p = PEOPLE[plogPersonId];
+  if (!p) return;
+  // Full-body crop is p.photo; the face crop lives next to it as <stem>_face.jpg
+  // (Part 1 saves it only when a face was found), so derive its URL and hide the
+  // face figure if it 404s (distant / back-turned sightings have no face).
+  const bodyUrl = p.photo || '';
+  const bodyFig = document.getElementById('photo-body-fig');
+  const bodyImg = document.getElementById('photo-body-img');
+  if (bodyUrl) { bodyImg.src = bodyUrl; bodyFig.style.display = ''; }
+  else { bodyFig.style.display = 'none'; }
+
+  const faceFig = document.getElementById('photo-face-fig');
+  const faceImg = document.getElementById('photo-face-img');
+  const faceUrl = bodyUrl ? bodyUrl.replace(/\.jpg(\?.*)?$/i, '_face.jpg') : '';
+  faceFig.style.display = 'none';
+  if (faceUrl) {
+    faceImg.onload = () => { faceFig.style.display = ''; };
+    faceImg.onerror = () => { faceFig.style.display = 'none'; };
+    faceImg.src = faceUrl;
+  }
+
+  document.getElementById('photo-name').textContent = personName(p);
+  document.getElementById('photo-sub').textContent =
+    p.employeeId ? `${p.userId} · ${p.employeeId}` : p.userId;
+  document.getElementById('photo-modal').classList.add('open');
+}
+function closePersonPhoto() { document.getElementById('photo-modal').classList.remove('open'); }
+function closePersonPhotoIfBackdrop(e) { if (e.target.id === 'photo-modal') closePersonPhoto(); }
+
+/* ---------- Track: people currently inside + auto-track simulation ---------- */
+
+/* TRACK button (topbar): list everyone currently inside, newest sighting first. */
+function openTrackInside() {
+  const search = document.getElementById('track-search-input');
+  if (search) search.value = '';                 // start each open with a clean search
+  renderTrackInside();
+  document.getElementById('track-modal').classList.add('open');
+  if (search) search.focus();
+}
+
+/* Does this person's name / user id / employee id contain the query? */
+function personMatchesQuery(p, q) {
+  return (personName(p) + ' ' + p.userId + ' ' + (p.employeeId || '')).toLowerCase().includes(q);
+}
+
+function renderTrackInside() {
+  const inside = peopleInside();
+  document.getElementById('track-count').textContent = inside.length;
+
+  const raw = (document.getElementById('track-search-input')?.value || '').trim();
+  const q = raw.toLowerCase();
+  const matches = q ? inside.filter(({ p }) => personMatchesQuery(p, q)) : inside;
+
+  const body = document.getElementById('track-body');
+
+  if (!matches.length) {
+    let msg;
+    if (!q) {
+      msg = 'No one is currently inside the premises.';
+    } else {
+      // Distinguish "known person who has already left" from "no such person",
+      // so the operator knows whether the search term was even valid.
+      const known = Object.values(PEOPLE).find(p => personMatchesQuery(p, q));
+      msg = known
+        ? `${personName(known)} is not currently inside the premises.`
+        : `User not found — no one matches “${raw}”.`;
+    }
+    body.innerHTML = `<tr class="track-empty"><td colspan="6">
+        <div class="track-empty-msg"><i class="ti ti-user-off"></i> ${msg}</div>
+      </td></tr>`;
+    return;
+  }
+
+  body.innerHTML = matches.map(({ p, entry, last }) => `
+    <tr onclick="startAutoTrack('${p.userId}')" title="Auto-track ${personName(p)}">
+      <td><div class="avatar log-photo" style="width:44px;height:44px;font-size:14px;${photoCss(p)}">${p.initials}</div></td>
+      <td>
+        <div class="track-name">${personName(p)}</div>
+        <div class="track-uid mono">${p.userId}${p.employeeId ? ' · ' + p.employeeId : ''}</div>
+      </td>
+      <td><span class="badge badge-${p.category}">${p.category}</span></td>
+      <td class="mono">${to12h(entry.time)}</td>
+      <td>${last.location} <span class="mono track-lasttime">${to12h(last.time)}</span></td>
+      <td style="text-align:right">
+        <button class="btn btn-primary track-go" onclick="event.stopPropagation(); startAutoTrack('${p.userId}')"><i class="ti ti-route"></i> Track</button>
+      </td>
+    </tr>`).join('');
+}
+
+function closeTrack() { document.getElementById('track-modal').classList.remove('open'); }
+function closeTrackIfBackdrop(e) { if (e.target.id === 'track-modal') closeTrack(); }
+
+/* --- Auto-track simulation: "follow" a person camera-to-camera along today's trail --- */
+let atUserId = null;
+let atTimers = [];
+
+function clearAtTimers() { atTimers.forEach(t => clearTimeout(t)); atTimers = []; }
+
+function atSetStatus(state, text) {
+  const el = document.getElementById('at-status');
+  el.className = 'at-status ' + state;                 // acquiring | tracking | located | exited
+  document.getElementById('at-status-text').textContent = text;
+}
+
+/* Camera id backing a location name (so served MJPEG feeds can be shown). */
+function camIdForLocation(loc) {
+  const cam = LIVE_CAMERAS.find(c => c.name === loc);
+  return cam ? cam.id : null;
+}
+
+/* Paint the feed frame for one waypoint. When opts.scanning is set we show the
+   camera live (of wherever the target was last seen) with a full-feed scan sweep
+   but no lock-on box yet — the "acquiring" state. Otherwise we lock on. */
+function atRenderFeed(wp, p, opts = {}) {
+  const scanning = !!opts.scanning;
+  const frame = document.getElementById('at-feed');
+  const camId = wp ? camIdForLocation(wp.location) : null;
+  const label = wp
+    ? (scanning ? `SCANNING · ${wp.location}` : wp.location)
+    : 'SCANNING CAMERA NETWORK…';
+  const time  = wp ? to12h(wp.time) : '';
+  const camTag = camId ? camId.toUpperCase().replace(/^CAM-/, 'CAM ').replace(/-/g, ' ') : 'NO SIGNAL';
+
+  // Randomised box placement per camera so each acquisition reads as a fresh lock-on.
+  const top  = (16 + Math.random() * 30).toFixed(1);
+  const left = (18 + Math.random() * 46).toFixed(1);
+  const tagName = p.category === 'Employee' ? p.name : p.category;
+
+  frame.innerHTML = `
+    ${(SERVED && camId) ? feedImg(camId, 'feed-video') : ''}
+    <span class="bracket tl"></span><span class="bracket tr"></span>
+    <span class="bracket bl"></span><span class="bracket br"></span>
+    <div class="at-scanline"></div>
+    ${(wp && !scanning)
+      ? `<div class="detbox-live at-detbox category-${p.category}" style="top:${top}%;left:${left}%;width:14%;height:38%">
+           <span class="tag">${tagName} · TRACKING</span>
+           <span class="at-crosshair"></span>
+         </div>`
+      : `<div class="at-searching"><i class="ti ti-viewfinder"></i> ${wp ? 'scanning last-seen camera…' : 'locating target…'}</div>`}
+    <span class="feed-label">${label}</span>
+    <span class="feed-time">${time}</span>
+    <span class="at-camid">${camTag}</span>
+    <button class="feed-fs" title="Toggle fullscreen"
+            onclick="event.stopPropagation(); toggleFeedFullscreen(document.getElementById('at-feed'))">
+      <i class="ti ti-maximize"></i>
+    </button>`;
+}
+
+function atAddTrail(wp, isLast) {
+  const li = document.createElement('li');
+  li.className = 'at-trail-item' + (isLast ? ' current' : '');
+  li.innerHTML = `<span class="t">${to12h(wp.time)}</span><span>${wp.location}</span>` +
+    (isLast ? `<i class="ti ti-current-location at-here"></i>` : '');
+  document.getElementById('at-trail').appendChild(li);
+}
+
+function atUpdateProgress(done, total) {
+  document.getElementById('at-progress').innerHTML =
+    `<div class="at-progress-label">Waypoint ${done} / ${total}</div>
+     <div class="at-progress-bar"><span style="width:${(done / total * 100).toFixed(0)}%"></span></div>`;
+}
+
+function startAutoTrack(userId) {
+  atUserId = userId;
+  const p = PEOPLE[userId];
+  const found = peopleInside().find(x => x.p.userId === userId);
+  const trail = found ? found.trail : p.history.filter(h => h.date === TODAY).sort((a, b) => a.time.localeCompare(b.time));
+
+  document.getElementById('at-avatar').textContent = p.initials;
+  document.getElementById('at-name').textContent = personName(p);
+  document.getElementById('at-id').textContent = p.employeeId ? `${p.userId} · ${p.employeeId}` : p.userId;
+
+  document.getElementById('track-modal').classList.remove('open');
+  document.getElementById('autotrack-modal').classList.add('open');
+
+  runAutoTrack(p, trail);
+}
+
+function runAutoTrack(p, trail) {
+  clearAtTimers();
+  document.getElementById('at-trail').innerHTML = '';
+  document.getElementById('at-progress').innerHTML = '';
+
+  // No sightings today — there's no location to receive, so keep scanning the
+  // network until we give up.
+  if (!trail.length) {
+    atSetStatus('acquiring', 'ACQUIRING TARGET…');
+    atRenderFeed(null, p, { scanning: true });
+    atTimers.push(setTimeout(() => atSetStatus('exited', 'NO SIGHTINGS TODAY'), 1100));
+    return;
+  }
+
+  // The target's location is already known, so there's nothing to scan for —
+  // stop the scanning UI immediately and lock on, then step camera to camera
+  // along today's path.
+  const step = (wp, i) => {
+    const isLast = i === trail.length - 1;
+    atRenderFeed(wp, p);
+    atAddTrail(wp, isLast);
+    atUpdateProgress(i + 1, trail.length);
+    if (isLast) atSetStatus('located', `TARGET LOCATED · ${wp.location}`);
+    else        atSetStatus('tracking', `TRACKING · ${wp.location}`);
+  };
+
+  step(trail[0], 0);                         // location received → lock on at once
+  let delay = 1500;
+  for (let i = 1; i < trail.length; i++) {
+    const wp = trail[i];
+    atTimers.push(setTimeout(() => step(wp, i), delay));
+    delay += 1500;
+  }
+}
+
+/* Back to the currently-inside list (stops the running simulation). */
+function backToTrackList() {
+  clearAtTimers();
+  document.getElementById('autotrack-modal').classList.remove('open');
+  openTrackInside();
+}
+
+function closeAutoTrack() {
+  clearAtTimers();
+  document.getElementById('autotrack-modal').classList.remove('open');
+}
+function closeAutoTrackIfBackdrop(e) { if (e.target.id === 'autotrack-modal') closeAutoTrack(); }
+
 /* ---------- Log page (calendar + day datasheet) ---------- */
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const WEEKDAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -691,7 +1002,7 @@ function renderLogSheet() {
     const p = PEOPLE[e.personId];
     return `
       <tr onclick="openPersonLog('${p.userId}')">
-        <td><div class="avatar log-photo" style="${photoCss(p)}">${p.initials}</div></td>
+        <td><div class="avatar log-photo" style="width:52px;height:52px;font-size:16px;${photoCss(p)}">${p.initials}</div></td>
         <td>${personName(p)}</td>
         <td><span class="badge badge-${p.category}">${p.category}</span></td>
         <td class="mono">${to12h(e.time)}</td>
@@ -845,7 +1156,7 @@ function renderUnclassified() {
             <select id="conv-${p.userId}">
               ${targets.map(t => `<option value="${t}">${t}</option>`).join('')}
             </select>
-            <button class="btn btn-primary" onclick="convertPerson('${p.userId}')">Convert</button>` : '';
+            <button class="btn btn-primary" onclick="convertPerson('${p.userId}')"><i class="ti ti-transform"></i> Convert</button>` : '';
     return `
       <tr>
         <td><div class="avatar" style="width:28px;height:28px;font-size:11px;${photoCss(p)}">${p.initials}</div></td>
@@ -921,24 +1232,27 @@ function addDepartment() {
   renderDepartments();
   renderRecords(); // refresh department dropdown
 }
-
-/* Danger zone: wipe the entire Brain database (people/events/embeddings). */
-async function wipeDatabase() {
-  if (!confirm('Delete the ENTIRE database — all people, visitors, employees, '
-             + 'events, sessions and embeddings? Cameras are kept. This cannot be undone.')) return;
-  const btn = document.getElementById('btn-wipe');
-  if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
-  try {
-    await Brain.resetDatabase({ user: AUTH.username, pass: AUTH.password });
-    alert('Database wiped. Cameras kept.');
-    location.reload();   // reconnect to the now-empty Brain for a clean slate
-  } catch (e) {
-    alert('Wipe failed: ' + e.message + '\n(Is the Brain reachable and admin auth correct?)');
-    if (btn) { btn.disabled = false; btn.textContent = 'Delete entire database'; }
-  }
-}
 function removeDepartment(i) {
   DEPARTMENTS.splice(i, 1);
   renderDepartments();
   renderRecords();
 }
+
+/* ---------- Interactive background: brighten grid under the cursor ---------- */
+(function initBgFx() {
+  const root = document.documentElement;
+  let x = -999, y = -999, queued = false;
+  function apply() {
+    queued = false;
+    root.style.setProperty('--mx', x + 'px');
+    root.style.setProperty('--my', y + 'px');
+  }
+  window.addEventListener('pointermove', e => {
+    x = e.clientX; y = e.clientY;
+    if (!queued) { queued = true; requestAnimationFrame(apply); }
+  }, { passive: true });
+  // hide the spotlight when the pointer leaves the window
+  window.addEventListener('pointerout', e => {
+    if (!e.relatedTarget) { x = -999; y = -999; apply(); }
+  });
+})();

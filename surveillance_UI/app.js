@@ -652,7 +652,8 @@ function renderPersonLog() {
       <td class="mono">${to12h(h.time)}</td>
       <td>${h.location}</td>
       <td>
-        <div class="plog-cap" title="Captured at ${h.location}">
+        <div class="plog-cap" title="Click to enlarge · ${h.location}" style="cursor:pointer"
+             onclick="openPersonPhoto('${h.snapshot || ''}')">
           <div class="avatar" style="width:30px;height:30px;font-size:11px;${h.snapshot ? photoCssUrl(h.snapshot) : photoCss(p)}">${p.initials}</div>
           <i class="ti ti-camera"></i>
         </div>
@@ -671,27 +672,45 @@ function closePersonLog() { document.getElementById('plog-modal').classList.remo
 function closePersonLogIfBackdrop(e) { if (e.target.id === 'plog-modal') closePersonLog(); }
 
 /* Enlarged photo popup — opened from the avatar in the person-details modal. */
-function openPersonPhoto() {
+/* Try each body-crop URL's sibling <stem>_face.jpg in turn; show the FIRST that
+   loads. A confirmed Visitor has a face on file, but it was captured on some
+   sighting — not necessarily the newest one shown — so we scan the person's
+   whole history instead of guessing from one photo. */
+function showFirstFace(imgEl, figEl, bodyUrls) {
+  const faces = [...new Set(bodyUrls.filter(Boolean)
+    .map(u => u.replace(/\.jpg(\?.*)?$/i, '_face.jpg')))];
+  figEl.style.display = 'none';
+  let i = 0;
+  const tryNext = () => {
+    if (i >= faces.length) return;             // no face crop anywhere → stays hidden
+    const u = faces[i++];
+    const probe = new Image();
+    probe.onload = () => { imgEl.src = u; figEl.style.display = ''; };
+    probe.onerror = tryNext;
+    probe.src = u;
+  };
+  tryNext();
+}
+
+/* Enlarged photo popup. Pass a specific sighting's snapshot to feature that
+   moment's body crop; otherwise the person's representative photo is used. The
+   FACE is found by scanning the person's sightings for a saved face crop. */
+function openPersonPhoto(snapshotOverride) {
   const p = PEOPLE[plogPersonId];
   if (!p) return;
-  // Full-body crop is p.photo; the face crop lives next to it as <stem>_face.jpg
-  // (Part 1 saves it only when a face was found), so derive its URL and hide the
-  // face figure if it 404s (distant / back-turned sightings have no face).
-  const bodyUrl = p.photo || '';
+  const bodyUrl = snapshotOverride || p.photo || '';
   const bodyFig = document.getElementById('photo-body-fig');
   const bodyImg = document.getElementById('photo-body-img');
   if (bodyUrl) { bodyImg.src = bodyUrl; bodyFig.style.display = ''; }
   else { bodyFig.style.display = 'none'; }
 
-  const faceFig = document.getElementById('photo-face-fig');
-  const faceImg = document.getElementById('photo-face-img');
-  const faceUrl = bodyUrl ? bodyUrl.replace(/\.jpg(\?.*)?$/i, '_face.jpg') : '';
-  faceFig.style.display = 'none';
-  if (faceUrl) {
-    faceImg.onload = () => { faceFig.style.display = ''; };
-    faceImg.onerror = () => { faceFig.style.display = 'none'; };
-    faceImg.src = faceUrl;
-  }
+  // Prefer this sighting's face, then any face across the person's history.
+  const bodies = [];
+  if (snapshotOverride) bodies.push(snapshotOverride);
+  bodies.push(...p.history.map(h => h.snapshot).filter(Boolean).slice().reverse());
+  if (p.photo) bodies.push(p.photo);
+  showFirstFace(document.getElementById('photo-face-img'),
+                document.getElementById('photo-face-fig'), bodies);
 
   document.getElementById('photo-name').textContent = personName(p);
   document.getElementById('photo-sub').textContent =

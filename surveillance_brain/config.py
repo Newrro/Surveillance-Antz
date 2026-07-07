@@ -83,8 +83,9 @@ class Settings(BaseSettings):
     # Cosine similarity floor for a BODY ReID match — used only as a
     # fallback when the face embedding is absent or below threshold.
     # OSNet is noisy, so this must be conservative: too low merges different
-    # people into one identity. 0.78 favours splitting over merging.
-    BODY_SIMILARITY_THRESHOLD: float = 0.78
+    # people into one identity across cameras. 0.85 favours splitting over
+    # merging — confidence over coverage (fragments are cleaned nightly).
+    BODY_SIMILARITY_THRESHOLD: float = 0.85
 
     # Progressive learning: when a matched sighting scores BELOW this, store its
     # embedding(s) as an additional view for that identity, so future sightings

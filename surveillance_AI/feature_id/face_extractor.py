@@ -68,19 +68,39 @@ class FaceExtractor:
         return best
 
     def embed(self, person_bgr):
+        """L2-normalized 512-vec, or None when no usable face is found."""
+        emb, _ = self.embed_with_face(person_bgr)
+        return emb
+
+    def embed_with_face(self, person_bgr):
+        """Like embed(), but also returns the aligned 112x112 face crop (BGR) so
+        callers can save a face thumbnail. Returns (embedding_or_None,
+        face_crop_or_None) — both None when no usable face is found."""
         if person_bgr is None or person_bgr.size == 0:
-            return None
-        rgb = cv2.cvtColor(person_bgr, cv2.COLOR_BGR2RGB)   # MTCNN wants RGB
+            return None, None
+        # Upscale small crops so a distant face clears MTCNN's min_face_size.
+        # Detection AND landmark alignment must happen in the SAME coordinate
+        # space, so everything below runs on `img` (the upscaled crop).
+        img = person_bgr
+        h, w = img.shape[:2]
+        short = min(h, w)
+        if short < config.FACE_UPSCALE_TO:
+            scale = min(config.FACE_MAX_UPSCALE, config.FACE_UPSCALE_TO / max(1, short))
+            if scale > 1.01:
+                img = cv2.resize(img, (int(w * scale), int(h * scale)),
+                                 interpolation=cv2.INTER_CUBIC)
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)          # MTCNN wants RGB
         lm = self._largest_face_landmarks(rgb)
         if lm is None:
-            return None
-        aligned = _align_112(person_bgr, lm)                 # AdaFace wants BGR
+            return None, None
+        aligned = _align_112(img, lm)                        # AdaFace wants BGR
         if aligned is None:
-            return None
+            return None, None
         x = ((aligned.astype(np.float32) / 255.0) - 0.5) / 0.5
         t = torch.from_numpy(x.transpose(2, 0, 1)[None]).float().to(self.device)
         with torch.no_grad():
             feat, _ = self.model(t)
         v = feat.cpu().numpy()[0].astype("float32")
         n = np.linalg.norm(v)
-        return v / n if n > 0 else None
+        emb = v / n if n > 0 else None
+        return emb, (aligned if emb is not None else None)

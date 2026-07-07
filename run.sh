@@ -30,9 +30,12 @@ AI_PY="$ROOT/surveillance_AI/venv/bin/python"
 BRAIN_DIR="$ROOT/surveillance_brain"
 BRAIN_PY="$BRAIN_DIR/.venv/bin/uvicorn"
 
-# Pipeline options (override via env). Default: emit to Brain, NO SAM2 (SAM2 is
-# heavy and only marginally helps ReID — add --segment to PIPELINE_ARGS if wanted).
-PIPELINE_ARGS="${PIPELINE_ARGS:---emit}"
+# Pipeline options (override via env). Default: emit to Brain WITH SAM2 segment.
+# --segment blanks the background before OSNet body ReID so the embedding
+# describes the PERSON, not the (shared) camera scene. Without it, everyone on a
+# camera looks alike to ReID and collapses onto one visitor id. It costs ~0.5GB
+# VRAM (watch the 4GB ceiling); drop it with PIPELINE_ARGS="--emit" if you OOM.
+PIPELINE_ARGS="${PIPELINE_ARGS:---emit --segment}"
 CAMERAS="${CAMERAS:-}"          # empty = all cameras in cameras.json
 export DET_MAX_SIDE="${DET_MAX_SIDE:-640}"   # smaller detector input = less lag
 export DETECT_INTERVAL="${DETECT_INTERVAL:-0.2}"

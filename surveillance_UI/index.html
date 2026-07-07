@@ -371,7 +371,16 @@
 <div class="photo-backdrop" id="photo-popup" onclick="closePhotoPopupIfBackdrop(event)">
   <div class="photo-popup-card">
     <button class="sidebar-close photo-popup-close" onclick="closePhotoPopup()"><i class="ti ti-x"></i></button>
-    <div class="avatar photo-popup-avatar" id="photo-popup-avatar">--</div>
+    <div class="photo-popup-imgs">
+      <figure class="photo-popup-fig" id="photo-popup-face-fig">
+        <img class="photo-popup-img" id="photo-popup-face-img" alt="face">
+        <figcaption>Face</figcaption>
+      </figure>
+      <figure class="photo-popup-fig" id="photo-popup-body-fig">
+        <img class="photo-popup-img" id="photo-popup-body-img" alt="full body">
+        <figcaption>Full body</figcaption>
+      </figure>
+    </div>
     <div class="photo-popup-name" id="photo-popup-name">—</div>
     <div class="photo-popup-id" id="photo-popup-id">—</div>
   </div>

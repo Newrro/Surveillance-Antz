@@ -24,6 +24,7 @@ class Identifier:
         self.face = FaceExtractor()    # AdaFace face embedding (primary signal)
         self.gallery = Gallery()
         self.extractor = self.body     # backward-compat alias
+        self.last_face_crop = None     # aligned face image from the last extract()
 
     def _too_small(self, crop):
         if crop is None or crop.size == 0:
@@ -31,10 +32,16 @@ class Identifier:
         h, w = crop.shape[:2]
         return h < config.MIN_CROP_SIDE or w < config.MIN_CROP_SIDE
 
-    def extract(self, person_bgr):
-        """Return (face_emb_or_None, body_emb_or_None) for a person crop."""
-        face = self.face.embed(person_bgr)
-        body = None if self._too_small(person_bgr) else self.body.embed(person_bgr)
+    def extract(self, person_bgr, body_bgr=None):
+        """Return (face_emb_or_None, body_emb_or_None) for a person crop.
+
+        `body_bgr` (optional) is a background-blanked crop of the SAME person for
+        the body ReID vector, so OSNet describes the person and not the shared
+        camera scene. Face always uses the raw crop — alignment needs true pixels.
+        """
+        face, self.last_face_crop = self.face.embed_with_face(person_bgr)
+        bb = person_bgr if body_bgr is None else body_bgr
+        body = None if self._too_small(bb) else self.body.embed(bb)
         return face, body
 
     def identify(self, person_bgr, detection_conf=None, face_threshold=None):

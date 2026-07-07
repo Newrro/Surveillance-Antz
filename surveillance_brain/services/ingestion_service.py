@@ -81,11 +81,35 @@ async def ingest(
     )
 
     # ---- 3. Duplicate guard ------------------------------------------ #
-    # Only de-dup KNOWN identities; Unknown detections are security-relevant
-    # and rare, so we log them all.
+    # Known identities dedup on (identity, camera). Unknowns have no identity_id,
+    # so they dedup on the STABLE per-track detection_id — otherwise one lingering
+    # unrecognised person spams a new Unknown row/card on every re-emit.
     duplicate = False
     if resolution.identity_id is not None:
         duplicate = await dedup_service.is_duplicate(resolution.identity_id, camera.id)
+    elif detection_id:
+        duplicate = await dedup_service.is_duplicate_unknown(detection_id, camera.id)
+
+    # ---- Progressive learning ---------------------------------------- #
+    # Enrich a matched identity with this fresh view so future sightings from a
+    # new angle (or with the face now visible) still match — this is what stops
+    # one person fragmenting into many ids. Gated on non-duplicate (rate-limited
+    # by the dedup window) and on a sub-ceiling score (skip near-duplicate views)
+    # so the vector set doesn't bloat.
+    import config as _config  # local import keeps module import graph flat
+    if (
+        not duplicate
+        and resolution.identity_id is not None
+        and resolution.matched_by in (MatchedBy.FACE, MatchedBy.BODY)
+        and (resolution.similarity is None or resolution.similarity < _config.LEARN_SIMILARITY_CEILING)
+    ):
+        from repositories import embedding_repo
+        await embedding_repo.store_embeddings(
+            resolution.identity_id,
+            face_embedding=face_embedding,
+            body_embedding=body_embedding,
+            source="learned",
+        )
 
     # ---- Resolve display name (for the event object) ----------------- #
     name: Optional[str] = None

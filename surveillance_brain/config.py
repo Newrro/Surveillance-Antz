@@ -71,17 +71,27 @@ class Settings(BaseSettings):
     # ---- Matching thresholds --------------------------------------------
     # Part 1 sends `detection_conf` in the range 0.0–1.0.  Below this the
     # detection is classified UNKNOWN and NO vector search is performed.
-    # The architecture note says ">80%", i.e. 0.80.
-    DETECTION_CONF_THRESHOLD: float = 0.80
+    # This gates IDENTITY, not detection quality — gating high dumped real
+    # gate-distance people (detected at 0.5–0.8) into un-deduped Unknown rows.
+    DETECTION_CONF_THRESHOLD: float = 0.50
 
     # Cosine similarity floor (1 - cosine_distance) for a FACE match.
-    FACE_SIMILARITY_THRESHOLD: float = 0.65
+    # AdaFace on CCTV: same-person ~0.35+, impostors <0.2. 0.65 was so strict
+    # face never won and everything fell back to body ReID.
+    FACE_SIMILARITY_THRESHOLD: float = 0.42
 
     # Cosine similarity floor for a BODY ReID match — used only as a
     # fallback when the face embedding is absent or below threshold.
-    # Body ReID is noisier than face, so this is intentionally a touch
-    # looser but still conservative.
-    BODY_SIMILARITY_THRESHOLD: float = 0.60
+    # OSNet is noisy, so this must be conservative: too low merges different
+    # people into one identity. 0.78 favours splitting over merging.
+    BODY_SIMILARITY_THRESHOLD: float = 0.78
+
+    # Progressive learning: when a matched sighting scores BELOW this, store its
+    # embedding(s) as an additional view for that identity, so future sightings
+    # from a new angle (or with the face now visible) still match — this is what
+    # stops one person fragmenting into many ids. Above it the view is a near-
+    # duplicate we already have, so we skip it (keeps the vector set from bloating).
+    LEARN_SIMILARITY_CEILING: float = 0.92
 
     # Must match Part 1's model output dimension (face + body share it here).
     EMBEDDING_DIMENSIONS: int = 512
@@ -157,6 +167,7 @@ QDRANT_BODY_COLLECTION: Final[str] = _settings.QDRANT_BODY_COLLECTION
 DETECTION_CONF_THRESHOLD: Final[float] = _settings.DETECTION_CONF_THRESHOLD
 FACE_SIMILARITY_THRESHOLD: Final[float] = _settings.FACE_SIMILARITY_THRESHOLD
 BODY_SIMILARITY_THRESHOLD: Final[float] = _settings.BODY_SIMILARITY_THRESHOLD
+LEARN_SIMILARITY_CEILING: Final[float] = _settings.LEARN_SIMILARITY_CEILING
 EMBEDDING_DIMENSIONS: Final[int] = _settings.EMBEDDING_DIMENSIONS
 
 STORAGE_ROOT: Final[str] = _settings.STORAGE_ROOT

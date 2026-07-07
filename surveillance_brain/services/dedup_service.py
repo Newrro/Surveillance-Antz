@@ -41,24 +41,35 @@ def _key(identity_id: int, camera_id: int) -> str:
     return f"dedup:{identity_id}:{camera_id}"
 
 
-async def is_duplicate(identity_id: int, camera_id: int) -> bool:
-    """
-    Return True if this (identity, camera) pair was already logged inside
-    the dedup window.  Otherwise register it and return False.
+def _unknown_key(detection_id: str, camera_id: int) -> str:
+    return f"dedup:unk:{detection_id}:{camera_id}"
 
-    Fails OPEN (returns False) if Redis is unavailable — better to log a
-    possible duplicate than to silently drop a real event.
-    """
+
+async def _claim_window(key: str) -> bool:
+    """SET NX EX the dedup key. Returns True if this call is a DUPLICATE (the key
+    already existed). Fails OPEN (False) if Redis is down — better to log a
+    possible duplicate than silently drop a real event."""
     try:
         client = await presence_cache.get_client()
-        key = _key(identity_id, camera_id)
-        # SET NX EX — atomic "claim the window if not already claimed".
         was_set = await client.set(key, "1", nx=True, ex=config.DUPLICATE_WINDOW_SECONDS)
-        # was_set is True when we created the key (i.e. NOT a duplicate).
+        # was_set is True when WE created the key (i.e. NOT a duplicate).
         return not bool(was_set)
     except Exception as e:  # noqa: BLE001
         logger.warning("Dedup check failed (%s) — treating as non-duplicate", e)
         return False
+
+
+async def is_duplicate(identity_id: int, camera_id: int) -> bool:
+    """True if this (identity, camera) pair was already logged inside the window."""
+    return await _claim_window(_key(identity_id, camera_id))
+
+
+async def is_duplicate_unknown(detection_id: str, camera_id: int) -> bool:
+    """Dedup Unknown detections (no identity_id) by their STABLE per-track
+    detection_id from Part 1. A person who lingers unrecognised re-emits every
+    few seconds; without this each emit would be a fresh Unknown ledger row and
+    a new 'Unknown person' card. Collapses them to one per window."""
+    return await _claim_window(_unknown_key(detection_id, camera_id))
 
 
 async def merge_identities(session: AsyncSession, primary_id: int, duplicate_id: int) -> None:

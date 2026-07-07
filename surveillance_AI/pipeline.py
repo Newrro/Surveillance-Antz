@@ -196,7 +196,7 @@ def crop_person(frame_bgr, box_xyxy, mask=None):
 
 
 def save_snapshot(camera_uid, crop_bgr, stamp_ms, idx):
-    """Save the crop under storage/img/<camera_uid>/ and return the contract path."""
+    """Save the full-body crop under storage/img/<camera_uid>/ and return its path."""
     out_dir = os.path.join(STORAGE_IMG, camera_uid)
     os.makedirs(out_dir, exist_ok=True)
     fname = f"{stamp_ms}_{idx}.jpg"
@@ -204,10 +204,25 @@ def save_snapshot(camera_uid, crop_bgr, stamp_ms, idx):
     return f"storage/img/{camera_uid}/{fname}"
 
 
+def save_face_snapshot(camera_uid, face_bgr, stamp_ms, idx):
+    """Save the aligned face crop next to the body crop as <stem>_face.jpg. The UI
+    derives this path from the body snapshot, so no contract change is needed."""
+    out_dir = os.path.join(STORAGE_IMG, camera_uid)
+    os.makedirs(out_dir, exist_ok=True)
+    fname = f"{stamp_ms}_{idx}_face.jpg"
+    cv2.imwrite(os.path.join(out_dir, fname), face_bgr)
+    return f"storage/img/{camera_uid}/{fname}"
+
+
 def build_payload(camera_uid, score, face_embedding, body_embedding, snapshot_path, stamp_ms, idx):
-    """Part 1 → Part 2 detection payload (contracts/part1_to_part2.event.schema.json)."""
+    """Part 1 → Part 2 detection payload (contracts/part1_to_part2.event.schema.json).
+
+    `idx` is the tracker's track id. detection_id is STABLE per track (no
+    timestamp) so every emit of the same person shares one id — the Brain can
+    dedup repeat Unknown sightings on it, and the UI groups them into a single
+    'Unknown person' card instead of minting a new card every emit."""
     return {
-        "detection_id": f"{camera_uid}-{stamp_ms}-{idx}",
+        "detection_id": f"{camera_uid}-t{idx}",
         "camera_id": camera_uid,
         "timestamp": utc_now_iso(),
         "detection_conf": round(float(score), 4),
@@ -289,18 +304,38 @@ def main():
                             and now - t.last_resolve >= (5.0 if t.emitted else resolve_interval)]
                 if frame is None or not pend:
                     continue
+                # SAM 2 once per (camera, frame): give it the frame, then pull a
+                # per-box mask below. Blanking the background is what makes the
+                # body vector describe the PERSON instead of the shared scene.
+                seg_ready = False
                 for t, box in pend:
                     t.last_resolve = now
-                    crop = crop_person(frame, box)
+                    crop = crop_person(frame, box)          # raw crop → face
                     if crop is None:
                         continue
-                    face_emb, body_emb = identifier.extract(crop)
+                    body_crop = crop
+                    if segmenter is not None:
+                        try:
+                            if not seg_ready:
+                                segmenter.set_frame(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                                seg_ready = True
+                            mask = segmenter.mask_for_box(box)
+                            masked = crop_person(frame, box, mask=mask)
+                            if masked is not None:
+                                body_crop = masked        # background-blanked → body ReID
+                        except Exception as e:  # noqa: BLE001 — fall back to raw crop
+                            print(f"    → segment failed: {e}")
+                    face_emb, body_emb = identifier.extract(crop, body_bgr=body_crop)
                     if face_emb is None and body_emb is None:
                         continue                 # no usable features yet — stays 'Unknown', retry
                     ran = True
                     t.emitted = True
                     stamp_ms = int(now * 1000)
                     snap = save_snapshot(uid, crop, stamp_ms, t.id)
+                    # Also save a face thumbnail when a face was found, so the UI
+                    # can show BOTH a full-body crop and a face crop per person.
+                    if identifier.last_face_crop is not None:
+                        save_face_snapshot(uid, identifier.last_face_crop, stamp_ms, t.id)
                     disp = color = None
                     locked = False
                     if args.emit:
@@ -325,7 +360,8 @@ def main():
                         t.label, t.color = disp, color
                         if locked:
                             t.resolved = True    # lock: never re-classified → no churn, one id
-                    print(f"[{uid}] track#{t.id} -> {disp}  (det {box[4]:.2f})")
+                    feat = ("F" if face_emb is not None else "-") + ("B" if body_emb is not None else "-")
+                    print(f"[{uid}] track#{t.id} -> {disp}  (det {box[4]:.2f} feat {feat})")
             if not ran:
                 time.sleep(0.1)
 

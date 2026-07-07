@@ -3,11 +3,13 @@
   "cameras": [
     { "camera_uid": "GATE-RIGHT",            "name": "Front Gate Right",        "zone_id": "ZONE-GATE",      "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75 },
     { "camera_uid": "GATE-INSIDE-LEFT",      "name": "Front Gate Inside Left",  "zone_id": "ZONE-GATE",      "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75 },
-    { "camera_uid": "GATE-OUTSIDE-LEFT",     "name": "Front Gate Outside Left", "zone_id": "ZONE-GATE",      "is_exit_camera": true,  "is_active": true, "role": "detect" },
-    { "camera_uid": "PATHWAY-FRONT",         "name": "Building Front Pathway",  "zone_id": "ZONE-PATHWAY",   "is_exit_camera": false, "is_active": true, "role": "detect" },
-    { "camera_uid": "CAVILAND-FRONT",        "name": "Caviland Front",          "zone_id": "ZONE-CAVILAND",  "is_exit_camera": false, "is_active": true, "role": "detect" },
+    { "camera_uid": "GATE-OUTSIDE-LEFT",     "name": "Front Gate Outside Left", "zone_id": "ZONE-GATE",      "is_exit_camera": true,  "is_active": true, "role": "identify", "match_threshold": 0.75 },
+    { "camera_uid": "PATHWAY-FRONT",         "name": "Building Front Pathway",  "zone_id": "ZONE-PATHWAY",   "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75 },
+    { "camera_uid": "CAVILAND-FRONT",        "name": "Caviland Front",          "zone_id": "ZONE-CAVILAND",  "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75 },
     { "camera_uid": "SANJEEVAN-INSIDE-FRONT","name": "Sanjeevan Inside Front",  "zone_id": "ZONE-SANJEEVAN", "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75 },
     { "camera_uid": "SANJEEVAN-INSIDE",      "name": "Sanjeevan Inside",        "zone_id": "ZONE-SANJEEVAN", "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75 },
+
+    { "camera_uid": "TURRET", "name": "Turret Local Feed", "zone_id": "ZONE-TURRET", "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75, "source": { "type": "url" } },
 
     { "camera_uid": "LOCAL-STREAM", "name": "Local Stream", "zone_id": "ZONE-TEST", "is_exit_camera": false, "is_active": true, "role": "identify", "source": { "type": "url" } },
 

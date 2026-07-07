@@ -55,21 +55,44 @@ function onLiveEvent(evt) {
   });
 }
 
-/* MJPEG feed <img> for a camera, or '' when there is no backend to stream from */
+/* Live camera feed as a POLLED STILL (not an infinite MJPEG stream).
+   Why: an MJPEG <img src="/stream/..."> holds ONE HTTP connection open forever.
+   With 7 cameras that's 7 permanent connections, but browsers allow only ~6 per
+   origin — so every other request to :8080 (the page's own HTML/CSS/JS on reload,
+   and the person photos) is queued behind connections that never free, and the
+   page "reloads forever". Polling a single JPEG uses short, reused connections
+   that always release, so the pool never starves. The pipeline already writes an
+   annotated frame per camera to shared memory at PREVIEW_FPS; /snapshot/<id>
+   serves the latest one. pollFeeds() refreshes only the VISIBLE feeds. */
 function feedImg(camId, cls) {
   if (!SERVED) return '';
-  return `<img class="${cls}" src="/stream/${camId}" alt="" data-cam="${camId}"
-               onerror="retryFeed(this)">`;
+  return `<img class="${cls}" alt="" data-cam="${camId}" data-feed>`;
 }
 
-/* MJPEG connections drop occasionally (camera reconnects, sub-stream hiccups).
-   Reconnect after a short delay instead of hiding the feed permanently. */
-function retryFeed(img) {
-  const base = img.src.split('?')[0];
-  setTimeout(() => {
-    if (img.isConnected) img.src = base + '?t=' + Date.now();
-  }, 2000);
+function pollFeeds() {
+  document.querySelectorAll('img[data-feed]').forEach(img => {
+    // offsetParent === null → the element (or an ancestor view) is hidden; don't
+    // poll feeds the operator isn't looking at.
+    if (!img.isConnected || img.offsetParent === null) return;
+    if (img.dataset.loading === '1') return;   // a fetch is still in flight — don't pile up
+    img.dataset.loading = '1';
+    fetch(`/snapshot/${encodeURIComponent(img.dataset.cam)}?t=${Date.now()}`, { cache: 'no-store' })
+      .then(r => r.ok ? r.blob() : Promise.reject(new Error(r.status)))
+      .then(blob => {
+        // Swap to a decoded local blob so there's no network gap between frames,
+        // and only AFTER it loads — a failed poll keeps the last good frame
+        // (no blank flash). Revoke the previous blob to avoid a memory leak.
+        const url = URL.createObjectURL(blob);
+        const prev = img.dataset.blob;
+        img.onload = () => { if (prev) URL.revokeObjectURL(prev); };
+        img.src = url;
+        img.dataset.blob = url;
+      })
+      .catch(() => { /* keep the last good frame */ })
+      .finally(() => { img.dataset.loading = '0'; });
+  });
 }
+setInterval(pollFeeds, 350);
 
 /* ---------- Auth ---------- */
 /* The single valid operator. Real deployments should verify against the Brain,
@@ -184,33 +207,53 @@ function onSearch(val) {
 
 /* ---------- Live grid ---------- */
 function renderGrid() {
+  const grid = document.getElementById('camera-grid');
+  // Build the tile DOM ONLY when the camera set changes. Live events fire many
+  // times a second; rebuilding innerHTML each time would destroy and recreate
+  // every feed <img>, which (with polled stills) blanks the tile until the next
+  // poll → constant flicker. So we build once and only refresh the badges below.
+  // SERVED is in the signature so the grid rebuilds once the backend is
+  // confirmed (feedImg only emits an <img> when SERVED) — otherwise a build that
+  // happened before SERVED flipped would leave imgless tiles forever.
+  const sig = (SERVED ? 's:' : 'n:') + LIVE_CAMERAS.map(c => c.id).join(',');
+  if (grid.dataset.sig !== sig) {
+    grid.innerHTML = LIVE_CAMERAS.map(cam => `
+      <div class="tile-wrap" data-name="${cam.name.toLowerCase()}" data-cam="${cam.id}">
+        <div class="tile-head">
+          <span class="tile-status"></span>
+          <span class="tile-name">${cam.name}</span>
+          <span class="tile-loc">${cam.location || ''}</span>
+        </div>
+        <div class="tile" onclick="openCamera('${cam.id}')">
+          ${feedImg(cam.id, 'tile-feed')}
+          <span class="bracket tl"></span><span class="bracket tr"></span>
+          <span class="bracket bl"></span><span class="bracket br"></span>
+          <span class="tile-count">No activity</span>
+          <span class="tile-time"></span>
+        </div>
+      </div>`).join('');
+    grid.dataset.sig = sig;
+  }
+  updateGridBadges();
+}
+
+/* Refresh only the dynamic per-tile text (detection count, time, offline state)
+   WITHOUT touching the feed <img> — safe to call on every live event. */
+function updateGridBadges() {
   const ic = document.getElementById('inside-count');
   if (ic) ic.textContent = countInside();
   const vc = document.getElementById('visits-count');
   if (vc) vc.textContent = countVisitsToday();
-  const grid = document.getElementById('camera-grid');
-  grid.innerHTML = LIVE_CAMERAS.map(cam => {
-    // Detection boxes are drawn on the video by Part 1 (real detector output),
-    // so the UI no longer overlays its own. This count is just recent live
-    // activity from the Brain's event stream (rolling window).
-    const n = liveDetCount(cam.id);
+  LIVE_CAMERAS.forEach(cam => {
+    const wrap = document.querySelector(`#camera-grid .tile-wrap[data-cam="${cam.id}"]`);
+    if (!wrap) return;
     const offline = cam.status === 'offline';
-    return `
-      <div class="tile-wrap" data-name="${cam.name.toLowerCase()}">
-        <div class="tile-head">
-          <span class="tile-status ${offline ? 'off' : ''}"></span>
-          <span class="tile-name">${cam.name}</span>
-          <span class="tile-loc">${cam.location || ''}</span>
-        </div>
-        <div class="tile ${offline ? 'offline' : ''}" onclick="openCamera('${cam.id}')">
-          ${feedImg(cam.id, 'tile-feed')}
-          <span class="bracket tl"></span><span class="bracket tr"></span>
-          <span class="bracket bl"></span><span class="bracket br"></span>
-          <span class="tile-count">${n ? n + ' detected' : 'No activity'}</span>
-          <span class="tile-time">${offline ? 'signal lost' : nowTime()}</span>
-        </div>
-      </div>`;
-  }).join('');
+    const n = liveDetCount(cam.id);
+    wrap.querySelector('.tile-status').classList.toggle('off', offline);
+    wrap.querySelector('.tile').classList.toggle('offline', offline);
+    wrap.querySelector('.tile-count').textContent = n ? n + ' detected' : 'No activity';
+    wrap.querySelector('.tile-time').textContent = offline ? 'signal lost' : nowTime();
+  });
 }
 
 /* Recent live-activity count for a camera — entries fold in over WS /live and
@@ -364,11 +407,29 @@ function openPersonLog(userId) {
   document.getElementById('plog-modal').classList.add('open');
 }
 
-/* Photo popup — enlarged photo of the person currently open in the log modal */
+/* Photo popup — enlarged FULL-BODY crop + FACE crop (when one was captured).
+   The face image lives next to the body crop as <stem>_face.jpg (written by
+   Part 1 only when a face was found), so we derive its URL and hide the figure
+   if it 404s (distant / back-turned sightings have no face). */
 function openPhotoPopup() {
   const p = PEOPLE[plogPersonId];
   if (!p) return;
-  setAvatar(document.getElementById('photo-popup-avatar'), p);
+  const bodyUrl = p.photo || '';
+  const bodyFig = document.getElementById('photo-popup-body-fig');
+  const bodyImg = document.getElementById('photo-popup-body-img');
+  if (bodyUrl) { bodyImg.src = bodyUrl; bodyFig.style.display = ''; }
+  else { bodyFig.style.display = 'none'; }
+
+  const faceFig = document.getElementById('photo-popup-face-fig');
+  const faceImg = document.getElementById('photo-popup-face-img');
+  const faceUrl = bodyUrl ? bodyUrl.replace(/\.jpg(\?.*)?$/i, '_face.jpg') : '';
+  faceFig.style.display = 'none';
+  if (faceUrl) {
+    faceImg.onload = () => { faceFig.style.display = ''; };
+    faceImg.onerror = () => { faceFig.style.display = 'none'; };
+    faceImg.src = faceUrl;
+  }
+
   document.getElementById('photo-popup-name').textContent = personName(p);
   document.getElementById('photo-popup-id').textContent =
     p.employeeId ? `${p.userId} · ${p.employeeId}` : p.userId;

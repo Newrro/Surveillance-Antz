@@ -56,8 +56,18 @@ if not DEVICE:
 # AdaFace. Face is matched first; body ReID (below) is the cross-camera fallback.
 FACE_BACKBONE = "ir_101"
 FACE_WEIGHTS = os.path.join(_MODELS_DIR, "adaface_ir101_webface12m.pt")
-FACE_MIN_SIZE = 40        # ignore faces smaller than this (px side) — too small to trust
-FACE_DET_CONF = 0.90      # MTCNN face-detection confidence floor
+# At CCTV/gate distances faces are small and off-angle. The old floors
+# (min_size=40, det_conf=0.90) meant MTCNN found NOTHING → 0 face matches in
+# practice, so every identity fell back to (weak) body ReID. Loosened so the
+# PRIMARY signal actually fires; the AdaFace match threshold still guards
+# against false face matches downstream.
+FACE_MIN_SIZE = 20        # ignore faces smaller than this (px side)
+FACE_DET_CONF = 0.80      # MTCNN face-detection confidence floor
+# Small person crops are upscaled before MTCNN so a distant face clears
+# FACE_MIN_SIZE. Scale so the crop's short side reaches FACE_UPSCALE_TO,
+# capped at FACE_MAX_UPSCALE (avoid blowing a 10px face into mush).
+FACE_UPSCALE_TO = 256
+FACE_MAX_UPSCALE = 4.0
 
 # ─────────────────────────────────────────────
 #  THE THRESHOLDS  — the numbers that most control identity accuracy
@@ -81,7 +91,9 @@ AUTO_ENROLL_UNKNOWN = True
 # we report UNKNOWN. Only above this do we search the gallery (Employee → Visitor).
 #   detection_conf >= this  → search: match ? Employee/Visitor : new Visitor
 #   detection_conf <  this  → Unknown (not sure it's even a clean person)
-DETECTION_CONF_THRESHOLD = 0.80
+# Kept in step with the Brain (0.50): this gates identity, not detection quality,
+# so a real gate-distance person (often 0.5–0.8) is identified, not dumped Unknown.
+DETECTION_CONF_THRESHOLD = 0.50
 
 # ─────────────────────────────────────────────
 #  PROGRESSIVE CONFIDENCE  — "raise the score with new angles"

@@ -169,9 +169,14 @@ const Brain = (() => {
       if (evt.name) p.name = evt.name;
       if (evt.label === 'Employee' && evt.person_id) p.employeeId = evt.person_id;
     }
-    // Photo = the person's latest snapshot / camera still.
+    // Photo = the person's NEWEST snapshot (works for both the initial hydrate,
+    // which arrives newest-first, and live events that arrive later). Keeping the
+    // newest also makes the derived <stem>_face.jpg most likely to exist.
     const photo = photoFor(evt);
-    if (photo) p.photo = photo;
+    if (photo && (!p._photoTime || (evt.time && evt.time > p._photoTime))) {
+      p.photo = photo;
+      p._photoTime = evt.time || p._photoTime;
+    }
     const st = splitTime(evt.time);
     const loc = locationFor(evt, camNameById);
     // De-dupe identical (date,time,location) rows so repeated pings don't pile up.

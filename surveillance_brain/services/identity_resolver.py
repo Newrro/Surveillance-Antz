@@ -81,14 +81,21 @@ async def resolve(
     if not has_face_now and not has_body_now:
         return ResolutionResult(classification=Classification.UNKNOWN, identity_id=None)
 
-    # ---- 2. MATCH (face authoritative; body = same-session fallback) - #
-    match = await feature_matcher.find_match(face_embedding, body_embedding)
+    # ---- 2. NO FACE → UNKNOWN (never identify by clothing) ----------- #
+    # IDENTITY IS FACE-ONLY. Body ReID (OSNet) encodes appearance/clothing, so two
+    # different people in similar clothes match — using it to assign identity
+    # MERGES strangers. A body-only sighting therefore stays UNKNOWN (no identity,
+    # deduped by its stable per-track detection_id in ingestion — no flood). Body
+    # is still stored on face-identified people below, but ONLY for their picture.
+    if not has_face_now:
+        return ResolutionResult(classification=Classification.UNKNOWN, identity_id=None)
 
-    if match is not None:
-        identity = await identity_repo.fetch_identity_by_id(session, match.identity_id)
+    # ---- 3. FACE MATCH (the only way to recognise a person) ---------- #
+    face_hits = await embedding_repo.search_face(face_embedding, limit=5)
+    if face_hits and face_hits[0][1] >= config.FACE_SIMILARITY_THRESHOLD:
+        best_id, best_sim = face_hits[0]
+        identity = await identity_repo.fetch_identity_by_id(session, best_id)
         if identity is not None:
-            # Fill in any modality we don't yet have, and CONFIRM (Unknown →
-            # Visitor) once this re-seen person has BOTH a face and a body on file.
             await _note_and_maybe_confirm(
                 session, identity, has_face_now, has_body_now,
                 face_embedding, body_embedding,
@@ -97,17 +104,16 @@ async def resolve(
             return ResolutionResult(
                 classification=classification,
                 identity_id=identity.id,
-                matched_by=match.matched_by,
-                similarity=match.similarity,
+                matched_by=MatchedBy.FACE,
+                similarity=best_sim,
                 label=label,
             )
-        logger.warning("Vector match id=%d gone — enrolling new person", match.identity_id)
+        logger.warning("Face match id=%d gone — enrolling new person", best_id)
 
-    # ---- 3. NEW PERSON → UNKNOWN (enrolled, never confirmed on 1st sight) - #
-    # No confident match. We DON'T call them a Visitor — a Visitor is someone we
-    # have re-recognised with a clear face AND body on file (branch 2). We still
-    # enroll ONE persistent identity + its embeddings so (a) dedup is keyed on
-    # this id (no per-frame flood) and (b) they can be recognised next time.
+    # ---- 4. NEW FACE → UNKNOWN (enrolled; confirmed on re-match) ----- #
+    # A clear face we don't recognise → a new person. Enroll their FACE (the
+    # identity key) + body (their picture). They stay UNKNOWN until seen again by
+    # FACE, at which point (face + body on file) they're confirmed a Visitor.
     year = datetime.utcnow().year
     seq = await identity_repo.next_visitor_seq(session, year)
     label = f"VIS-{year}-{seq:04d}"
@@ -128,7 +134,7 @@ async def resolve(
     )
     await identity_repo.set_visitor_flags(session, new_identity.id, has_face_now, has_body_now)
 
-    logger.info("New person → UNKNOWN, enrolled as %s (id=%d)", label, new_identity.id)
+    logger.info("New face → UNKNOWN, enrolled as %s (id=%d)", label, new_identity.id)
     return ResolutionResult(
         classification=Classification.UNKNOWN,
         identity_id=new_identity.id,

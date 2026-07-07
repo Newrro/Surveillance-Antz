@@ -132,7 +132,6 @@ async function login() {
   renderLog();
   renderReport();
   renderRecords();
-  renderOperators();
   renderUnclassified();
   renderDepartments();
   showView('grid');
@@ -689,6 +688,53 @@ function openPersonPhoto() {
 function closePersonPhoto() { document.getElementById('photo-modal').classList.remove('open'); }
 function closePersonPhotoIfBackdrop(e) { if (e.target.id === 'photo-modal') closePersonPhoto(); }
 
+/* Rename the person currently open in the log modal. Keeps their id + VIS/EMP
+   label — only sets a friendly name (e.g. Visitor VIS-2026-0001 → "Akash"). */
+async function renameCurrentPerson() {
+  const p = PEOPLE[plogPersonId];
+  if (!p) return;
+  const entered = window.prompt(`Name for ${p.displayLabel || p.userId}:`, p.name || '');
+  if (entered === null) return;                       // cancelled
+  const name = entered.trim();
+  if (BRAIN_ON && p.identityId != null) {
+    try {
+      await Brain.setName(p.identityId, name);
+    } catch (e) {
+      alert('Rename failed: ' + e.message);
+      return;
+    }
+  }
+  // Reflect locally (also covers the offline/mock case).
+  p.name = name || null;
+  p.initials = name
+    ? name.split(/\s+/).map(s => s[0]).slice(0, 2).join('').toUpperCase()
+    : (p.displayLabel ? p.displayLabel.slice(-2) : '??');
+  document.getElementById('plog-name').textContent = personName(p);
+  setAvatar(document.getElementById('plog-avatar'), p);
+  renderReport(); renderRecords();
+  if (currentView === 'log') renderLog();
+}
+
+/* Settings → Danger zone: wipe the whole database (people/events/snapshots),
+   keeping cameras. Uses the single admin credentials. */
+async function deleteDatabase() {
+  if (!confirm('Delete the ENTIRE database — every person, event and snapshot?\nCameras are kept. This cannot be undone.')) return;
+  const btn = document.getElementById('wipe-db-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
+  try {
+    if (!BRAIN_ON) throw new Error('Brain not connected');
+    await Brain.resetDatabase({ user: AUTH.username, pass: AUTH.password });
+    await connectBrain();                 // re-hydrate the now-empty DB
+    renderGrid(); renderReport(); renderRecords();
+    if (currentView === 'log') renderLog();
+    alert('Database deleted. Starting fresh.');
+  } catch (e) {
+    alert('Delete failed: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-trash"></i> Delete entire database'; }
+  }
+}
+
 /* ---------- Track: people currently inside + auto-track simulation ---------- */
 
 /* TRACK button (topbar): list everyone currently inside, newest sighting first. */
@@ -1098,6 +1144,7 @@ let editingOpIndex = null;
 
 function renderOperators() {
   const body = document.getElementById('operators-body');
+  if (!body) return;   // operator management removed — single admin login only
   body.innerHTML = OPERATORS.map((o, i) => `
     <tr>
       <td class="mono">${o.username}</td>

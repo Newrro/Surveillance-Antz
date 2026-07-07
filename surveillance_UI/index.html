@@ -63,8 +63,8 @@
       <div class="topbar-spacer"></div>
       <div class="topbar-clock" id="clock">--:--:--</div>
       <div class="topbar-operator">
-        <div class="avatar">RS</div>
-        <span id="operator-name">R.singh</span>
+        <div class="avatar">A</div>
+        <span id="operator-name">admin</span>
       </div>
     </div>
 
@@ -217,33 +217,9 @@
         <div class="view-header">
           <div>
             <h1 class="view-title">Settings</h1>
-            <p class="view-sub">Operator accounts, reclassification &amp; departments</p>
+            <p class="view-sub">Reclassification, departments &amp; database</p>
           </div>
           <button class="btn" onclick="logout()"><i class="ti ti-logout"></i> Log out</button>
-        </div>
-
-        <div class="settings-section">
-          <h2>Operator accounts</h2>
-          <p class="desc">Manage who can sign in to the console.</p>
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Username</th><th>Role</th><th>Last login</th><th style="text-align:right">Actions</th></tr></thead>
-              <tbody id="operators-body"></tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="settings-section">
-          <h2>Add operator</h2>
-          <p class="desc">Create a new operator account.</p>
-          <div class="form-inline">
-            <div class="field"><label>Username</label><input type="text" id="op-new-user" placeholder="e.g. a.mehta"></div>
-            <div class="field"><label>Role</label>
-              <select id="op-new-role"><option>Operator</option><option>Senior operator</option><option>Administrator</option></select>
-            </div>
-            <div class="field"><label>Password</label><input type="password" id="op-new-pass" placeholder="Set a password"></div>
-            <button class="btn btn-primary" onclick="addOperator()"><i class="ti ti-user-plus"></i> Add operator</button>
-          </div>
         </div>
 
         <div class="settings-section">
@@ -265,6 +241,12 @@
             <div class="field"><label>New department</label><input type="text" id="dept-new" placeholder="e.g. Housekeeping"></div>
             <button class="btn btn-primary" onclick="addDepartment()"><i class="ti ti-plus"></i> Add department</button>
           </div>
+        </div>
+
+        <div class="settings-section">
+          <h2>Danger zone</h2>
+          <p class="desc">Permanently delete every person, event and snapshot from the database. Cameras are kept. This cannot be undone.</p>
+          <button class="btn btn-danger" id="wipe-db-btn" onclick="deleteDatabase()"><i class="ti ti-trash"></i> Delete entire database</button>
         </div>
       </section>
 
@@ -306,6 +288,9 @@
         <div class="id" id="plog-id">—</div>
       </div>
       <span id="plog-badge"></span>
+      <button class="btn plog-rename" id="plog-rename" onclick="renameCurrentPerson()" title="Give this person a name">
+        <i class="ti ti-pencil"></i> Rename
+      </button>
       <button class="sidebar-close" onclick="closePersonLog()"><i class="ti ti-x"></i></button>
     </div>
 

@@ -159,6 +159,11 @@ class PromoteRequest(BaseModel):
     email: Optional[str] = None
 
 
+class NameRequest(BaseModel):
+    # Empty string is allowed — it clears the name back to unnamed.
+    name: str = Field(..., max_length=128)
+
+
 class ConversionResponse(BaseModel):
     identity_id: int
     new_label: str

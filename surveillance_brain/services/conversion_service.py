@@ -143,6 +143,28 @@ async def demote_employee_to_visitor(identity_id: int) -> str:
         return new_label
 
 
+async def set_person_name(identity_id: int, name: str) -> str:
+    """Set a friendly display name on a visitor (or employee) WITHOUT changing
+    the identity_id, display_label (e.g. VIS-2026-0001), or type. Returns the
+    stored name (empty string clears it back to unnamed)."""
+    from db.models import Employee, Visitor  # local import avoids a cycle
+
+    name = (name or "").strip()
+    async with get_session() as session:
+        identity = await identity_repo.fetch_identity_by_id(session, identity_id)
+        if identity is None:
+            raise ValueError(f"identity_id={identity_id} not found")
+        row = await session.get(Employee, identity_id)
+        if row is None:
+            row = await session.get(Visitor, identity_id)
+        if row is None:
+            raise ValueError(f"no visitor/employee row for identity_id={identity_id}")
+        row.name = name or None
+        await session.flush()
+        logger.info("Renamed identity %d -> %r", identity_id, name)
+        return name
+
+
 # ---------------------------------------------------------------------------
 # V2 stub — Right to be Forgotten
 # ---------------------------------------------------------------------------

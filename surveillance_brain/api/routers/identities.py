@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import require_admin
-from api.schemas import ConversionResponse, PromoteRequest
+from api.schemas import ConversionResponse, NameRequest, PromoteRequest
 from db.connection import get_db
 from services import conversion_service
 
@@ -98,4 +98,26 @@ async def demote(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Demote failed: {e}",
+        )
+
+
+@router.post(
+    "/{identity_id}/name",
+    status_code=status.HTTP_200_OK,
+    summary="Rename a person (set a friendly name; keeps the id + VIS/EMP label)",
+)
+async def set_name(identity_id: int, body: NameRequest) -> dict:
+    """Give a person a human name (e.g. 'Akash') while keeping their
+    identity_id and display_label (VIS-2026-0001). Open like /events so the
+    dashboard can rename without Basic auth."""
+    try:
+        name = await conversion_service.set_person_name(identity_id, body.name)
+        return {"identity_id": identity_id, "name": name}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Rename failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Rename failed: {e}",
         )

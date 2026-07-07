@@ -308,10 +308,21 @@ const Brain = (() => {
     return res.json();
   }
 
+  // Give a person a friendly name, keeping their id + VIS/EMP label.
+  async function setName(identityId, name) {
+    const res = await fetch(BASE + `/identities/${identityId}/name`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) throw new Error(`POST /identities/${identityId}/name -> HTTP ${res.status}`);
+    return res.json();
+  }
+
   return {
     get base() { return state.base; },
     get connected() { return state.connected; },
-    health, hydrate, connectLive, applyLiveEvent, enrollEmployee, findLive, resetDatabase,
+    health, hydrate, connectLive, applyLiveEvent, enrollEmployee, findLive, resetDatabase, setName,
     // exposed for reuse/testing
     _map: { splitTime, locationFor, personKey, upsertPerson },
   };

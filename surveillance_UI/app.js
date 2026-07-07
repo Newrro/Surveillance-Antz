@@ -706,6 +706,8 @@ async function renameCurrentPerson() {
   }
   // Reflect locally (also covers the offline/mock case).
   p.name = name || null;
+  // Naming someone means you recognise them → promote an Unknown to a Visitor.
+  if (name && p.category === 'Unknown') p.category = 'Visitor';
   p.initials = name
     ? name.split(/\s+/).map(s => s[0]).slice(0, 2).join('').toUpperCase()
     : (p.displayLabel ? p.displayLabel.slice(-2) : '??');

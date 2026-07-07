@@ -164,8 +164,11 @@ const Brain = (() => {
         history: [],
       };
     } else {
-      // Keep the latest classification/name the Brain reports.
-      if (evt.label) p.category = evt.label;
+      // Category NEVER downgrades: a person is Unknown only until they're first
+      // recognised — once any sighting matches (Visitor) or they're an Employee,
+      // they stay that. (Rank Employee > Visitor > Unknown.)
+      const RANK = { Unknown: 1, Visitor: 2, Employee: 3 };
+      if (evt.label && (RANK[evt.label] || 0) >= (RANK[p.category] || 0)) p.category = evt.label;
       if (evt.name) p.name = evt.name;
       if (evt.label === 'Employee' && evt.person_id) p.employeeId = evt.person_id;
     }

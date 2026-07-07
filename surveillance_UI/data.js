@@ -131,8 +131,9 @@ let OPERATORS = [
 
 /* Display name for a person by category. */
 function personName(p) {
-  if (p.category === 'Employee') return p.name;
-  if (p.category === 'Visitor')  return p.name || 'Visitor';
+  if (p.name) return p.name;                 // a named person shows their name in any category
+  if (p.category === 'Employee') return 'Employee';
+  if (p.category === 'Visitor')  return 'Visitor';
   return 'Unknown person';
 }
 

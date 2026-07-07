@@ -105,7 +105,14 @@ async def resolve(
                 label=identity.display_label,
             )
 
-    # ---- 3. NEW VISITOR CREATION ------------------------------------- #
+    # ---- 3. NEW PERSON → UNKNOWN (enrolled for future recognition) --- #
+    # No confident match: this is someone we don't recognise. We DON'T call them
+    # a Visitor — a Visitor is a person whose features matched the database above
+    # threshold (branch 2). Instead we flag this sighting UNKNOWN, but still
+    # enroll ONE persistent identity (with its embeddings) so that (a) we don't
+    # spawn a fresh record every frame — dedup is keyed on this identity_id — and
+    # (b) when this same person is seen again they MATCH and resolve to VISITOR.
+    # Naming an Unknown in the dashboard turns them into a recognised Visitor.
     year = datetime.utcnow().year
     seq = await identity_repo.next_visitor_seq(session, year)
     label = f"VIS-{year}-{seq:04d}"
@@ -119,8 +126,8 @@ async def resolve(
         first_seen_at=datetime.utcnow(),
     )
 
-    # Persist whichever embeddings we received so this visitor is
-    # recognised next time (face and/or body).
+    # Persist whichever embeddings we received so this person is RECOGNISED
+    # (→ Visitor) next time (face and/or body).
     await embedding_repo.store_embeddings(
         new_identity.id,
         face_embedding=face_embedding,
@@ -128,9 +135,9 @@ async def resolve(
         source="auto_first_seen",
     )
 
-    logger.info("Created new visitor: %s (id=%d)", label, new_identity.id)
+    logger.info("New person → UNKNOWN, enrolled as %s (id=%d)", label, new_identity.id)
     return ResolutionResult(
-        classification=Classification.VISITOR,
+        classification=Classification.UNKNOWN,
         identity_id=new_identity.id,
         matched_by=MatchedBy.NONE,
         similarity=None,

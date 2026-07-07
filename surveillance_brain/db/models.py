@@ -164,6 +164,13 @@ class Visitor(Base):
     name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
+    # Confirmation state. A person is UNKNOWN (unconfirmed) until we have BOTH a
+    # clear face and a body embedding on file; then confirmed_at is set and they
+    # become a real VISITOR — re-identifiable by face on any later day.
+    has_face: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    has_body: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
     identity: Mapped["Identity"] = relationship(back_populates="visitor")
 
     __table_args__ = (

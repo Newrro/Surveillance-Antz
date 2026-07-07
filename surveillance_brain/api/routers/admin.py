@@ -43,3 +43,39 @@ async def reset_database(_: str = Depends(require_admin)) -> dict:
         logger.warning("reset: redis flush failed: %s", exc)
     logger.warning("DATABASE RESET via /admin/reset — all people/events cleared")
     return {"status": "ok", "message": "Database wiped. Cameras kept."}
+
+
+async def clear_unknowns() -> int:
+    """Delete every UNCONFIRMED person (Unknowns: visitor rows with no
+    confirmed_at) — their identity, embeddings, sessions, and all UNKNOWN-labelled
+    sightings. CONFIRMED Visitors and Employees are kept, so a real visitor is
+    still recognised tomorrow. Returns how many Unknowns were removed."""
+    async with get_session() as session:
+        rows = await session.execute(
+            text("SELECT identity_id FROM visitors WHERE confirmed_at IS NULL")
+        )
+        ids = [r[0] for r in rows]
+        # Drop all Unknown sightings (covers the unconfirmed ids + any orphans).
+        await session.execute(text("DELETE FROM detection_events WHERE classification = 'unknown'"))
+        if ids:
+            await session.execute(
+                text("DELETE FROM presence_sessions WHERE identity_id = ANY(:ids)"), {"ids": ids}
+            )
+            # CASCADE removes the visitors extension rows.
+            await session.execute(text("DELETE FROM identities WHERE id = ANY(:ids)"), {"ids": ids})
+        await session.commit()
+
+    for iid in ids:                              # drop their face/body vectors
+        try:
+            await vector_store.delete_for_identity(iid)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("clear_unknowns: vector delete failed for %d: %s", iid, exc)
+    logger.info("Cleared %d unknown(s)", len(ids))
+    return len(ids)
+
+
+@router.post("/clear-unknowns")
+async def clear_unknowns_endpoint(_: str = Depends(require_admin)) -> dict:
+    """Manual 'clear today's unknowns' — same as the automatic midnight sweep."""
+    removed = await clear_unknowns()
+    return {"status": "ok", "removed": removed, "message": f"Cleared {removed} unknown(s). Visitors kept."}

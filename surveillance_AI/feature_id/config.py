@@ -61,8 +61,12 @@ FACE_WEIGHTS = os.path.join(_MODELS_DIR, "adaface_ir101_webface12m.pt")
 # practice, so every identity fell back to (weak) body ReID. Loosened so the
 # PRIMARY signal actually fires; the AdaFace match threshold still guards
 # against false face matches downstream.
-FACE_MIN_SIZE = 20        # ignore faces smaller than this (px side)
-FACE_DET_CONF = 0.80      # MTCNN face-detection confidence floor
+FACE_MIN_SIZE = 28        # ignore faces smaller than this (px side)
+FACE_DET_CONF = 0.90      # MTCNN face-detection confidence floor
+# Sharpness gate (variance of Laplacian on the aligned 112x112). Blurry/motion
+# faces score low; a floor keeps only CLEAR faces so a "Visitor" is genuinely
+# re-identifiable. Tune down if too few faces qualify on distant cameras.
+FACE_MIN_SHARPNESS = 40.0
 # Small person crops are upscaled before MTCNN so a distant face clears
 # FACE_MIN_SIZE. Scale so the crop's short side reaches FACE_UPSCALE_TO,
 # capped at FACE_MAX_UPSCALE (avoid blowing a 10px face into mush).

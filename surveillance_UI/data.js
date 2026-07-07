@@ -141,7 +141,7 @@ function personName(p) {
 function allLogEntries() {
   const out = [];
   Object.values(PEOPLE).forEach(p =>
-    p.history.forEach(h => out.push({ personId: p.userId, date: h.date, time: h.time, location: h.location }))
+    p.history.forEach(h => out.push({ personId: p.userId, date: h.date, time: h.time, location: h.location, snapshot: h.snapshot || null }))
   );
   return out;
 }

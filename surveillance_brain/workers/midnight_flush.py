@@ -64,10 +64,20 @@ async def run_midnight_flush() -> None:
     except Exception as e:  # noqa: BLE001
         logger.error("Midnight flush: Redis evict failed: %s", e)
 
+    # Daily fresh start: drop all Unknowns (unconfirmed people). Confirmed
+    # Visitors + Employees are kept so returning people are still recognised.
+    cleared = 0
+    try:
+        from api.routers.admin import clear_unknowns
+        cleared = await clear_unknowns()
+        logger.info("Midnight flush: cleared %d unknown(s)", cleared)
+    except Exception as e:  # noqa: BLE001
+        logger.error("Midnight flush: clear-unknowns failed: %s", e)
+
     elapsed = (datetime.utcnow() - start).total_seconds()
     logger.info(
-        "Midnight flush complete in %.2fs (sessions_closed=%d, redis_keys_evicted=%d)",
-        elapsed, closed_count, evicted_count,
+        "Midnight flush complete in %.2fs (sessions_closed=%d, redis_keys_evicted=%d, unknowns_cleared=%d)",
+        elapsed, closed_count, evicted_count, cleared,
     )
 
 

@@ -311,6 +311,26 @@ const Brain = (() => {
     return res.json();
   }
 
+  // Promote a visitor to an employee (keeps identity_id + history). Admin auth.
+  async function promoteToEmployee(identityId, { name, department, email }, auth) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (auth) headers.Authorization = 'Basic ' + btoa(`${auth.user}:${auth.pass}`);
+    const res = await fetch(BASE + `/identities/${identityId}/promote`, {
+      method: 'POST', headers, body: JSON.stringify({ name, department, email: email || null }),
+    });
+    if (!res.ok) throw new Error(`promote -> HTTP ${res.status}`);
+    return res.json();
+  }
+
+  // Clear all Unknowns (unconfirmed people) — keeps confirmed Visitors/Employees.
+  async function clearUnknowns(auth) {
+    const headers = {};
+    if (auth) headers.Authorization = 'Basic ' + btoa(`${auth.user}:${auth.pass}`);
+    const res = await fetch(BASE + '/admin/clear-unknowns', { method: 'POST', headers });
+    if (!res.ok) throw new Error(`POST /admin/clear-unknowns -> HTTP ${res.status}`);
+    return res.json();
+  }
+
   // Give a person a friendly name, keeping their id + VIS/EMP label.
   async function setName(identityId, name) {
     const res = await fetch(BASE + `/identities/${identityId}/name`, {
@@ -325,7 +345,7 @@ const Brain = (() => {
   return {
     get base() { return state.base; },
     get connected() { return state.connected; },
-    health, hydrate, connectLive, applyLiveEvent, enrollEmployee, findLive, resetDatabase, setName,
+    health, hydrate, connectLive, applyLiveEvent, enrollEmployee, findLive, resetDatabase, setName, promoteToEmployee, clearUnknowns,
     // exposed for reuse/testing
     _map: { splitTime, locationFor, personKey, upsertPerson },
   };

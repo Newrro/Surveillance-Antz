@@ -50,10 +50,18 @@ async def ingest(
     Ingest one detection.  `camera_id` is the string camera_uid from Part 1.
     Raises ValueError on an unknown/inactive camera (route → HTTP 400).
     """
-    # ---- Resolve the camera ------------------------------------------ #
+    # ---- Resolve the camera (auto-register unknown cameras) ---------- #
     camera = await camera_repo.fetch_camera_by_uid(session, camera_id)
     if camera is None:
-        raise ValueError(f"Unknown camera_id={camera_id!r} — register it first")
+        # Auto-register any camera Part 1 sends so a newly-added feed (e.g. the
+        # Turret) flows into logs/reports immediately — no manual seeding needed.
+        logger.info("Auto-registering new camera %r", camera_id)
+        camera = await camera_repo.insert_camera(
+            session,
+            camera_uid=camera_id,
+            name=camera_id.replace("-", " ").title(),
+            zone_id="AUTO",
+        )
     if not camera.is_active:
         raise ValueError(f"Camera {camera_id!r} is inactive — rejecting payload")
 

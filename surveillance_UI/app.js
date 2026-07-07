@@ -98,6 +98,13 @@ function photoCss(p) {
     ? `background-image:url('${p.photo}');background-size:cover;background-position:center;`
     : '';
 }
+/* Background-image CSS for a specific snapshot URL — used to show the crop from
+   THAT sighting (per-row in logs), not the person's single representative photo. */
+function photoCssUrl(url) {
+  return url
+    ? `background-image:url('${url}');background-size:cover;background-position:center;`
+    : '';
+}
 function setAvatar(el, p) {
   if (!el) return;
   el.textContent = (p && p.initials) || '?';
@@ -486,6 +493,12 @@ function openPersonLog(userId) {
   document.getElementById('plog-id').textContent = p.employeeId ? `${p.userId} · ${p.employeeId}` : p.userId;
   document.getElementById('plog-badge').innerHTML = `<span class="badge badge-${p.category}">${p.category}</span>`;
 
+  // Rename only Visitors/Employees (not Unknowns); "Make employee" only for Visitors.
+  const renameBtn = document.getElementById('plog-rename');
+  if (renameBtn) renameBtn.style.display = (p.category === 'Unknown') ? 'none' : '';
+  const promoteBtn = document.getElementById('plog-promote');
+  if (promoteBtn) promoteBtn.style.display = (p.category === 'Visitor') ? '' : 'none';
+
   // Details of the person
   const rows = [];
   if (p.category === 'Employee') {
@@ -640,7 +653,7 @@ function renderPersonLog() {
       <td>${h.location}</td>
       <td>
         <div class="plog-cap" title="Captured at ${h.location}">
-          <div class="avatar" style="width:30px;height:30px;font-size:11px;${photoCss(p)}">${p.initials}</div>
+          <div class="avatar" style="width:30px;height:30px;font-size:11px;${h.snapshot ? photoCssUrl(h.snapshot) : photoCss(p)}">${p.initials}</div>
           <i class="ti ti-camera"></i>
         </div>
       </td>
@@ -715,6 +728,50 @@ async function renameCurrentPerson() {
   setAvatar(document.getElementById('plog-avatar'), p);
   renderReport(); renderRecords();
   if (currentView === 'log') renderLog();
+}
+
+/* Promote the Visitor currently open in the modal to an Employee (keeps id + history). */
+async function promoteCurrentPerson() {
+  const p = PEOPLE[plogPersonId];
+  if (!p || p.identityId == null) return;
+  const name = window.prompt('Employee name:', p.name || '');
+  if (name === null || !name.trim()) return;
+  const department = (window.prompt('Department:', p.department || 'General') || 'General').trim();
+  try {
+    const r = await Brain.promoteToEmployee(
+      p.identityId, { name: name.trim(), department },
+      { user: AUTH.username, pass: AUTH.password });
+    p.category = 'Employee';
+    p.name = name.trim();
+    p.department = department;
+    p.employeeId = (r && r.new_label) || p.employeeId;
+    p.initials = name.trim().split(/\s+/).map(s => s[0]).slice(0, 2).join('').toUpperCase();
+    if (department && !DEPARTMENTS.includes(department)) DEPARTMENTS.push(department);
+    openPersonLog(plogPersonId);       // refresh the modal (badge, buttons, details)
+    renderReport(); renderRecords();
+  } catch (e) {
+    alert('Promote failed: ' + e.message);
+  }
+}
+
+/* Settings → Daily reset: clear all Unknowns (unconfirmed people), keeping
+   confirmed Visitors + Employees. Same as the automatic midnight sweep. */
+async function clearUnknowns() {
+  if (!confirm('Clear all Unknowns? Confirmed Visitors and Employees are kept.')) return;
+  const btn = document.getElementById('clear-unknowns-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Clearing…'; }
+  try {
+    if (!BRAIN_ON) throw new Error('Brain not connected');
+    const r = await Brain.clearUnknowns({ user: AUTH.username, pass: AUTH.password });
+    await connectBrain();
+    renderGrid(); renderReport(); renderRecords();
+    if (currentView === 'log') renderLog();
+    alert(`Cleared ${r.removed ?? 0} unknown(s).`);
+  } catch (e) {
+    alert('Clear failed: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-eraser"></i> Clear all unknowns'; }
+  }
 }
 
 /* Settings → Danger zone: wipe the whole database (people/events/snapshots),
@@ -1050,7 +1107,7 @@ function renderLogSheet() {
     const p = PEOPLE[e.personId];
     return `
       <tr onclick="openPersonLog('${p.userId}')">
-        <td><div class="avatar log-photo" style="width:52px;height:52px;font-size:16px;${photoCss(p)}">${p.initials}</div></td>
+        <td><div class="avatar log-photo" style="width:52px;height:52px;font-size:16px;${e.snapshot ? photoCssUrl(e.snapshot) : photoCss(p)}">${p.initials}</div></td>
         <td>${personName(p)}</td>
         <td><span class="badge badge-${p.category}">${p.category}</span></td>
         <td class="mono">${to12h(e.time)}</td>

@@ -244,6 +244,12 @@
         </div>
 
         <div class="settings-section">
+          <h2>Daily reset</h2>
+          <p class="desc">Clear all Unknowns (people not yet confirmed as Visitors). Confirmed Visitors and Employees are kept, so returning people are still recognised. Runs automatically every midnight.</p>
+          <button class="btn" id="clear-unknowns-btn" onclick="clearUnknowns()"><i class="ti ti-eraser"></i> Clear all unknowns</button>
+        </div>
+
+        <div class="settings-section">
           <h2>Danger zone</h2>
           <p class="desc">Permanently delete every person, event and snapshot from the database. Cameras are kept. This cannot be undone.</p>
           <button class="btn btn-danger" id="wipe-db-btn" onclick="deleteDatabase()"><i class="ti ti-trash"></i> Delete entire database</button>
@@ -290,6 +296,9 @@
       <span id="plog-badge"></span>
       <button class="btn plog-rename" id="plog-rename" onclick="renameCurrentPerson()" title="Give this person a name">
         <i class="ti ti-pencil"></i> Rename
+      </button>
+      <button class="btn plog-rename" id="plog-promote" onclick="promoteCurrentPerson()" title="Promote this visitor to an employee">
+        <i class="ti ti-user-check"></i> Make employee
       </button>
       <button class="sidebar-close" onclick="closePersonLog()"><i class="ti ti-x"></i></button>
     </div>

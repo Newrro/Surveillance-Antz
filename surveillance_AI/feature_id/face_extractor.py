@@ -96,6 +96,11 @@ class FaceExtractor:
         aligned = _align_112(img, lm)                        # AdaFace wants BGR
         if aligned is None:
             return None, None
+        # Quality gate: reject blurry/motion faces so only CLEAR faces enroll a
+        # Visitor (variance of Laplacian — low = blurry).
+        sharp = cv2.Laplacian(cv2.cvtColor(aligned, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
+        if sharp < config.FACE_MIN_SHARPNESS:
+            return None, None
         x = ((aligned.astype(np.float32) / 255.0) - 0.5) / 0.5
         t = torch.from_numpy(x.transpose(2, 0, 1)[None]).float().to(self.device)
         with torch.no_grad():

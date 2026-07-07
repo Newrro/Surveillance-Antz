@@ -167,6 +167,45 @@ async def get_name_for_identity(session: AsyncSession, identity_id: int) -> Opti
     return None
 
 
+# ---------------------------------------------------------------------------
+# visitor confirmation state (Unknown → Visitor)
+# ---------------------------------------------------------------------------
+async def get_visitor_flags(session: AsyncSession, identity_id: int):
+    """Return (has_face, has_body, is_confirmed) for a visitor, or None if the
+    identity isn't a visitor row (e.g. an employee)."""
+    vis = await session.get(Visitor, identity_id)
+    if vis is None:
+        return None
+    return (vis.has_face, vis.has_body, vis.confirmed_at is not None)
+
+
+async def set_visitor_flags(session: AsyncSession, identity_id: int,
+                            add_face: bool, add_body: bool) -> None:
+    """OR the has_face / has_body flags on a visitor (never clears them)."""
+    vis = await session.get(Visitor, identity_id)
+    if vis is None:
+        return
+    if add_face:
+        vis.has_face = True
+    if add_body:
+        vis.has_body = True
+
+
+async def confirm_visitor(session: AsyncSession, identity_id: int) -> bool:
+    """Mark a visitor CONFIRMED (Unknown → Visitor) if not already. Returns True
+    on the transition."""
+    vis = await session.get(Visitor, identity_id)
+    if vis is not None and vis.confirmed_at is None:
+        vis.confirmed_at = datetime.utcnow()
+        return True
+    return False
+
+
+async def is_confirmed_visitor(session: AsyncSession, identity_id: int) -> bool:
+    vis = await session.get(Visitor, identity_id)
+    return bool(vis is not None and vis.confirmed_at is not None)
+
+
 async def find_identity_by_query(session: AsyncSession, query: str) -> Optional[Identity]:
     """
     Search identities by:

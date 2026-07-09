@@ -29,16 +29,43 @@ mkdir -p "$LOGS" "$PIDS"
 AI_PY="$ROOT/surveillance_AI/venv/bin/python"
 BRAIN_DIR="$ROOT/surveillance_brain"
 BRAIN_PY="$BRAIN_DIR/.venv/bin/uvicorn"
+BRAIN_PYEXE="$BRAIN_DIR/.venv/bin/python"
 
 # Pipeline options (override via env). Default: emit to Brain WITH SAM2 segment.
-# --segment blanks the background before OSNet body ReID so the embedding
-# describes the PERSON, not the (shared) camera scene. Without it, everyone on a
-# camera looks alike to ReID and collapses onto one visitor id. It costs ~0.5GB
-# VRAM (watch the 4GB ceiling); drop it with PIPELINE_ARGS="--emit" if you OOM.
+# --segment blanks the background before OSNet body ReID so the body vector
+# describes the PERSON, not the shared scene — this is what keeps the SAME person
+# matching across cameras. It costs GPU; if boxes lag too much on the 6GB card,
+# drop it with PIPELINE_ARGS="--emit" (accuracy trade — see notes below).
 PIPELINE_ARGS="${PIPELINE_ARGS:---emit --segment}"
 CAMERAS="${CAMERAS:-}"          # empty = all cameras in cameras.json
-export DET_MAX_SIDE="${DET_MAX_SIDE:-640}"   # smaller detector input = less lag
+
+# ── GPU decode (NVDEC) — offload 1440p HEVC decode from CPU to the GPU ────────
+# The CPU can't decode 7×1440p HEVC streams at once; NVDEC (ffmpeg *_cuvid) does
+# it on the GPU, freeing the CPU that was starving detection + preview. Requires a
+# system ffmpeg with hevc_cuvid (present on this box). Force off with GPU_DECODE=0.
+export GPU_DECODE="${GPU_DECODE:-1}"
+
+# ── Detector + preview tuning ────────────────────────────────────────────────
+export DET_MAX_SIDE="${DET_MAX_SIDE:-640}"    # detector input longest side (speed)
 export DETECT_INTERVAL="${DETECT_INTERVAL:-0.2}"
+export DET_FP16="${DET_FP16:-1}"              # half-precision detection on the GPU
+export PREVIEW_W="${PREVIEW_W:-1280}"         # grid tile resolution (was 640×360)
+export PREVIEW_H="${PREVIEW_H:-720}"
+export PREVIEW_FPS="${PREVIEW_FPS:-12}"
+export PREVIEW_QUALITY="${PREVIEW_QUALITY:-85}"  # grid JPEG quality (was 70)
+
+# ── Identity as a lagged background service ───────────────────────────────────
+# The grid shows LIVE detection boxes (foreground, high-priority GPU stream); the
+# heavy face/body/SAM2 identity runs in the background (low-priority stream) and
+# is allowed to lag a few seconds — labels/DB fill in shortly after a box appears.
+export IDENTITY_MIN_HITS="${IDENTITY_MIN_HITS:-3}"        # resolve a track only once it's stable
+export IDENTITY_MAX_RATE="${IDENTITY_MAX_RATE:-4}"        # max heavy resolves/sec (yields GPU to grid)
+export IDENTITY_LATENCY_BUDGET="${IDENTITY_LATENCY_BUDGET:-4.0}"  # acceptable label lag (seconds)
+
+# ── Storage retention (bound storage/img growth on a 24/7 system) ────────────
+export RETENTION_DAYS="${RETENTION_DAYS:-7}"   # delete snapshots older than this
+export STORAGE_MAX_GB="${STORAGE_MAX_GB:-5}"   # hard ceiling; oldest deleted first
+export PRUNE_INTERVAL_S="${PRUNE_INTERVAL_S:-3600}"
 export PYTHONUNBUFFERED=1                     # live logs (no block-buffering to the log file)
 
 log()  { printf '\033[36m▶ %s\033[0m\n' "$*"; }
@@ -95,14 +122,20 @@ cmd_start() {
   local cam_arg=(); [[ -n "$CAMERAS" ]] && cam_arg=(--cameras "$CAMERAS")
   _start_one pipeline "$ROOT/surveillance_AI" "$LOGS/pipeline.log" \
     "$AI_PY" pipeline.py "${cam_arg[@]}" $PIPELINE_ARGS --brain-url http://localhost:8000
+  log "Starting storage pruner (keep ${RETENTION_DAYS}d, cap ${STORAGE_MAX_GB}GB)…"
+  _start_one prune "$ROOT/surveillance_AI" "$LOGS/prune.log" \
+    "$AI_PY" prune_storage.py --loop
+  # DB retention (Postgres-only; the Brain's own scheduler is off in native mode).
+  _start_one dbprune "$BRAIN_DIR" "$LOGS/dbprune.log" \
+    "$BRAIN_PYEXE" scripts/prune_events.py --loop
   echo
   ok "All up.  Dashboard: http://localhost:8080   (admin / password123)   ·   API docs: http://localhost:8000/docs"
 }
 
-cmd_stop() { _stop_one pipeline; _stop_one ui; _stop_one brain; ok "All stopped (Postgres/Redis left running — they're OS services)."; }
+cmd_stop() { _stop_one dbprune; _stop_one prune; _stop_one pipeline; _stop_one ui; _stop_one brain; ok "All stopped (Postgres/Redis left running — they're OS services)."; }
 
 cmd_status() {
-  for n in brain ui pipeline; do
+  for n in brain ui pipeline prune dbprune; do
     if _alive "$n"; then ok "$n running (pid $(cat "$PIDS/$n.pid"))"; else warn "$n stopped"; fi
   done
   echo "--- Brain health ---"; curl -s http://localhost:8000/health 2>/dev/null || echo "(unreachable)"; echo

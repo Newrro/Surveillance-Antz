@@ -18,14 +18,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import config
 from db.models import Classification, IdentityType, MatchedBy
-from repositories import embedding_repo, identity_repo
+from repositories import embedding_repo, event_repo, identity_repo
 from services import feature_matcher
 
 logger = logging.getLogger(__name__)
@@ -52,6 +52,8 @@ async def resolve(
     detection_conf: float,
     face_embedding: Optional[Sequence[float]] = None,
     body_embedding: Optional[Sequence[float]] = None,
+    camera_id: Optional[int] = None,
+    detected_at: Optional[datetime] = None,
 ) -> ResolutionResult:
     """
     Algorithm:
@@ -110,6 +112,22 @@ async def resolve(
             )
         logger.warning("Face match id=%d gone — enrolling new person", best_id)
 
+    # ---- 3b. CONSTRAINED BODY RE-LINK (prevent duplicate visitors) --- #
+    # The face didn't match, so we're about to mint a NEW visitor. But the SAME
+    # person's face often fails to re-match frame-to-frame (angle, motion blur),
+    # which is exactly how one person fragments into VIS-A, VIS-B, VIS-C. Before
+    # creating a duplicate, check whether this body strongly matches an identity
+    # seen on the SAME camera within the last BODY_MERGE_WINDOW_SECONDS. If so it's
+    # the same person (same clothes, same place, seconds apart) → re-link instead
+    # of minting a new id. Constrained by camera + short window + a HIGH cosine so
+    # it can never merge two different strangers in similar clothing.
+    relinked = await _constrained_body_relink(
+        session, has_face_now, has_body_now, face_embedding, body_embedding,
+        camera_id, detected_at,
+    )
+    if relinked is not None:
+        return relinked
+
     # ---- 4. NEW FACE → UNKNOWN (enrolled; confirmed on re-match) ----- #
     # A clear face we don't recognise → a new person. Enroll their FACE (the
     # identity key) + body (their picture). They stay UNKNOWN until seen again by
@@ -142,6 +160,64 @@ async def resolve(
         similarity=None,
         label=label,
     )
+
+
+async def _constrained_body_relink(
+    session: AsyncSession,
+    has_face_now: bool,
+    has_body_now: bool,
+    face_embedding: Optional[Sequence[float]],
+    body_embedding: Optional[Sequence[float]],
+    camera_id: Optional[int],
+    detected_at: Optional[datetime],
+) -> Optional[ResolutionResult]:
+    """Re-link an about-to-be-duplicated sighting to a recent same-camera identity
+    by BODY similarity, under strict constraints (same camera + short time window +
+    HIGH cosine). Returns a ResolutionResult on a re-link, else None.
+
+    This is deliberately NOT identity-by-clothing: it only fires when we ALSO have
+    a face this frame (a real person we simply failed to face-match) and only
+    re-joins someone already seen here moments ago — it can't invent an identity
+    for a faceless stranger, nor merge people across cameras or time."""
+    if not has_body_now or not has_face_now or body_embedding is None:
+        return None
+    if camera_id is None or detected_at is None:
+        return None
+
+    body_hits = await embedding_repo.search_body(body_embedding, limit=5)
+    body_hits = [(i, s) for (i, s) in body_hits if s >= config.BODY_MERGE_THRESHOLD]
+    if not body_hits:
+        return None
+
+    since = detected_at - timedelta(seconds=config.BODY_MERGE_WINDOW_SECONDS)
+    recent = await event_repo.identities_seen_on_camera_since(session, camera_id, since)
+    if not recent:
+        return None
+
+    for cand_id, sim in body_hits:            # body_hits is best-first
+        if cand_id not in recent:
+            continue
+        identity = await identity_repo.fetch_identity_by_id(session, cand_id)
+        if identity is None:
+            continue
+        # Same person → backfill this fresh face onto them and classify as usual.
+        await _note_and_maybe_confirm(
+            session, identity, has_face_now, has_body_now, face_embedding, body_embedding,
+        )
+        classification, label = await _classify(session, identity)
+        logger.info(
+            "Body RE-LINK: sighting joined to %s (id=%d) — body sim=%.3f, seen on "
+            "camera %s within %ds (no duplicate visitor created)",
+            label, cand_id, sim, camera_id, config.BODY_MERGE_WINDOW_SECONDS,
+        )
+        return ResolutionResult(
+            classification=classification,
+            identity_id=identity.id,
+            matched_by=MatchedBy.BODY,
+            similarity=sim,
+            label=label,
+        )
+    return None
 
 
 async def _classify(session: AsyncSession, identity):

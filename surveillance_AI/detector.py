@@ -32,6 +32,9 @@ MIN_ASPECT = 1.1        # height/width >= this (people are upright, not wide)
 
 DETECTOR_MODEL = os.environ.get("DETECTOR_MODEL", "rtdetr")
 RTDETR_CHECKPOINT = os.environ.get("RTDETR_CHECKPOINT", "PekingU/rtdetr_r50vd")
+# Half-precision (fp16) detection on CUDA — ~1.5-2x faster on the RTX 4050, no
+# meaningful accuracy loss for person boxes. Applies to RT-DETR only.
+DET_FP16 = os.environ.get("DET_FP16", "1") == "1"
 
 
 def pick_device():
@@ -60,7 +63,9 @@ class PersonDetector:
         self.model_name = (model or DETECTOR_MODEL).lower()
         self.device = device or pick_device()
         self.det_max_side = det_max_side
+        
         print(f"[detector] loading '{self.model_name}' on {self.device} ...")
+        
         if self.model_name == "rtdetr":
             self._init_rtdetr()
         elif self.model_name in ("fasterrcnn_resnet50", "fasterrcnn_mobilenet"):
@@ -74,10 +79,15 @@ class PersonDetector:
         from transformers import RTDetrForObjectDetection, RTDetrImageProcessor
         self._proc = RTDetrImageProcessor.from_pretrained(RTDETR_CHECKPOINT)
         self._model = RTDetrForObjectDetection.from_pretrained(RTDETR_CHECKPOINT).eval().to(self.device)
+        self.fp16 = DET_FP16 and self.device.type == "cuda"
+        if self.fp16:
+            self._model.half()
+            print("[detector] rtdetr running in fp16")
         id2label = self._model.config.id2label
         self._person_ids = {i for i, l in id2label.items() if str(l).lower() == "person"}
 
     def _init_frcnn(self):
+        self.fp16 = False   # torchvision detection models stay fp32
         from torchvision.models import detection as D
         if self.model_name == "fasterrcnn_resnet50":
             w = D.FasterRCNN_ResNet50_FPN_V2_Weights.DEFAULT
@@ -93,6 +103,8 @@ class PersonDetector:
         if self.model_name == "rtdetr":
             from PIL import Image
             inputs = self._proc(images=Image.fromarray(rgb), return_tensors="pt").to(self.device)
+            if getattr(self, "fp16", False):
+                inputs["pixel_values"] = inputs["pixel_values"].half()
             with torch.inference_mode():
                 out = self._model(**inputs)
             res = self._proc.post_process_object_detection(
@@ -118,6 +130,42 @@ class PersonDetector:
             boxes.append((float(x1), float(y1), float(x2), float(y2), float(score)))
         return boxes
 
+    def detect_batch(self, frames_bgr, conf=0.50):
+        """RT-DETR: run several camera frames in ONE forward pass (one GPU launch
+        for all cameras instead of N). Returns a list of absolute-pixel box-lists
+        aligned to `frames_bgr`, each already shape-filtered. FRCNN / single frame
+        fall back to per-frame detect()."""
+        if self.model_name != "rtdetr" or len(frames_bgr) <= 1:
+            return [self.detect(f, conf=conf) for f in frames_bgr]
+        
+        from PIL import Image
+        
+        imgs = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)) for f in frames_bgr]
+        sizes = torch.tensor([[f.shape[0], f.shape[1]] for f in frames_bgr]).to(self.device)
+        inputs = self._proc(images=imgs, return_tensors="pt").to(self.device)
+        
+        if getattr(self, "fp16", False):
+            inputs["pixel_values"] = inputs["pixel_values"].half()
+        with torch.inference_mode():
+            out = self._model(**inputs)
+        results = self._proc.post_process_object_detection(
+            out, target_sizes=sizes, threshold=min(conf, 0.25))
+        
+        batched = []
+        
+        for res, f in zip(results, frames_bgr):
+            h = f.shape[0]
+            boxes = []
+            for score, label, box in zip(res["scores"], res["labels"], res["boxes"]):
+                if int(label) not in self._person_ids or float(score) < conf:
+                    continue
+                x1, y1, x2, y2 = box.detach().cpu().numpy()
+                if not _personlike(x1, y1, x2, y2, h):
+                    continue
+                boxes.append((float(x1), float(y1), float(x2), float(y2), float(score)))
+            batched.append(boxes)
+        return batched
+
     # ── public API (same for every backend) ───────────────────
     def detect(self, frame_bgr, conf=0.50, normalized=False):
         """Return person boxes.
@@ -126,6 +174,7 @@ class PersonDetector:
         """
         h, w = frame_bgr.shape[:2]
         out = []
+        
         for (x1, y1, x2, y2, score) in self._infer(frame_bgr, conf):
             if not _personlike(x1, y1, x2, y2, h):
                 continue
@@ -139,6 +188,7 @@ class PersonDetector:
 def draw_boxes(img, boxes, normalized=False, thickness=2, with_score=True):
     """Draw person boxes on `img` in place. Set normalized=True if boxes are 0..1."""
     H, W = img.shape[:2]
+    
     for (x1, y1, x2, y2, score) in boxes:
         if normalized:
             x1, y1, x2, y2 = x1 * W, y1 * H, x2 * W, y2 * H

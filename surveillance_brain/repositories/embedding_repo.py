@@ -70,3 +70,8 @@ async def store_embeddings(
 async def delete_embeddings_for_identity(identity_id: int) -> None:
     """Remove all embeddings (face + body) for an identity — V2 PII deletion."""
     await vector_store.delete_for_identity(identity_id)
+
+
+async def fetch_face_vectors(identity_id: int) -> List[List[float]]:
+    """All face vectors stored for an identity (for centroid consolidation)."""
+    return await vector_store.fetch_vectors_for_identity(config.QDRANT_FACE_COLLECTION, identity_id)

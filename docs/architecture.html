@@ -1,0 +1,669 @@
+<title>Surveillance Antz — System Guide</title>
+<style>
+  :root {
+    --bg: #f6f7f5;
+    --surface: #ffffff;
+    --surface-2: #eef1ee;
+    --text: #131819;
+    --muted: #5c6668;
+    --faint: #8a9496;
+    --border: #dde2df;
+    --border-strong: #c6cdc8;
+    --accent: #0d8a79;
+    --accent-soft: #0d8a7918;
+    --perception: #1f74d6;
+    --brain: #7a54f0;
+    --interface: #0d8a79;
+    --emp: #16875f;
+    --vis: #b9820f;
+    --unk: #cf463d;
+    --code-bg: #f0f2ef;
+    --code-text: #1c3d38;
+    --shadow: 0 1px 2px rgba(20,30,25,.05), 0 8px 24px rgba(20,30,25,.06);
+    --font-sans: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --maxw: 70ch;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1012;
+      --surface: #14191b;
+      --surface-2: #1b2124;
+      --text: #e7ecec;
+      --muted: #9aa6a8;
+      --faint: #6b7679;
+      --border: #242c2f;
+      --border-strong: #313b3f;
+      --accent: #2ed3b7;
+      --accent-soft: #2ed3b71c;
+      --perception: #5aa6f5;
+      --brain: #a68eff;
+      --interface: #2ed3b7;
+      --emp: #3ecf9c;
+      --vis: #e6b23c;
+      --unk: #f0655c;
+      --code-bg: #10201d;
+      --code-text: #b7e8de;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f6f7f5; --surface: #ffffff; --surface-2: #eef1ee; --text: #131819;
+    --muted: #5c6668; --faint: #8a9496; --border: #dde2df; --border-strong: #c6cdc8;
+    --accent: #0d8a79; --accent-soft: #0d8a7918; --perception: #1f74d6; --brain: #7a54f0;
+    --interface: #0d8a79; --emp: #16875f; --vis: #b9820f; --unk: #cf463d;
+    --code-bg: #f0f2ef; --code-text: #1c3d38; --shadow: 0 1px 2px rgba(20,30,25,.05), 0 8px 24px rgba(20,30,25,.06);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1012; --surface: #14191b; --surface-2: #1b2124; --text: #e7ecec;
+    --muted: #9aa6a8; --faint: #6b7679; --border: #242c2f; --border-strong: #313b3f;
+    --accent: #2ed3b7; --accent-soft: #2ed3b71c; --perception: #5aa6f5; --brain: #a68eff;
+    --interface: #2ed3b7; --emp: #3ecf9c; --vis: #e6b23c; --unk: #f0655c;
+    --code-bg: #10201d; --code-text: #b7e8de; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 1.5rem; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: var(--font-sans); line-height: 1.68;
+    font-size: 16.5px; -webkit-font-smoothing: antialiased;
+  }
+
+  .layout { display: grid; grid-template-columns: 274px minmax(0, 1fr); gap: 0; max-width: 1280px; margin: 0 auto; }
+
+  /* ---- sidebar ---- */
+  aside {
+    position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto;
+    border-right: 1px solid var(--border); padding: 1.6rem 1.1rem 3rem;
+    background: var(--bg);
+  }
+  .brandmark { display: flex; align-items: center; gap: .6rem; margin-bottom: .3rem; }
+  .brandmark .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); flex: none; }
+  .brandmark b { font-size: .95rem; letter-spacing: -.01em; }
+  aside .sub { font-family: var(--font-mono); font-size: .66rem; letter-spacing: .14em; text-transform: uppercase; color: var(--faint); margin: 0 0 1.4rem 1.7rem; }
+  nav.toc a {
+    display: block; color: var(--muted); text-decoration: none; font-size: .86rem;
+    padding: .28rem .55rem; border-radius: 7px; border-left: 2px solid transparent; line-height: 1.35;
+  }
+  nav.toc a.lvl2 { padding-left: 1.4rem; font-size: .81rem; color: var(--faint); }
+  nav.toc a:hover { background: var(--surface-2); color: var(--text); }
+  nav.toc a.active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+  nav.toc .grp { font-family: var(--font-mono); font-size: .64rem; letter-spacing: .16em; text-transform: uppercase; color: var(--faint); margin: 1.3rem 0 .35rem .55rem; }
+
+  /* ---- main ---- */
+  main { padding: 2.4rem 3rem 6rem; min-width: 0; }
+  section { margin-bottom: 3.6rem; scroll-margin-top: 1.5rem; }
+  .prose { max-width: var(--maxw); }
+  .prose p, .prose ul, .prose ol { max-width: var(--maxw); }
+
+  h1 { font-size: 2.55rem; line-height: 1.05; letter-spacing: -.03em; margin: .2rem 0 .4rem; text-wrap: balance; font-weight: 800; }
+  h2 { font-size: 1.62rem; letter-spacing: -.02em; margin: 0 0 .4rem; text-wrap: balance; font-weight: 700; padding-top: .3rem; }
+  h3 { font-size: 1.12rem; letter-spacing: -.01em; margin: 2rem 0 .5rem; font-weight: 700; }
+  h4 { font-size: .95rem; margin: 1.4rem 0 .4rem; font-weight: 700; }
+  p { margin: .7rem 0; }
+  a { color: var(--accent); }
+  .eyebrow { font-family: var(--font-mono); font-size: .7rem; letter-spacing: .18em; text-transform: uppercase; color: var(--faint); display: block; margin-bottom: .5rem; }
+  .sec-head { border-top: 1px solid var(--border); padding-top: 1.6rem; margin-bottom: 1.2rem; }
+  strong { font-weight: 660; }
+  code {
+    font-family: var(--font-mono); font-size: .84em; background: var(--code-bg);
+    color: var(--code-text); padding: .12em .4em; border-radius: 5px; word-break: break-word;
+  }
+  pre { background: var(--code-bg); color: var(--code-text); border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.1rem; overflow-x: auto; font-family: var(--font-mono); font-size: .82rem; line-height: 1.6; }
+  pre code { background: none; padding: 0; color: inherit; font-size: 1em; }
+  ul, ol { padding-left: 1.25rem; }
+  li { margin: .3rem 0; }
+
+  /* hero */
+  .hero { border-bottom: 1px solid var(--border); padding-bottom: 2rem; margin-bottom: 2.6rem; }
+  .lede { font-size: 1.16rem; color: var(--muted); max-width: 60ch; line-height: 1.6; }
+
+  /* pipeline diagram */
+  .pipe { display: flex; flex-wrap: wrap; align-items: stretch; gap: .5rem; margin: 1.8rem 0 .4rem; }
+  .pipe .stage { flex: 1 1 150px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: .85rem .9rem; box-shadow: var(--shadow); position: relative; }
+  .pipe .stage .n { font-family: var(--font-mono); font-size: .64rem; letter-spacing: .12em; color: var(--faint); }
+  .pipe .stage b { display: block; font-size: .94rem; margin: .15rem 0 .2rem; letter-spacing: -.01em; }
+  .pipe .stage span { font-size: .78rem; color: var(--muted); line-height: 1.4; display: block; }
+  .pipe .arrow { align-self: center; color: var(--faint); font-size: 1.1rem; flex: none; }
+  .stage.s1 { border-top: 3px solid var(--perception); }
+  .stage.s2 { border-top: 3px solid var(--brain); }
+  .stage.s3 { border-top: 3px solid var(--interface); }
+  .stage.s0 { border-top: 3px solid var(--border-strong); }
+
+  /* cards / callouts */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 1.1rem 1.25rem; box-shadow: var(--shadow); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 1rem; margin: 1.2rem 0; }
+  .note { border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 10px 10px 0; padding: .8rem 1rem; margin: 1.2rem 0; font-size: .92rem; }
+  .note.warn { border-left-color: var(--vis); background: color-mix(in srgb, var(--vis) 10%, transparent); }
+  .note.gotcha { border-left-color: var(--unk); background: color-mix(in srgb, var(--unk) 9%, transparent); }
+  .note .tag { font-family: var(--font-mono); font-size: .64rem; letter-spacing: .13em; text-transform: uppercase; display: block; margin-bottom: .25rem; color: var(--muted); }
+
+  /* part banner */
+  .partbar { display: flex; align-items: center; gap: .8rem; margin-bottom: .3rem; }
+  .partbar .chip { font-family: var(--font-mono); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; padding: .25rem .6rem; border-radius: 999px; color: #fff; font-weight: 600; }
+  .chip.p1 { background: var(--perception); } .chip.p2 { background: var(--brain); } .chip.p3 { background: var(--interface); }
+
+  /* tables */
+  .tablewrap { overflow-x: auto; margin: 1.1rem 0; border: 1px solid var(--border); border-radius: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: .855rem; }
+  th, td { text-align: left; padding: .6rem .8rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-family: var(--font-mono); font-size: .66rem; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); background: var(--surface-2); position: sticky; top: 0; }
+  tr:last-child td { border-bottom: none; }
+  td code { white-space: nowrap; }
+  td.file code { color: var(--text); background: transparent; padding: 0; font-weight: 600; }
+  table.api td:first-child code { font-weight: 700; }
+  .tabular { font-variant-numeric: tabular-nums; }
+
+  /* pills */
+  .pill { display: inline-block; font-family: var(--font-mono); font-size: .68rem; letter-spacing: .04em; padding: .1rem .5rem; border-radius: 999px; border: 1px solid; font-weight: 600; }
+  .pill.emp { color: var(--emp); border-color: color-mix(in srgb, var(--emp) 45%, transparent); background: color-mix(in srgb, var(--emp) 10%, transparent); }
+  .pill.vis { color: var(--vis); border-color: color-mix(in srgb, var(--vis) 45%, transparent); background: color-mix(in srgb, var(--vis) 10%, transparent); }
+  .pill.unk { color: var(--unk); border-color: color-mix(in srgb, var(--unk) 45%, transparent); background: color-mix(in srgb, var(--unk) 10%, transparent); }
+  .pill.auth { color: var(--muted); border-color: var(--border-strong); background: var(--surface-2); }
+
+  /* numbered journey */
+  ol.journey { list-style: none; padding: 0; counter-reset: j; max-width: none; }
+  ol.journey > li { counter-increment: j; position: relative; padding: 0 0 1.2rem 3rem; border-left: 2px solid var(--border); margin-left: 1rem; }
+  ol.journey > li::before { content: counter(j); position: absolute; left: -1.05rem; top: -.15rem; width: 2rem; height: 2rem; background: var(--surface); border: 2px solid var(--accent); color: var(--accent); border-radius: 50%; display: grid; place-items: center; font-family: var(--font-mono); font-weight: 700; font-size: .8rem; }
+  ol.journey > li:last-child { border-left-color: transparent; }
+  ol.journey b { letter-spacing: -.01em; }
+
+  .kbd { font-family: var(--font-mono); font-size: .8rem; background: var(--surface-2); border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 6px; padding: .05rem .4rem; }
+
+  .themetoggle { position: fixed; top: .9rem; right: 1rem; z-index: 50; background: var(--surface); border: 1px solid var(--border); color: var(--muted); border-radius: 999px; padding: .4rem .8rem; font-family: var(--font-mono); font-size: .72rem; cursor: pointer; box-shadow: var(--shadow); }
+  .themetoggle:hover { color: var(--text); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+  .footer { border-top: 1px solid var(--border); margin-top: 3rem; padding-top: 1.4rem; color: var(--faint); font-size: .82rem; max-width: var(--maxw); }
+
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+    aside { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--border); }
+    aside nav.toc { columns: 2; column-gap: 1rem; }
+    main { padding: 1.8rem 1.2rem 4rem; }
+    h1 { font-size: 2rem; }
+  }
+</style>
+
+<button class="themetoggle" id="themebtn" aria-label="Toggle color theme">◐ theme</button>
+
+<div class="layout">
+  <aside>
+    <div class="brandmark"><span class="dot"></span><b>Surveillance&nbsp;Antz</b></div>
+    <p class="sub">Project RUNG01 · System Guide</p>
+    <nav class="toc" id="toc">
+      <div class="grp">Foundations</div>
+      <a href="#overview">What this system is</a>
+      <a href="#dataflow">Architecture &amp; data flow</a>
+      <a href="#journey">Life of one detection</a>
+      <a href="#contracts">The two contracts</a>
+      <a href="#repo">Repository map</a>
+
+      <div class="grp">Part 1 · Perception</div>
+      <a href="#p1">Overview &amp; models</a>
+      <a href="#p1-ingest" class="lvl2">Ingest &amp; the pipeline</a>
+      <a href="#p1-identity" class="lvl2">The identity engine</a>
+      <a href="#p1-files" class="lvl2">File reference</a>
+
+      <div class="grp">Part 2 · Brain</div>
+      <a href="#p2">Overview &amp; layers</a>
+      <a href="#p2-schema" class="lvl2">Database schema</a>
+      <a href="#p2-resolve" class="lvl2">Identity resolution</a>
+      <a href="#p2-api" class="lvl2">API surface</a>
+      <a href="#p2-files" class="lvl2">File reference</a>
+
+      <div class="grp">Part 3 · Interface</div>
+      <a href="#p3">Overview</a>
+      <a href="#p3-files" class="lvl2">File reference</a>
+
+      <div class="grp">Shared &amp; Ops</div>
+      <a href="#cameras">Camera registry</a>
+      <a href="#run">Running the system</a>
+      <a href="#storage">Storage &amp; retention</a>
+      <a href="#gotchas">Gotchas &amp; notes</a>
+      <a href="#glossary">Glossary</a>
+    </nav>
+  </aside>
+
+  <main>
+    <div class="hero">
+      <span class="eyebrow">AI facility surveillance · monorepo walkthrough</span>
+      <h1>How Surveillance Antz works</h1>
+      <p class="lede">Cameras see people. The system remembers who they are, where they are, and keeps a log of everything that happened. This guide teaches the whole codebase — every part, every file, and the ideas that hold them together.</p>
+      <div class="pipe" role="img" aria-label="Pipeline: cameras to perception to brain to interface">
+        <div class="stage s0"><span class="n">SOURCE</span><b>Cameras</b><span>RTSP / HTTP / 360°</span></div>
+        <span class="arrow">→</span>
+        <div class="stage s1"><span class="n">PART 1</span><b>Perception</b><span>detect · segment · embed · identify</span></div>
+        <span class="arrow">→</span>
+        <div class="stage s2"><span class="n">PART 2</span><b>Brain</b><span>identity · tracking · database · API</span></div>
+        <span class="arrow">→</span>
+        <div class="stage s3"><span class="n">PART 3</span><b>Interface</b><span>live grid · logs · profiles</span></div>
+      </div>
+    </div>
+
+    <!-- ============ OVERVIEW ============ -->
+    <section id="overview">
+      <div class="sec-head"><span class="eyebrow">Foundations</span><h2>What this system is</h2></div>
+      <div class="prose">
+        <p>Surveillance Antz is a facility surveillance system split into <strong>three independently-buildable parts</strong> that talk to each other only through <strong>two agreed JSON shapes</strong>. That split is the single most important idea in the project: each part can be built, tested, and run on its own against mock data, because the boundaries between them are frozen contracts rather than shared code.</p>
+        <div class="grid2">
+          <div class="card"><span class="pill" style="color:var(--perception);border-color:var(--perception)">PART 1</span><h4 style="margin-top:.5rem">Perception</h4><p style="font-size:.88rem;color:var(--muted);margin:.2rem 0 0"><code>surveillance_AI/</code> — reads cameras, finds people, turns each into a <strong>face</strong> and <strong>body</strong> embedding, assigns a local identity, and POSTs a detection to the Brain. Runs on the GPU.</p></div>
+          <div class="card"><span class="pill" style="color:var(--brain);border-color:var(--brain)">PART 2</span><h4 style="margin-top:.5rem">Brain</h4><p style="font-size:.88rem;color:var(--muted);margin:.2rem 0 0"><code>surveillance_brain/</code> — a FastAPI service. Re-resolves identity via vector search, records history in Postgres, tracks live presence in Redis, and streams events over a WebSocket. Runs <em>no</em> ML itself.</p></div>
+          <div class="card"><span class="pill" style="color:var(--interface);border-color:var(--interface)">PART 3</span><h4 style="margin-top:.5rem">Interface</h4><p style="font-size:.88rem;color:var(--muted);margin:.2rem 0 0"><code>surveillance_UI/</code> — the "Sentinel" operator console. A single-page app that reads only the Brain's API: live camera grid, event log, person profiles, enrollment.</p></div>
+        </div>
+        <p>Two more folders are shared infrastructure rather than "parts": <code>surveillance_Camera_config/</code> (the camera registry both Part 1 and Part 2 read) and <code>contracts/</code> (the two JSON schemas). The <code>storage/</code> tree holds media (snapshots/clips) and log exports, referenced by path across parts.</p>
+      </div>
+    </section>
+
+    <!-- ============ DATA FLOW ============ -->
+    <section id="dataflow">
+      <div class="sec-head"><span class="eyebrow">Foundations</span><h2>Architecture &amp; data flow</h2></div>
+      <div class="prose">
+        <p>The parts are strictly one-directional: cameras feed Perception, Perception POSTs to the Brain, the Interface reads the Brain. Nothing flows backwards. Two facts about the runtime surprise most newcomers, so learn them early:</p>
+        <ul>
+          <li><strong>The Brain does no machine learning.</strong> All the neural networks (person detection, face/body embeddings) live in Part 1. The Brain only does <em>vector search</em> over embeddings it is handed, plus bookkeeping. This is why the Brain runs fine in a plain container with no GPU.</li>
+          <li><strong>The dashboard grid is not decoded by the UI.</strong> The perception pipeline is the single RTSP consumer. It draws the real detection boxes onto each frame and writes a small annotated JPEG to shared memory (<code>/dev/shm/sentinel/&lt;camera&gt;.jpg</code>). The UI bridge just re-serves those JPEGs. So the picture the operator sees <em>is</em> the detector's own output, and no frame is decoded twice.</li>
+        </ul>
+      </div>
+      <div class="note"><span class="tag">Mental model</span>Perception answers <em>"what did a camera just see?"</em> and hands over raw embeddings. The Brain answers <em>"who was that, and where are they now?"</em> The Interface answers <em>"show me."</em> The two contracts sit exactly on those two boundaries.</div>
+    </section>
+
+    <!-- ============ JOURNEY ============ -->
+    <section id="journey">
+      <div class="sec-head"><span class="eyebrow">Foundations</span><h2>Life of one detection</h2></div>
+      <div class="prose"><p>Here is the complete journey of a single person walking past a gate camera, end to end. This is the spine of the whole system — everything else is detail hanging off these steps.</p></div>
+      <ol class="journey">
+        <li><b>A camera thread grabs a frame.</b> In Part 1, <code>nvr_stream.py</code> runs one background thread per camera keeping only the latest frame (GPU/NVDEC decode when available). Dead cameras fail fast and reconnect.</li>
+        <li><b>The detector finds people.</b> <code>detector.py</code> runs RT-DETR (batched, fp16) and returns person boxes, filtered by an "upright, tall enough" shape test to reject clutter.</li>
+        <li><b>A tracker gives each person a stable ID.</b> <code>tracker.py</code> runs <strong>OC-SORT</strong> (a Kalman-motion tracker via BoxMOT, <code>MotionTracker</code>), so a person keeps one track ID through brief occlusions and turns — far fewer spurious new tracks than the old IoU-only association. Identity is resolved <em>once per track</em> instead of flickering every frame. (<code>TRACKER=simple</code> reverts to the IoU tracker.)</li>
+        <li><b>Identity is extracted &amp; resolved on the BEST shot.</b> On <code>identify</code>-role cameras, <code>feature_id/</code> makes a <strong>face</strong> embedding (AdaFace, primary) and a <strong>body</strong> embedding (OSNet, fallback). Rather than resolving off the first (often blurry / side-on) frame, the identity worker <em>probes the track a few frames and keeps the highest-quality face</em> (scored by AdaFace's own feature-norm × alignment sharpness), then resolves from that best shot — so the same person re-matches one gallery entry reliably instead of fragmenting.</li>
+        <li><b>A snapshot is saved (once per track).</b> A body crop and face crop are written under <code>storage/img/&lt;camera&gt;/</code>; the face thumbnail is refreshed when a better shot appears. The path rides along in the payload.</li>
+        <li><b>Part 1 POSTs the detection.</b> The <a href="#contracts">Part 1 → Part 2 contract</a> — camera, timestamp, confidence, the 512-d embeddings, snapshot path — hits the Brain's <code>POST /events</code>.</li>
+        <li><b>The Brain re-resolves identity.</b> <code>identity_resolver</code> gates on confidence, then does a <strong>face</strong> vector search in Qdrant. On a face miss it tries a <em>constrained body re-link</em> (same camera + last 90&nbsp;s + high body cosine) before minting anything new; still nothing → a fresh <span class="pill unk">Unknown</span> visitor is enrolled; a match → Employee/Visitor.</li>
+        <li><b>Presence &amp; dedup.</b> Redis records "this identity is at this camera now" (TTL'd); a 30-second window suppresses duplicate log rows. An <code>is_exit_camera</code> sighting closes the presence session instead.</li>
+        <li><b>History is written.</b> A row lands in the Postgres <code>detection_events</code> ledger (unless deduped).</li>
+        <li><b>The event is broadcast.</b> The resolved <a href="#contracts">Part 2 → Part 3 event object</a> fans out over <code>WS /live</code>.</li>
+        <li><b>The dashboard updates.</b> Part 3 folds the event into its in-memory people model and repaints badges/logs — while the camera tile shows the annotated frame the pipeline already wrote to shared memory.</li>
+      </ol>
+    </section>
+
+    <!-- ============ CONTRACTS ============ -->
+    <section id="contracts">
+      <div class="sec-head"><span class="eyebrow">Foundations</span><h2>The two contracts</h2></div>
+      <div class="prose">
+        <p>Everything hinges on two JSON shapes in <code>contracts/</code>. Freezing them on day one is what let three teams build in parallel. Validate against them with <code>jsonschema.validate</code>.</p>
+        <h3>Part 1 → Part 2 · the detection payload <span style="font-weight:400;color:var(--faint);font-size:.8rem">POST /events</span></h3>
+        <p>"What a camera saw." At least one embedding is required (<code>anyOf</code>); face is matched first, body is the fallback.</p>
+      </div>
+      <div class="tablewrap"><table>
+        <tr><th>Field</th><th>Type</th><th>Meaning</th></tr>
+        <tr><td class="file"><code>camera_id</code></td><td>string (req)</td><td>Camera UID; must exist in the cameras table.</td></tr>
+        <tr><td class="file"><code>timestamp</code></td><td>ISO8601 (req)</td><td>UTC time of the detection.</td></tr>
+        <tr><td class="file"><code>detection_conf</code></td><td>0.0–1.0 (req)</td><td>Detector's person-confidence. Below the gate → forced Unknown, no vector search.</td></tr>
+        <tr><td class="file"><code>face_embedding</code></td><td>512 floats</td><td>AdaFace vector when a face is visible (primary signal).</td></tr>
+        <tr><td class="file"><code>body_embedding</code></td><td>512 floats</td><td>OSNet vector (fallback / stored as picture).</td></tr>
+        <tr><td class="file"><code>detection_id</code></td><td>string</td><td>Stable id so a lingering stranger dedups correctly.</td></tr>
+        <tr><td class="file"><code>snapshot_path</code> / <code>clip_path</code></td><td>string</td><td>Media under the shared <code>storage/</code> tree.</td></tr>
+      </table></div>
+      <div class="prose">
+        <h3>Part 2 → Part 3 · the resolved event <span style="font-weight:400;color:var(--faint);font-size:.8rem">GET /events · WS /live</span></h3>
+        <p>"Who that was." The Brain's answer after identity + tracking. This is exactly what the UI's <code>upsertPerson</code> maps into its people model.</p>
+      </div>
+      <div class="tablewrap"><table>
+        <tr><th>Field</th><th>Meaning</th></tr>
+        <tr><td class="file"><code>time</code>, <code>camera</code>, <code>label</code></td><td>Required. Label is <span class="pill emp">Employee</span> / <span class="pill vis">Visitor</span> / <span class="pill unk">Unknown</span>.</td></tr>
+        <tr><td class="file"><code>person_id</code></td><td>Display id, e.g. <code>EMP-2026-0001</code>. Null for Unknown.</td></tr>
+        <tr><td class="file"><code>identity_id</code></td><td>Internal surrogate key — survives promote/demote. Null for Unknown.</td></tr>
+        <tr><td class="file"><code>name</code>, <code>confidence</code>, <code>matched_by</code>, <code>similarity</code></td><td>Who, how sure, and by which signal (<code>face</code>/<code>body</code>/<code>none</code>).</td></tr>
+        <tr><td class="file"><code>event_id</code>, <code>duplicate</code></td><td>Postgres row id (null if duplicate); dedup flag.</td></tr>
+        <tr><td class="file"><code>zone_id</code>, <code>snapshot</code>, <code>clip</code></td><td>Location + media pointers.</td></tr>
+      </table></div>
+      <div class="note gotcha"><span class="tag">Doc drift to know about</span>The contract file and some docstrings still say "below <strong>0.80</strong> → Unknown." The live thresholds are now <strong>detection 0.50 / face 0.42 / body 0.85</strong> — the Brain's <code>.env</code> was previously stuck at a stale <strong>0.80 / 0.65 / 0.60</strong> and <em>overrides</em> <code>config.py</code>, so the 0.65 face floor meant the same person almost never re-matched and every sighting minted a new Visitor. <code>.env</code> is now realigned. Trust the loaded constants, not the prose — and remember <code>.env</code> beats <code>config.py</code> (see Gotchas).</div>
+    </section>
+
+    <!-- ============ REPO MAP ============ -->
+    <section id="repo">
+      <div class="sec-head"><span class="eyebrow">Foundations</span><h2>Repository map</h2></div>
+      <pre><code>Surveillance-Antz/
+├── surveillance_AI/            Part 1 — Perception (Python, GPU)
+│   ├── nvr_stream.py           camera ingest (1 thread/cam, NVDEC)
+│   ├── detector.py             RT-DETR person detection (batched, fp16)
+│   ├── tracker.py              OC-SORT motion tracker (IoU fallback) — stable id per person
+│   ├── segmenter.py            SAM 2 masks (optional)
+│   ├── pano.py                 360° → flat perspective views
+│   ├── pipeline.py             THE producer: detect→identify→emit→preview
+│   ├── prune_storage.py        snapshot retention (age + size cap)
+│   ├── live_view.py            standalone detection viewer (QA)
+│   ├── emit_example.py         mock producer (synthetic embeddings)
+│   ├── models/                 model weights (gitignored)
+│   └── feature_id/             the identity engine (face + body)
+├── surveillance_brain/         Part 2 — Brain (FastAPI)
+│   ├── api/                    routers, schemas, auth, app factory
+│   ├── services/               business logic (ingestion, resolver, …)
+│   ├── repositories/           thin SQL / vector wrappers
+│   ├── db/                     ORM models, connection, Qdrant store
+│   ├── workers/                scheduled jobs (flush, archive, retention)
+│   ├── scripts/                seed.py, prune_events.py
+│   └── alembic/                database migrations
+├── surveillance_UI/            Part 3 — Interface (HTML/CSS/JS)
+│   ├── index.html app.js api.js data.js styles.css
+│   └── server.py               RTSP→MJPEG bridge + static server
+├── surveillance_Camera_config/ shared camera registry (+ loader.py)
+├── contracts/                  the two JSON schemas
+├── storage/                    shared media + log exports
+├── run.sh                      native GPU deployment orchestrator
+├── run_all.sh                  dev/demo orchestrator (simulator)
+└── INTEGRATION.md              all-three-parts integration guide</code></pre>
+    </section>
+
+    <!-- ============ PART 1 ============ -->
+    <section id="p1">
+      <div class="sec-head">
+        <div class="partbar"><span class="chip p1">Part 1</span><h2 style="margin:0">Perception — <code style="font-size:.7em">surveillance_AI/</code></h2></div>
+      </div>
+      <div class="prose">
+        <p>Perception turns raw camera pixels into an identified person and a detection payload. It is the only GPU-heavy part. Its guiding principle is <strong>face-first, body-fallback</strong>: faces are far more discriminative than body appearance, so a visible face gives a stable identity; the body vector is a weaker backup.</p>
+      </div>
+      <div class="tablewrap"><table>
+        <tr><th>Stage</th><th>Model</th><th>File</th></tr>
+        <tr><td>Detection — find people</td><td><strong>RT-DETR</strong> (transformer; swappable to FasterRCNN)</td><td><code>detector.py</code></td></tr>
+        <tr><td>Segmentation — mask a person</td><td><strong>SAM 2</strong> (optional; off in live mode)</td><td><code>segmenter.py</code></td></tr>
+        <tr><td>Face embedding — PRIMARY id</td><td><strong>AdaFace</strong> IR-101 / WebFace12M + MTCNN detector</td><td><code>feature_id/face_extractor.py</code></td></tr>
+        <tr><td>Body embedding — FALLBACK id</td><td><strong>OSNet</strong> (torchreid, market1501)</td><td><code>feature_id/extractor.py</code></td></tr>
+      </table></div>
+      <div class="note"><span class="tag">Per-camera roles</span>Each camera has a <code>role</code>: <code>detect</code> (person boxes only — cheap, for path/perimeter cams) or <code>identify</code> (full detect → embed → identity — for high-res gate cams). This is how the heavy models run only where recognition actually matters.</div>
+
+      <h3 id="p1-ingest">Ingest &amp; the pipeline loop</h3>
+      <div class="prose">
+        <p><code>pipeline.py</code> is "the producer" and the heart of Part 1. It runs several cooperating threads:</p>
+        <ul>
+          <li><strong>Detection loop</strong> — gathers every camera whose interval has elapsed and runs them through <em>one batched</em> RT-DETR forward pass, then updates each camera's tracker and stores the current boxes as "annotations."</li>
+          <li><strong>Identity worker</strong> — a <em>throttled, low-priority</em> background thread (the grid runs on a separate high-priority CUDA stream and never waits on it). Each pass it picks the most-overdue stable track and does <strong>best-shot</strong> resolution: it probes the track over a few frames, keeps the highest-quality face (AdaFace feature-norm × sharpness), emits identity from that best shot to the Brain (or the local gallery offline), and re-emits only if a clearly better face turns up. Once matched, the track's label is <em>locked</em> so it never churns. Labels may lag a few seconds by design — accuracy over immediacy.</li>
+          <li><strong>Preview writers</strong> — one thread per camera that resizes the latest frame to tile size, draws the current boxes on it, and writes the annotated JPEG to <code>/dev/shm/sentinel/&lt;cam&gt;.jpg</code>. This decouples smooth display FPS from the slower detection rate.</li>
+        </ul>
+        <p>Supporting cast: <code>nvr_stream.py</code> owns camera capture (with a GPU-decode subprocess variant, <code>FFmpegCameraStream</code>, using <code>hevc_cuvid</code>); <code>pano.py</code> carves one 360° equirectangular stream into four flat views that behave like ordinary cameras.</p>
+      </div>
+
+      <h3 id="p1-identity">The identity engine — <code>feature_id/</code></h3>
+      <div class="prose">
+        <p>This package answers "who is this crop?" from two independent 512-d signals. Its public face is one class, <code>Identifier</code> (in <code>identify.py</code>), which owns a face extractor, a body extractor, and the gallery.</p>
+        <h4>The gallery</h4>
+        <p>The "gallery" (<code>gallery.py</code>) is the local people database: a single human-readable <code>data/gallery.json</code> file. Each <code>Person</code> holds a label, a name, and two lists of embedding "views" — <code>face_views</code> and <code>body_views</code>. Matching a probe against a person takes the <strong>maximum cosine over that person's views</strong>, which is the mechanism behind <em>progressive confidence</em>: more stored angles → a better chance a new sighting matches one of them closely.</p>
+        <pre><code>{ "visitor_counter": 3,
+  "people": [
+    { "id": "EMP-001", "label": "Employee", "name": "Asha R.",
+      "num_face_views": 2, "num_body_views": 1,
+      "face_views": [[512 floats], ...],
+      "body_views": [[512 floats], ...] } ] }</code></pre>
+        <h4>The decision (in <code>identify_features</code>)</h4>
+        <ol>
+          <li><strong>Quality gate.</strong> If <code>detection_conf</code> &lt; the threshold (0.50) → <span class="pill unk">Unknown</span> (<code>low_confidence</code>). The system refuses to guess on a weak detection.</li>
+          <li><strong>No features.</strong> If neither a face nor a body embedding could be made → <span class="pill unk">Unknown</span> (<code>no_features</code>).</li>
+          <li><strong>Face match (primary).</strong> Best face cosine ≥ <code>FACE_MATCH_THRESHOLD</code> (0.30, per-camera overridable) → return that person's stored label + confidence.</li>
+          <li><strong>Body match (fallback).</strong> Else best body cosine ≥ <code>BODY_MATCH_THRESHOLD</code> (0.75) → recognize by body.</li>
+          <li><strong>No match.</strong> Real features but nobody matched → auto-enroll a new <span class="pill vis">Visitor</span>.</li>
+        </ol>
+        <p>The <em>label</em> (Employee vs Visitor) is never decided by the matcher — it's whatever was stored on the matched person. <code>enroll.py</code> writes <span class="pill emp">Employee</span>; auto-enrolled and unmatched people are <span class="pill vis">Visitor</span>.</p>
+        <h4>Progressive learning</h4>
+        <p>When a person is recognized but not near-perfectly (<code>similarity &lt; LEARN_CEILING</code>, 0.92), the new embedding is a fresh angle worth remembering, so it's added as a new view. Above the ceiling it's a redundant duplicate; below the match threshold it wouldn't have matched at all. When a person exceeds <code>MAX_VIEWS_PER_PERSON</code> (10), the <em>most redundant</em> view is dropped. Cross-signal back-fill also happens: a face-matched person with no body view gains the current body vector, and vice-versa.</p>
+        <h4>Extraction detail</h4>
+        <p><code>face_extractor.py</code> uses MTCNN to find the largest face and its 5 landmarks, similarity-transforms it to a 112×112 aligned crop, gates on size/detector-confidence/<em>sharpness</em>, then runs AdaFace (architecture vendored in <code>adaface_net.py</code>) to an L2-normalized 512-vec — or returns <code>None</code> when there is no usable face. <code>extractor.py</code> runs OSNet to a normalized body vector; comparison everywhere is a plain dot product because vectors are pre-normalized.</p>
+      </div>
+
+      <h3 id="p1-files">File reference</h3>
+      <div class="tablewrap"><table>
+        <tr><th>File</th><th>What it does</th></tr>
+        <tr><td class="file"><code>pipeline.py</code></td><td>The producer. Batched detection, per-track identity worker, per-camera preview writers, optional <code>POST /events</code>.</td></tr>
+        <tr><td class="file"><code>detector.py</code></td><td><code>PersonDetector</code> — RT-DETR (default) or FasterRCNN. <code>detect()</code> / <code>detect_batch()</code>, fp16, shape filters.</td></tr>
+        <tr><td class="file"><code>tracker.py</code></td><td><code>MotionTracker</code> (OC-SORT/BoxMOT, default) + <code>SimpleTracker</code> (IoU fallback). <code>Track</code> carries label, resolved-lock, best-shot buffers, and snapshot paths.</td></tr>
+        <tr><td class="file"><code>nvr_stream.py</code></td><td>Camera ingest. <code>CameraStream</code> (OpenCV) &amp; <code>FFmpegCameraStream</code> (NVDEC); <code>start_streams()</code> factory; raw grid viewer.</td></tr>
+        <tr><td class="file"><code>pano.py</code></td><td><code>PanoStream</code> + <code>PanoView</code> — remap one 360° feed into flat perspective cameras.</td></tr>
+        <tr><td class="file"><code>segmenter.py</code></td><td><code>SAM2Segmenter</code> — per-person masks; lazy import so Part 1 runs without SAM 2 installed.</td></tr>
+        <tr><td class="file"><code>prune_storage.py</code></td><td>Bounds <code>storage/img/</code> by age (7 days) and a hard size cap (5 GB), oldest-first. Runs as a loop.</td></tr>
+        <tr><td class="file"><code>live_view.py</code></td><td>Standalone grid/fullscreen detection viewer with mask toggle. QA tool — no identity.</td></tr>
+        <tr><td class="file"><code>emit_example.py</code></td><td>Mock producer — synthetic embeddings POSTed to the Brain to exercise Parts 2/3.</td></tr>
+        <tr><td class="file"><code>feature_id/identify.py</code></td><td><code>Identifier</code> — the face-primary/body-fallback decision engine + progressive learning.</td></tr>
+        <tr><td class="file"><code>feature_id/gallery.py</code></td><td><code>Person</code> + <code>Gallery</code> — the single-JSON people DB, max-over-views matching, view pruning.</td></tr>
+        <tr><td class="file"><code>feature_id/face_extractor.py</code></td><td>MTCNN detect → align → sharpness gate → AdaFace 512-vec (or None).</td></tr>
+        <tr><td class="file"><code>feature_id/extractor.py</code></td><td>OSNet body embedding + <code>cosine_similarity</code>.</td></tr>
+        <tr><td class="file"><code>feature_id/adaface_net.py</code></td><td>Vendored AdaFace IR-network architecture (no weights).</td></tr>
+        <tr><td class="file"><code>feature_id/config.py</code></td><td>Every tunable: model paths, thresholds, quality gates, learning knobs, device.</td></tr>
+        <tr><td class="file"><code>feature_id/enroll.py</code></td><td>CLI to register a staff photo as an Employee (seeds face + body views).</td></tr>
+        <tr><td class="file"><code>feature_id/demo.py</code></td><td>Offline synthetic self-test of the body path.</td></tr>
+      </table></div>
+    </section>
+
+    <!-- ============ PART 2 ============ -->
+    <section id="p2">
+      <div class="sec-head">
+        <div class="partbar"><span class="chip p2">Part 2</span><h2 style="margin:0">Brain — <code style="font-size:.7em">surveillance_brain/</code></h2></div>
+      </div>
+      <div class="prose">
+        <p>The Brain is a FastAPI service with a clean four-layer shape: <code>api/</code> routers → <code>services/</code> business logic → <code>repositories/</code> thin data wrappers → <code>db/</code> (Postgres models, connections, and the Qdrant vector store). It ingests detections, re-resolves identity by vector search, records history, tracks live presence, and streams events. It holds three datastores:</p>
+        <div class="grid2">
+          <div class="card"><h4 style="margin-top:0">Postgres 16</h4><p style="font-size:.86rem;color:var(--muted);margin:.2rem 0 0">Structured, permanent history — identities, people, cameras, sessions, and the <code>detection_events</code> ledger. No embeddings here.</p></div>
+          <div class="card"><h4 style="margin-top:0">Qdrant</h4><p style="font-size:.86rem;color:var(--muted);margin:.2rem 0 0">The vector DB. Two collections — <code>faces</code> and <code>bodies</code> — of 512-d cosine vectors, keyed by <code>identity_id</code>. Can run embedded (in-process) or as a server.</p></div>
+          <div class="card"><h4 style="margin-top:0">Redis</h4><p style="font-size:.86rem;color:var(--muted);margin:.2rem 0 0">Live "who is where now" presence (TTL'd) and the duplicate-suppression window. Ephemeral by design.</p></div>
+        </div>
+      </div>
+
+      <h3 id="p2-schema">Database schema</h3>
+      <div class="prose">
+        <p>Six tables. The keystone is <code>identities</code>: a <strong>permanent surrogate key</strong> with a one-to-one extension into either <code>employees</code> or <code>visitors</code>. Promoting a visitor to an employee <em>mutates the type in place</em> — the id and all its history and vectors survive.</p>
+      </div>
+      <div class="tablewrap"><table>
+        <tr><th>Table</th><th>Holds</th><th>Notable</th></tr>
+        <tr><td class="file"><code>identities</code></td><td>Surrogate id, type (visitor/employee), unique <code>display_label</code> (VIS/EMP-YYYY-NNNN).</td><td>Never recreated; 1:1 to employee/visitor.</td></tr>
+        <tr><td class="file"><code>employees</code></td><td>name, department, email, hired_at.</td><td>PK = identity_id.</td></tr>
+        <tr><td class="file"><code>visitors</code></td><td>name?, first_seen_at, and <code>has_face</code>/<code>has_body</code>/<code>confirmed_at</code>.</td><td>The confirmation flags are the Unknown→Visitor gate.</td></tr>
+        <tr><td class="file"><code>cameras</code></td><td>camera_uid, name, zone_id, <code>is_exit_camera</code>, stream_url, is_active.</td><td>Seeded from the shared registry.</td></tr>
+        <tr><td class="file"><code>presence_sessions</code></td><td>entry/exit time + camera, status (inside/exited).</td><td>Historical presence; Redis holds the live view.</td></tr>
+        <tr><td class="file"><code>detection_events</code></td><td>The ledger: per-detection row with classification, matched_by, similarity, snapshot.</td><td>identity_id is nullable (Unknowns). The one unbounded table.</td></tr>
+      </table></div>
+
+      <h3 id="p2-resolve">Identity resolution — the confirmed-visitor model</h3>
+      <div class="prose">
+        <p>This is the Brain's brain (<code>services/identity_resolver.py</code>). Identity is <strong>face-first</strong>: clothing alone never <em>creates</em> an identity, but a tightly-constrained body signal is allowed to <em>re-join</em> a sighting that was about to fragment. Live thresholds: detection <strong>0.50</strong>, face <strong>0.42</strong>, body-fallback <strong>0.85</strong>, body-relink <strong>0.82</strong>.</p>
+        <ol>
+          <li><strong>Confidence gate.</strong> Below <code>DETECTION_CONF_THRESHOLD</code> (0.50) → Unknown, no search.</li>
+          <li><strong>Body-only stays Unknown.</strong> A sighting with no face embedding is never <em>identified</em> — recognizing people by clothing (OSNet) would merge different strangers. The body vector is stored only as a <em>picture</em> attached to a face-identified person.</li>
+          <li><strong>Face search.</strong> A face vector search in Qdrant; a hit ≥ <code>FACE_SIMILARITY_THRESHOLD</code> (0.42) → the matched identity.</li>
+          <li><strong>Constrained body re-link (face miss).</strong> Before minting a new Visitor, if we have a face <em>and</em> a body this frame, check the body against identities <strong>seen on the same camera within <code>BODY_MERGE_WINDOW_SECONDS</code> (90&nbsp;s)</strong> at ≥ <code>BODY_MERGE_THRESHOLD</code> (0.82) → re-link to that identity instead of creating a duplicate. Camera + short-window + high-cosine is what makes it safe: it re-joins one lingering person whose face just didn't match this frame, but <em>cannot</em> merge two strangers on different cameras or minutes apart. (Recency comes from Postgres — the Qdrant payload has no camera/time.)</li>
+          <li><strong>New face → Unknown + enroll.</strong> Still nothing → mint a <code>VIS-YYYY-NNNN</code>, store the face (and body) vectors, return <span class="pill unk">Unknown</span> — not yet confirmed.</li>
+        </ol>
+        <p><strong>Gallery consolidation (offline cleanup).</strong> Duplicates that still slip through are collapsed after the fact by <code>dedup_service.consolidate_visitors</code> (wires <code>merge_identities</code>): Visitor identities whose <strong>face-gallery centroids</strong> match ≥ <code>CONSOLIDATE_FACE_THRESHOLD</code> (0.55) are folded into the oldest id. It runs <em>in-process</em> via <code>POST /admin/consolidate</code> (dry-run by default) — a standalone script can't open the embedded Qdrant while the Brain holds it.</p>
+        <p>A person moves through three states:</p>
+        <div class="grid2">
+          <div class="card"><span class="pill unk">Unknown</span><p style="font-size:.86rem;color:var(--muted);margin:.4rem 0 0">A visitor row with no <code>confirmed_at</code> — a brand-new face, or face-only so far. Swept away nightly.</p></div>
+          <div class="card"><span class="pill vis">Visitor</span><p style="font-size:.86rem;color:var(--muted);margin:.4rem 0 0"><em>Confirmed</em> — has <strong>both</strong> a face and a body embedding on file. Re-identifiable by face on any future day.</p></div>
+          <div class="card"><span class="pill emp">Employee</span><p style="font-size:.86rem;color:var(--muted);margin:.4rem 0 0">Enrolled from a photo, or promoted from a visitor. Always "confirmed."</p></div>
+        </div>
+        <p><strong>Duplicate suppression:</strong> Part 1 emits one payload per crop per frame; a Redis <code>SET NX EX 30s</code> key logs the first and suppresses the rest (keyed on identity+camera, or on <code>detection_id</code> for unknowns). Presence still updates on every detection — only the ledger write and broadcast are deduped, and it fails <em>open</em> if Redis is down.</p>
+        <p><strong>Presence &amp; exit cameras:</strong> a sighting on an <code>is_exit_camera</code> closes the open presence session and evicts the Redis key; any other camera refreshes Redis and opens a session if none is open. At most one open session per identity.</p>
+      </div>
+
+      <h3 id="p2-api">API surface</h3>
+      <div class="tablewrap"><table class="api">
+        <tr><th>Method</th><th>Path</th><th>Auth</th><th>Purpose</th></tr>
+        <tr><td><code>POST</code></td><td><code>/events</code></td><td>—</td><td>Ingest one detection (resolve → track → dedup → log → broadcast).</td></tr>
+        <tr><td><code>GET</code></td><td><code>/events</code></td><td>—</td><td>Filtered event feed, newest-first.</td></tr>
+        <tr><td><code>GET</code></td><td><code>/person/{id}</code></td><td>—</td><td>Profile: history, sessions, photos, live presence.</td></tr>
+        <tr><td><code>GET</code></td><td><code>/employees</code></td><td>—</td><td>List enrolled employees.</td></tr>
+        <tr><td><code>POST</code></td><td><code>/employees</code></td><td><span class="pill auth">admin</span></td><td>Enroll a new employee (stores a Part-1 embedding).</td></tr>
+        <tr><td><code>WS</code></td><td><code>/live</code></td><td>—</td><td>Real-time event stream to Part 3.</td></tr>
+        <tr><td><code>GET</code></td><td><code>/search?q=</code></td><td>—</td><td>"Where is X now?" by name / EMP-ID / VIS-ID.</td></tr>
+        <tr><td><code>POST</code></td><td><code>/identities/{id}/promote</code></td><td><span class="pill auth">admin</span></td><td>Visitor → Employee (preserves id + history).</td></tr>
+        <tr><td><code>POST</code></td><td><code>/identities/{id}/demote</code></td><td><span class="pill auth">admin</span></td><td>Employee → Visitor.</td></tr>
+        <tr><td><code>POST</code></td><td><code>/identities/{id}/name</code></td><td>—</td><td>Set a friendly name (keeps id/label).</td></tr>
+        <tr><td><code>GET</code></td><td><code>/logs/individual</code></td><td><span class="pill auth">admin</span></td><td>Per-identity session log with durations.</td></tr>
+        <tr><td><code>GET</code></td><td><code>/logs/facility</code></td><td><span class="pill auth">admin</span></td><td>Facility-wide CSV export.</td></tr>
+        <tr><td><code>POST</code></td><td><code>/admin/reset</code></td><td><span class="pill auth">admin</span></td><td>Wipe people/events/sessions/vectors (keeps cameras).</td></tr>
+        <tr><td><code>POST</code></td><td><code>/admin/clear-unknowns</code></td><td><span class="pill auth">admin</span></td><td>Manual version of the nightly unknown sweep.</td></tr>
+        <tr><td><code>POST</code></td><td><code>/admin/consolidate</code></td><td><span class="pill auth">admin</span></td><td>Merge duplicate Visitors (matching face centroids). <code>?apply=true</code> to execute; dry-run otherwise.</td></tr>
+        <tr><td><code>GET</code></td><td><code>/health</code></td><td>—</td><td>DB + Redis + Qdrant liveness.</td></tr>
+      </table></div>
+
+      <h3 id="p2-files">File reference</h3>
+      <div class="tablewrap"><table>
+        <tr><th>File</th><th>What it does</th></tr>
+        <tr><td class="file"><code>config.py</code></td><td>pydantic-settings config; thresholds, DSNs, cron, retention. All env-overridable.</td></tr>
+        <tr><td class="file"><code>api/main.py</code></td><td>App factory + lifespan (init DB, ensure Qdrant collections, start schedulers), <code>/health</code>.</td></tr>
+        <tr><td class="file"><code>api/schemas.py</code></td><td>Pydantic request/response models — including the two contract shapes.</td></tr>
+        <tr><td class="file"><code>api/auth.py</code></td><td>HTTP Basic auth dependency for admin endpoints.</td></tr>
+        <tr><td class="file"><code>api/routers/*.py</code></td><td>events, person, employees, live, search, identities, logs, admin.</td></tr>
+        <tr><td class="file"><code>services/ingestion_service.py</code></td><td>Orchestrates <code>POST /events</code>: camera → resolve → track → dedup → learn → log → broadcast.</td></tr>
+        <tr><td class="file"><code>services/identity_resolver.py</code></td><td>The classification brain — face-first resolution, constrained body re-link, confirmed-visitor model.</td></tr>
+        <tr><td class="file"><code>services/session_tracker.py</code></td><td>Opens/continues/closes presence sessions; exit-camera logic.</td></tr>
+        <tr><td class="file"><code>services/dedup_service.py</code></td><td>Redis NX-EX duplicate window; also the admin <code>merge_identities</code>.</td></tr>
+        <tr><td class="file"><code>services/presence_cache.py</code></td><td>Redis "where is X now" — touch/get/evict, TTL from config.</td></tr>
+        <tr><td class="file"><code>services/live_broadcaster.py</code></td><td>In-process async pub/sub fan-out to <code>WS /live</code> subscribers.</td></tr>
+        <tr><td class="file"><code>services/log_service.py</code></td><td>Joined event feed, per-identity session log, facility CSV.</td></tr>
+        <tr><td class="file"><code>services/search_service.py</code></td><td>Live "find X" + full person profile assembly.</td></tr>
+        <tr><td class="file"><code>services/conversion_service.py</code></td><td>promote / demote / rename (id preserved); anonymize is a V2 stub.</td></tr>
+        <tr><td class="file"><code>services/enrollment_service.py</code></td><td>Enroll an employee + store their embedding in Qdrant.</td></tr>
+        <tr><td class="file"><code>services/archive_service.py</code></td><td>Incremental JSONL + per-person datasheet exports (Postgres untouched).</td></tr>
+        <tr><td class="file"><code>repositories/*.py</code></td><td>identity, embedding, event, camera, session — thin SQL / vector wrappers, no business logic.</td></tr>
+        <tr><td class="file"><code>db/models.py</code></td><td>SQLAlchemy 2.0 ORM — the six tables + enums.</td></tr>
+        <tr><td class="file"><code>db/connection.py</code></td><td>Async engine + session context managers.</td></tr>
+        <tr><td class="file"><code>db/vector_store.py</code></td><td>Qdrant wrapper — ensure/upsert/search/delete; embedded or server mode.</td></tr>
+        <tr><td class="file"><code>workers/midnight_flush.py</code></td><td>Scheduler: midnight flush + clear-unknowns, archive (30 min), retention (delete old events).</td></tr>
+        <tr><td class="file"><code>scripts/seed.py</code></td><td>Idempotent camera seed from the shared registry (no people by default).</td></tr>
+        <tr><td class="file"><code>scripts/prune_events.py</code></td><td>Postgres-only event retention for native mode (scheduler is off there).</td></tr>
+        <tr><td class="file"><code>alembic/</code></td><td>Migrations — initial 6-table schema + the visitor-confirmation columns.</td></tr>
+      </table></div>
+    </section>
+
+    <!-- ============ PART 3 ============ -->
+    <section id="p3">
+      <div class="sec-head">
+        <div class="partbar"><span class="chip p3">Part 3</span><h2 style="margin:0">Interface — <code style="font-size:.7em">surveillance_UI/</code></h2></div>
+      </div>
+      <div class="prose">
+        <p>The "Sentinel" console is a plain single-page app — no framework, three script files loaded in order: <code>data.js</code> declares the mutable data model (and demo/mock data), <code>api.js</code> fills it from the Brain, <code>app.js</code> renders it. Its design principle is <strong>opt-in with safe fallback</strong>: if the Brain is unreachable, the UI silently runs on mock data as a static prototype.</p>
+        <h4>How it wires to the Brain</h4>
+        <p><code>login()</code> (client-side <code>admin/password123</code>, a prototype gate) reveals the app, then <code>api.js</code> gates on <code>GET /health</code> returning <code>database:"ok"</code>. Only then does it hydrate from <code>GET /events</code> + <code>GET /employees</code>, wiping the mock data in place, and open <code>WS /live</code> to fold in new events. The Brain URL is resolved from, in order: a <code>?brain=</code> query param → <code>localStorage</code> → <code>window.BRAIN_URL</code> → the same host on port 8000 → localhost.</p>
+        <h4>The camera grid &amp; the "polled stills" trick</h4>
+        <p>Although the bridge offers a true MJPEG stream at <code>/stream/&lt;id&gt;</code>, the browser deliberately uses <strong>polled stills</strong> instead: it fetches <code>/snapshot/&lt;id&gt;</code> every ~350 ms for visible tiles only and hot-swaps the decoded image. Why: an open MJPEG connection per tile would exhaust the browser's ~6-connections-per-origin limit and wedge the page. Tile DOM is rebuilt only when the camera set changes; otherwise just the badges/counts update — so feeds never flicker.</p>
+      </div>
+      <h3 id="p3-files">File reference</h3>
+      <div class="tablewrap"><table>
+        <tr><td class="file"><code>index.html</code></td><td>The whole SPA shell — every view, modal, and sidebar; JS toggles visibility.</td></tr>
+        <tr><td class="file"><code>data.js</code></td><td>Mutable data model + mock fallback: <code>PEOPLE</code>, <code>DETECTIONS</code>, derived helpers (inside count, visits today).</td></tr>
+        <tr><td class="file"><code>api.js</code></td><td>The Brain integration layer — URL resolution, hydrate, live WS, event→person mapping, admin writes.</td></tr>
+        <tr><td class="file"><code>app.js</code></td><td>All behaviour — view routing, grid/feed rendering, person profiles, the "TRACK" auto-track animation.</td></tr>
+        <tr><td class="file"><code>server.py</code></td><td>The RTSP→MJPEG bridge + static server. Re-serves the pipeline's <code>/dev/shm</code> JPEGs; owns <code>/api/cameras</code>.</td></tr>
+        <tr><td class="file"><code>styles.css</code></td><td>Dark control-room glassmorphism; the green/gold/red identity-state color language.</td></tr>
+      </table></div>
+      <div class="note"><span class="tag">The color language</span>The whole console (and this guide) speaks in three status colors that mean real domain states: <span class="pill emp">green = Employee/verified</span>, <span class="pill vis">gold = Visitor</span>, <span class="pill unk">red = Unknown/flagged</span>.</div>
+    </section>
+
+    <!-- ============ CAMERAS ============ -->
+    <section id="cameras">
+      <div class="sec-head"><span class="eyebrow">Shared &amp; Ops</span><h2>The camera registry</h2></div>
+      <div class="prose">
+        <p><code>surveillance_Camera_config/</code> is the one source of truth for cameras, read by all three parts. It is deliberately <strong>split into two files</strong> so credentials never reach git:</p>
+        <ul>
+          <li><code>cameras.json</code> (committed) — metadata: <code>camera_uid</code>, name, zone, <code>is_exit_camera</code>, <code>is_active</code>, and the Part-1-only <code>role</code> and <code>match_threshold</code>.</li>
+          <li><code>cameras.secrets.json</code> (gitignored) — per-uid <code>ip</code>, <code>username</code>, <code>password</code>, <code>rtsp_path</code>.</li>
+        </ul>
+        <p><code>loader.py</code> joins them on <code>camera_uid</code> and builds the <code>stream_url</code> at runtime — <strong>URL-encoding the credentials</strong> so an <code>@</code> in a password can't corrupt the RTSP URL. Three source types are supported: <code>rtsp</code> (built from secrets), <code>url</code> (a ready-made HTTP/RTSP URL), and <code>pano</code> (one 360° camera fanned into several flat views, each a normal camera). <code>to_brain_records()</code> projects cameras into exactly the shape the Brain's seed script wants — dropping the Part-1-only fields.</p>
+      </div>
+      <div class="note"><span class="tag">Why UIDs must match</span>Because Part 1, Part 2, and the UI bridge all read this same registry, a detection's <code>camera_id</code> lines up across the whole system — which is what lets a live event overlay on the correct dashboard tile.</div>
+    </section>
+
+    <!-- ============ RUN ============ -->
+    <section id="run">
+      <div class="sec-head"><span class="eyebrow">Shared &amp; Ops</span><h2>Running the system</h2></div>
+      <div class="prose">
+        <p>There are two orchestrators, for two very different situations:</p>
+      </div>
+      <div class="grid2">
+        <div class="card"><h4 style="margin-top:0"><code>run.sh</code> — real deployment</h4><p style="font-size:.88rem;color:var(--muted)">The native GPU box. Boots the Brain (native + embedded Qdrant), the UI bridge, the <em>real</em> perception pipeline against live cameras, and the two retention loops. Manages long-lived processes via PID files. Postgres/Redis are expected as OS services.</p><pre style="font-size:.76rem"><code>./run.sh start | stop | status
+./run.sh logs pipeline</code></pre></div>
+        <div class="card"><h4 style="margin-top:0"><code>run_all.sh</code> — dev/demo</h4><p style="font-size:.88rem;color:var(--muted)">A laptop with no cameras. Auto-detects Docker (Compose) or falls back to native for the Brain, serves the UI, and runs <code>tools/integration_sim.py</code> — a mock Part 1 that streams the exact contract with a mix of Employee/Visitor/Unknown detections.</p><pre style="font-size:.76rem"><code>./run_all.sh
+./run_all.sh --no-sim | down</code></pre></div>
+      </div>
+      <div class="prose"><p>The Brain itself can come up two ways: <strong>Docker</strong> (<code>docker compose up</code> — Postgres + Redis + Qdrant server + app) or <strong>native</strong> (<code>run_native.sh</code> — OS Postgres + Redis, and Qdrant embedded in-process). In native mode the background scheduler is disabled (embedded Qdrant is single-process), which is why <code>run.sh</code> runs standalone retention pruners instead.</p></div>
+    </section>
+
+    <!-- ============ STORAGE ============ -->
+    <section id="storage">
+      <div class="sec-head"><span class="eyebrow">Shared &amp; Ops</span><h2>Storage &amp; retention</h2></div>
+      <div class="prose">
+        <p>The shared <code>storage/</code> tree holds media written by Part 1 (<code>storage/img/&lt;camera&gt;/</code> snapshots) and log exports written by Part 2 (<code>storage/logs</code>, <code>storage/datasheet</code>). On a 24/7 system these grow without bound, so retention runs at several levels:</p>
+        <ul>
+          <li><strong>Write-time dedupe</strong> — at most one body + one face crop per <em>track</em>, so an Unknown person lingering in view doesn't flood the disk.</li>
+          <li><strong>Snapshot pruning</strong> (<code>prune_storage.py</code>) — deletes images older than <code>RETENTION_DAYS</code> (7) and enforces a hard <code>STORAGE_MAX_GB</code> ceiling (5 GB), oldest-first.</li>
+          <li><strong>Event pruning</strong> — the Brain deletes <code>detection_events</code> older than the retention window (via the scheduler in Docker mode, or <code>prune_events.py</code> in native mode). Rows are archived to JSONL first.</li>
+          <li><strong>Nightly flush</strong> — closes dangling sessions, evicts Redis presence, and clears all unconfirmed Unknowns. Confirmed Visitors and Employees survive.</li>
+        </ul>
+        <p>Qdrant vectors don't need ageing: they're keyed per-identity (bounded by confirmed people), and unknowns are cleared nightly.</p>
+      </div>
+    </section>
+
+    <!-- ============ GOTCHAS ============ -->
+    <section id="gotchas">
+      <div class="sec-head"><span class="eyebrow">Shared &amp; Ops</span><h2>Gotchas &amp; teaching notes</h2></div>
+      <div class="note gotcha"><span class="tag"><code>.env</code> OVERRIDES <code>config.py</code> — check it first</span>The Brain uses pydantic <code>env_file=".env"</code>, so <code>surveillance_brain/.env</code> wins over the code defaults at runtime. This bit hard: <code>.env</code> was stuck at a stale <strong>0.80 / 0.65 / 0.60</strong> (detection / face / body) while the code intended <strong>0.50 / 0.42 / 0.85</strong>, and the 0.65 face floor was <em>the</em> main cause of one person fragmenting into many Visitors. <code>.env</code> is now realigned. When tuning accuracy, confirm which value is actually <em>loaded</em> (<code>python -c "import config; print(config.FACE_SIMILARITY_THRESHOLD)"</code>), not just what <code>config.py</code> says.</div>
+      <div class="note gotcha"><span class="tag">Face-first, not face-only</span>Identity is created by face; body ReID never <em>invents</em> an identity. The one exception is the <strong>constrained body re-link</strong> (same camera + ≤90&nbsp;s + cosine ≥ 0.82), which only re-joins a lingering person to an identity already seen right there moments ago. The Brain's <code>services/feature_matcher.py</code> (the original generic body-fallback matcher) is still unused — the resolver calls <code>embedding_repo.search_face/search_body</code> directly. <code>anonymize_identity</code> (right-to-be-forgotten) remains a V2 stub that raises <code>NotImplementedError</code>.</div>
+      <div class="note gotcha"><span class="tag">Anti-fragmentation is four layers</span>OC-SORT tracker (stable IDs) → best-shot tracklet resolution (highest-quality face) → constrained body re-link (prevent duplicates at creation) → offline <code>/admin/consolidate</code> (clean up any that slipped). If "one person → many Unknowns" reappears, that's the order to debug it in.</div>
+      <div class="note warn"><span class="tag">"Detection" vs "identity" confidence</span>Two different numbers. Detection confidence = the detector's "is this a person?" (gates whether we even try to identify). Identity confidence = the cosine similarity "is this Asha?" Don't conflate them when reading logs or tuning.</div>
+      <div class="note warn"><span class="tag">The grid is the pipeline's output</span>If the dashboard tiles are laggy or low-res, the fix is in Part 1's pipeline (preview resolution, detection rate, GPU decode), <em>not</em> the UI — the UI only re-serves what the pipeline drew.</div>
+    </section>
+
+    <!-- ============ GLOSSARY ============ -->
+    <section id="glossary">
+      <div class="sec-head"><span class="eyebrow">Shared &amp; Ops</span><h2>Glossary</h2></div>
+      <div class="tablewrap"><table>
+        <tr><th>Term</th><th>Meaning</th></tr>
+        <tr><td class="file"><code>embedding</code></td><td>A 512-number vector describing a face or body, so similarity is a cosine/dot product.</td></tr>
+        <tr><td class="file">AdaFace</td><td>The face-recognition model (IR-101 / WebFace12M) — the primary identity signal. Not InsightFace.</td></tr>
+        <tr><td class="file">MTCNN</td><td>Face <em>detector</em> + landmark finder (used only to locate/align a face for AdaFace).</td></tr>
+        <tr><td class="file">OSNet</td><td>Body re-identification model (torchreid) — the fallback signal / stored picture.</td></tr>
+        <tr><td class="file">RT-DETR</td><td>The transformer person <em>detector</em> (finds boxes). SAM 2 masks them (optional).</td></tr>
+        <tr><td class="file">gallery</td><td>Part 1's <em>local</em> people database (<code>gallery.json</code>) — the standalone-mode counterpart to the Brain's Qdrant.</td></tr>
+        <tr><td class="file">identify vs detect</td><td>A camera role. <code>identify</code> runs the full recognition pipeline; <code>detect</code> only finds people.</td></tr>
+        <tr><td class="file">confirmed visitor</td><td>A visitor with both a face and a body embedding on file — re-identifiable across days.</td></tr>
+        <tr><td class="file">presence session</td><td>A Postgres record of one entry→exit; Redis holds the live "who's inside now" view.</td></tr>
+        <tr><td class="file"><code>/dev/shm/sentinel</code></td><td>Shared-memory folder where the pipeline writes annotated tile JPEGs for the UI bridge.</td></tr>
+      </table></div>
+      <div class="footer">Surveillance Antz · Project RUNG01 · Cameras → Perception → Brain → Interface. This guide reflects the <code>live-integration-gpu</code> branch. Trust the code constants over prose where they disagree.</div>
+    </section>
+  </main>
+</div>
+
+<script>
+  (function () {
+    // theme toggle: cycle auto → light → dark
+    var root = document.documentElement, btn = document.getElementById('themebtn');
+    function label() {
+      var t = root.getAttribute('data-theme');
+      btn.textContent = t === 'dark' ? '● dark' : t === 'light' ? '○ light' : '◐ auto';
+    }
+    btn.addEventListener('click', function () {
+      var t = root.getAttribute('data-theme');
+      if (!t) root.setAttribute('data-theme', 'light');
+      else if (t === 'light') root.setAttribute('data-theme', 'dark');
+      else root.removeAttribute('data-theme');
+      label();
+    });
+    label();
+
+    // scrollspy: highlight the current section in the TOC
+    var links = Array.prototype.slice.call(document.querySelectorAll('nav.toc a'));
+    var map = {};
+    links.forEach(function (a) { map[a.getAttribute('href').slice(1)] = a; });
+    var spy = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) {
+          links.forEach(function (l) { l.classList.remove('active'); });
+          var a = map[e.target.id];
+          if (a) a.classList.add('active');
+        }
+      });
+    }, { rootMargin: '-10% 0px -75% 0px', threshold: 0 });
+    document.querySelectorAll('section[id]').forEach(function (s) { spy.observe(s); });
+  })();
+</script>

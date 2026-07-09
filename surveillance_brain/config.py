@@ -87,6 +87,23 @@ class Settings(BaseSettings):
     # merging — confidence over coverage (fragments are cleaned nightly).
     BODY_SIMILARITY_THRESHOLD: float = 0.85
 
+    # Constrained body RE-LINK (identity_resolver step 4). Before creating a NEW
+    # visitor from an unmatched face, we check the body vector against identities
+    # seen on the SAME camera within BODY_MERGE_WINDOW_SECONDS. A hit at/above
+    # BODY_MERGE_THRESHOLD re-links to that identity instead of minting a
+    # duplicate. Much higher than the plain body fallback + gated by camera and a
+    # short time window, so it re-joins a fragmented sighting of ONE person
+    # without merging two strangers in similar clothing.
+    BODY_MERGE_THRESHOLD: float = 0.82
+    BODY_MERGE_WINDOW_SECONDS: int = 90
+
+    # Offline gallery consolidation (Phase 2, consolidate_identities script).
+    # Two VISITOR identities whose FACE centroids match at/above this cosine are
+    # judged the same person and merged (the older id kept). Higher than the live
+    # match floor (0.42) so an offline batch merge is conservative — it only
+    # collapses clear duplicates that slipped through, never near-strangers.
+    CONSOLIDATE_FACE_THRESHOLD: float = 0.55
+
     # Progressive learning: when a matched sighting scores BELOW this, store its
     # embedding(s) as an additional view for that identity, so future sightings
     # from a new angle (or with the face now visible) still match — this is what
@@ -116,6 +133,13 @@ class Settings(BaseSettings):
     # APScheduler cron expressions (UTC).
     MIDNIGHT_FLUSH_CRON: str = "0 0 * * *"   # close dangling sessions @ 00:00
     ARCHIVE_CRON: str = "*/30 * * * *"       # export logs+datasheet every 30 min
+    RETENTION_CRON: str = "30 0 * * *"       # prune old detection_events @ 00:30
+
+    # Delete detection_events older than this many days (0 = keep forever). They
+    # are archived to JSONL first (ARCHIVE_CRON), so this only trims the live
+    # ledger — the unbounded table on a 24/7 system. Vectors are per-identity
+    # (bounded) and unknowns are cleared daily, so only this table needs ageing.
+    RETENTION_DAYS: int = 7
 
     # ---- Admin Basic-Auth -----------------------------------------------
     ADMIN_USERNAME: str = "admin"
@@ -168,6 +192,9 @@ QDRANT_BODY_COLLECTION: Final[str] = _settings.QDRANT_BODY_COLLECTION
 DETECTION_CONF_THRESHOLD: Final[float] = _settings.DETECTION_CONF_THRESHOLD
 FACE_SIMILARITY_THRESHOLD: Final[float] = _settings.FACE_SIMILARITY_THRESHOLD
 BODY_SIMILARITY_THRESHOLD: Final[float] = _settings.BODY_SIMILARITY_THRESHOLD
+BODY_MERGE_THRESHOLD: Final[float] = _settings.BODY_MERGE_THRESHOLD
+BODY_MERGE_WINDOW_SECONDS: Final[int] = _settings.BODY_MERGE_WINDOW_SECONDS
+CONSOLIDATE_FACE_THRESHOLD: Final[float] = _settings.CONSOLIDATE_FACE_THRESHOLD
 LEARN_SIMILARITY_CEILING: Final[float] = _settings.LEARN_SIMILARITY_CEILING
 EMBEDDING_DIMENSIONS: Final[int] = _settings.EMBEDDING_DIMENSIONS
 
@@ -179,6 +206,8 @@ SESSION_TIMEOUT_SECONDS: Final[int] = _settings.SESSION_TIMEOUT_SECONDS
 DUPLICATE_WINDOW_SECONDS: Final[int] = _settings.DUPLICATE_WINDOW_SECONDS
 MIDNIGHT_FLUSH_CRON: Final[str] = _settings.MIDNIGHT_FLUSH_CRON
 ARCHIVE_CRON: Final[str] = _settings.ARCHIVE_CRON
+RETENTION_CRON: Final[str] = _settings.RETENTION_CRON
+RETENTION_DAYS: Final[int] = _settings.RETENTION_DAYS
 
 ADMIN_USERNAME: Final[str] = _settings.ADMIN_USERNAME
 ADMIN_PASSWORD: Final[str] = _settings.ADMIN_PASSWORD

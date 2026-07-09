@@ -199,6 +199,32 @@ async def delete_for_identity(identity_id: int) -> None:
         await client.delete(collection_name=name, points_selector=flt)
 
 
+async def fetch_vectors_for_identity(collection: str, identity_id: int) -> List[List[float]]:
+    """Return every stored vector for an identity in a collection (face or body).
+    Used by the gallery consolidator to build a per-identity centroid."""
+    client = get_client()
+    flt = Filter(
+        must=[FieldCondition(key="identity_id", match=MatchValue(value=int(identity_id)))]
+    )
+    out: List[List[float]] = []
+    offset = None
+    while True:
+        points, offset = await client.scroll(
+            collection_name=collection,
+            scroll_filter=flt,
+            with_vectors=True,
+            with_payload=False,
+            limit=256,
+            offset=offset,
+        )
+        for p in points:
+            if p.vector is not None:
+                out.append([float(x) for x in p.vector])
+        if offset is None:
+            break
+    return out
+
+
 async def ping() -> bool:
     """Liveness check used by /health."""
     client = get_client()

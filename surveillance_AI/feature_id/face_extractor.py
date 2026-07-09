@@ -45,6 +45,11 @@ class FaceExtractor:
         self.mtcnn = MTCNN(keep_all=True, min_face_size=config.FACE_MIN_SIZE, device=self.device)
         self.model = build_model(config.FACE_BACKBONE).eval().to(self.device)
         self.model.load_state_dict(torch.load(config.FACE_WEIGHTS, map_location=self.device))
+        # AdaFace's UN-normalized feature norm is a free FACE-QUALITY proxy: the
+        # model is trained so norm rises with image quality (sharp, frontal, well-lit)
+        # and falls on hard/low-quality faces. We expose the last norm so the
+        # pipeline can pick the best frame per track (best-shot) before resolving.
+        self.last_norm = 0.0
         print("[face] ready.")
 
     def _largest_face_landmarks(self, rgb):
@@ -104,8 +109,14 @@ class FaceExtractor:
         x = ((aligned.astype(np.float32) / 255.0) - 0.5) / 0.5
         t = torch.from_numpy(x.transpose(2, 0, 1)[None]).float().to(self.device)
         with torch.no_grad():
-            feat, _ = self.model(t)
+            feat, norm = self.model(t)          # feat is already L2-normalized; norm is the quality signal
         v = feat.cpu().numpy()[0].astype("float32")
-        n = np.linalg.norm(v)
+        # AdaFace's feature norm (the model's 2nd output) rises with face quality —
+        # it is NOT ~1 like the normalized feature. Fuse it with the alignment
+        # sharpness so best-shot prefers a clean, frontal, in-focus face. Kept on
+        # the instance so the caller reads it right after embed_with_face().
+        adaface_norm = float(norm.detach().cpu().reshape(-1)[0])
+        self.last_norm = adaface_norm * (1.0 + min(sharp, 400.0) / 400.0)
+        n = float(np.linalg.norm(v))
         emb = v / n if n > 0 else None
         return emb, (aligned if emb is not None else None)

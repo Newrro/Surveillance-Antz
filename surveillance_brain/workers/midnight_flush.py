@@ -86,6 +86,32 @@ async def run_archive() -> None:
     await archive_service.run_archive()
 
 
+async def run_retention() -> None:
+    """Delete detection_events older than config.RETENTION_DAYS. They are archived
+    to JSONL first (run_archive), so this only trims the live ledger — the one
+    table that grows without bound on a 24/7 system. No-op when RETENTION_DAYS<=0."""
+    if config.RETENTION_DAYS <= 0:
+        return
+    start = datetime.utcnow()
+    deleted = 0
+    try:
+        async with get_session() as session:
+            result = await session.execute(
+                text(
+                    "DELETE FROM detection_events "
+                    "WHERE detected_at < NOW() - make_interval(days => :days)"
+                ),
+                {"days": int(config.RETENTION_DAYS)},
+            )
+            deleted = result.rowcount or 0
+        logger.info(
+            "Retention: deleted %d detection_event(s) older than %d day(s) in %.2fs",
+            deleted, config.RETENTION_DAYS, (datetime.utcnow() - start).total_seconds(),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error("Retention: detection_events prune failed: %s", e)
+
+
 # ---------------------------------------------------------------------------
 # Scheduler lifecycle
 # ---------------------------------------------------------------------------
@@ -117,11 +143,20 @@ def start_scheduler() -> AsyncIOScheduler:
         misfire_grace_time=600,
         coalesce=True,
     )
+    _scheduler.add_job(
+        run_retention,
+        trigger=_cron(config.RETENTION_CRON),
+        id="retention",
+        replace_existing=True,
+        misfire_grace_time=3600,
+        coalesce=True,
+    )
 
     _scheduler.start()
     logger.info(
-        "Schedulers registered (flush=%r archive=%r)",
+        "Schedulers registered (flush=%r archive=%r retention=%r keep=%dd)",
         config.MIDNIGHT_FLUSH_CRON, config.ARCHIVE_CRON,
+        config.RETENTION_CRON, config.RETENTION_DAYS,
     )
     return _scheduler
 

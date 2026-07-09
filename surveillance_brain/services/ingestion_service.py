@@ -71,6 +71,8 @@ async def ingest(
         detection_conf=detection_conf,
         face_embedding=face_embedding,
         body_embedding=body_embedding,
+        camera_id=camera.id,
+        detected_at=detected_at,
     )
     logger.info(
         "Resolved: cls=%s id=%s label=%s by=%s",

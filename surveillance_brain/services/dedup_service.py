@@ -25,6 +25,8 @@ match and a body-only match that were never linked).
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -110,3 +112,114 @@ async def merge_identities(session: AsyncSession, primary_id: int, duplicate_id:
     await session.flush()
 
     logger.info("Merged identity %d into %d", duplicate_id, primary_id)
+
+
+# ---------------------------------------------------------------------------
+# Offline gallery consolidation (Phase 2)
+# ---------------------------------------------------------------------------
+@dataclass
+class MergePlan:
+    """One planned/applied merge: fold `duplicates` into `primary` (the oldest id)."""
+    primary: int
+    primary_label: str
+    duplicates: List[int]
+    labels: List[str]
+    similarity: float
+
+
+def _normed_centroid(vectors: List[List[float]]) -> Optional[List[float]]:
+    """Mean of an identity's face vectors, L2-normalized — its gallery centroid.
+    Averaging over all stored views is a simple quality-robust representation:
+    one bad frame can't dominate. Returns None if the identity has no face."""
+    import numpy as np
+    if not vectors:
+        return None
+    m = np.asarray(vectors, dtype="float32").mean(axis=0)
+    n = float(np.linalg.norm(m))
+    if n == 0:
+        return None
+    return (m / n).tolist()
+
+
+def _cosine(a: List[float], b: List[float]) -> float:
+    import numpy as np
+    va, vb = np.asarray(a, "float32"), np.asarray(b, "float32")
+    na, nb = np.linalg.norm(va), np.linalg.norm(vb)
+    if na == 0 or nb == 0:
+        return 0.0
+    return float(va.dot(vb) / (na * nb))
+
+
+async def consolidate_visitors(
+    session: AsyncSession,
+    face_threshold: Optional[float] = None,
+    apply: bool = False,
+) -> List[MergePlan]:
+    """Find VISITOR identities that are really the SAME person (their face-gallery
+    centroids match at/above `face_threshold`) and fold each cluster into its
+    oldest id. This is the offline cleanup for duplicates that slipped past the
+    live guards — it uses face only (never body/clothing) and a threshold well
+    above the live floor, so it's conservative.
+
+    Returns the list of MergePlans. With apply=False it's a DRY RUN (plans only,
+    nothing mutated). With apply=True it calls merge_identities for each pair; the
+    CALLER owns the transaction (commit after)."""
+    thr = config.CONSOLIDATE_FACE_THRESHOLD if face_threshold is None else face_threshold
+
+    visitors = await identity_repo.list_visitor_identities(session)
+    # Build a face centroid per visitor (skip body-only visitors: no face to judge).
+    centroids: Dict[int, List[float]] = {}
+    labels: Dict[int, str] = {}
+    for v in visitors:
+        c = _normed_centroid(await embedding_repo.fetch_face_vectors(v.id))
+        if c is not None:
+            centroids[v.id] = c
+            labels[v.id] = v.display_label
+
+    ids = sorted(centroids)                      # ascending id → oldest is the primary
+    # Union-Find over pairs whose centroids match. O(n^2) cosine; galleries are
+    # small (dozens–hundreds of visitors), so this is fine as a periodic sweep.
+    parent = {i: i for i in ids}
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    best_sim: Dict[Tuple[int, int], float] = {}
+    for a_idx in range(len(ids)):
+        for b_idx in range(a_idx + 1, len(ids)):
+            a, b = ids[a_idx], ids[b_idx]
+            sim = _cosine(centroids[a], centroids[b])
+            if sim >= thr:
+                ra, rb = find(a), find(b)
+                if ra != rb:
+                    parent[max(ra, rb)] = min(ra, rb)   # keep the oldest as root
+                best_sim[(min(a, b), max(a, b))] = sim
+
+    # Group by root; emit a plan for every cluster of size > 1.
+    groups: Dict[int, List[int]] = {}
+    for i in ids:
+        groups.setdefault(find(i), []).append(i)
+
+    plans: List[MergePlan] = []
+    for root, members in groups.items():
+        dups = sorted(m for m in members if m != root)
+        if not dups:
+            continue
+        sims = [best_sim.get((min(root, d), max(root, d)), 0.0) for d in dups]
+        plans.append(MergePlan(
+            primary=root, primary_label=labels[root],
+            duplicates=dups, labels=[labels[d] for d in dups],
+            similarity=round(min(s for s in sims if s > 0) if any(sims) else 0.0, 4),
+        ))
+
+    if apply:
+        for plan in plans:
+            for dup in plan.duplicates:
+                await merge_identities(session, primary_id=plan.primary, duplicate_id=dup)
+        if plans:
+            logger.info("Consolidated %d duplicate visitor(s) into %d identities",
+                        sum(len(p.duplicates) for p in plans), len(plans))
+    return plans

@@ -22,6 +22,7 @@ import json
 import os
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import quote
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 META_PATH = os.path.join(HERE, "cameras.json")
@@ -87,7 +88,11 @@ def build_stream_url(ip, username, password, rtsp_path, stream_type="sub",
     path = rtsp_path
     if stream_type == "sub" and path.endswith("01"):
         path = path[:-2] + "02"
-    return f"rtsp://{username}:{password}@{ip}:{port}/{path}"
+    # URL-encode credentials — passwords often contain '@', ':' or '/', which
+    # would otherwise corrupt the userinfo/host split and break RTSP auth.
+    user_enc = quote(str(username), safe="")
+    pass_enc = quote(str(password), safe="")
+    return f"rtsp://{user_enc}:{pass_enc}@{ip}:{port}/{path}"
 
 
 def _load_json(path):

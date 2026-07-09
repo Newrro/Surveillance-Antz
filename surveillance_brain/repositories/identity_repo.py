@@ -31,6 +31,16 @@ async def fetch_identity_by_label(session: AsyncSession, label: str) -> Optional
     return result.scalar_one_or_none()
 
 
+async def list_visitor_identities(session: AsyncSession) -> List[Identity]:
+    """All visitor identities, oldest first (lowest id = the one we keep on merge)."""
+    result = await session.execute(
+        select(Identity)
+        .where(Identity.identity_type == IdentityType.VISITOR)
+        .order_by(Identity.id.asc())
+    )
+    return list(result.scalars().all())
+
+
 async def create_identity(
     session: AsyncSession,
     identity_type: IdentityType,

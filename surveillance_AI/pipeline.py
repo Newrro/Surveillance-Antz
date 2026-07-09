@@ -47,11 +47,13 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 import cv2
 import numpy as np
+import torch
+from contextlib import nullcontext
 
 # flat sibling modules
 from detector import PersonDetector, draw_boxes
 from feature_id.identify import Identifier
-from tracker import SimpleTracker
+from tracker import SimpleTracker, MotionTracker
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
@@ -70,9 +72,32 @@ MIN_CROP_SIDE = 24  # skip crops too tiny to embed reliably
 # MJPEG — so the dashboard shows the actual detector output (not fabricated
 # boxes), and the UI no longer decodes RTSP itself (frees the GPU).
 SHM_DIR = os.environ.get("SENTINEL_SHM", "/dev/shm/sentinel")
-PREVIEW_FPS = float(os.environ.get("PREVIEW_FPS", "8"))
-PREVIEW_W = int(os.environ.get("PREVIEW_W", "640"))
-PREVIEW_H = int(os.environ.get("PREVIEW_H", "360"))
+PREVIEW_FPS = float(os.environ.get("PREVIEW_FPS", "12"))
+PREVIEW_W = int(os.environ.get("PREVIEW_W", "1280"))
+PREVIEW_H = int(os.environ.get("PREVIEW_H", "720"))
+PREVIEW_QUALITY = int(os.environ.get("PREVIEW_QUALITY", "85"))
+
+# ── Identity as a lagged background service ────────────────────────────────
+# The grid (live detection boxes) is the real-time FOREGROUND; identity is a
+# throttled BACKGROUND worker that is allowed to lag a few seconds. These knobs
+# keep the heavy face/body/SAM2 work from ever starving the detector that feeds
+# the grid — see the identity_worker below.
+IDENTITY_MIN_HITS = int(os.environ.get("IDENTITY_MIN_HITS", "3"))                 # only resolve stable tracks
+IDENTITY_MAX_RATE = float(os.environ.get("IDENTITY_MAX_RATE", "4"))               # max resolves/sec (yields GPU)
+IDENTITY_LATENCY_BUDGET = float(os.environ.get("IDENTITY_LATENCY_BUDGET", "4.0")) # acceptable label lag (s)
+
+# ── Best-shot tracklet identity (Part 2) ──────────────────────────────────
+# Instead of resolving a track off its first (often blurry / side-on) frame, we
+# probe it a few times, keep the HIGHEST-quality face (AdaFace feature-norm), and
+# resolve from that best shot. A person's best face re-matches ONE gallery entry
+# far more reliably → the same person stops splitting into many Visitors.
+IDENTITY_MAX_PROBES = int(os.environ.get("IDENTITY_MAX_PROBES", "3"))      # frames sampled before first emit
+IDENTITY_REEMIT_FRAC = float(os.environ.get("IDENTITY_REEMIT_FRAC", "0.15"))  # re-emit if a face is this much better
+
+
+def _stream_ctx(s):
+    """Run the enclosed GPU ops on CUDA stream `s` (or a no-op on CPU)."""
+    return torch.cuda.stream(s) if s is not None else nullcontext()
 
 _annot = {}                 # camera_uid -> list of (x1, y1, x2, y2, label, color)
 _annot_lock = threading.Lock()
@@ -88,46 +113,53 @@ def get_annotations(uid):
         return list(_annot.get(uid, ()))
 
 
-def start_preview_writer(streams):
-    """Background thread: for each camera, overlay the latest boxes on the latest
-    frame and write a JPEG to SHM at PREVIEW_FPS — smooth video, boxes update at
-    the detection rate. Decouples display FPS from the (slower) detection loop."""
-    os.makedirs(SHM_DIR, exist_ok=True)
-    period = 1.0 / max(1.0, PREVIEW_FPS)
-    enc = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
-
-    def loop():
-        while True:
-            t0 = time.time()
-            for s in streams:
-                frame = s.get_frame()
-                if frame is None:
-                    continue
-                vis = frame.copy()
-                for (x1, y1, x2, y2, label, color) in get_annotations(s.camera_uid):
-                    cv2.rectangle(vis, (int(x1), int(y1)), (int(x2), int(y2)), color, 3)
-                    if label:
-                        cv2.putText(vis, label, (int(x1), max(18, int(y1) - 8)),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-                small = cv2.resize(vis, (PREVIEW_W, PREVIEW_H))
-                ok, buf = cv2.imencode(".jpg", small, enc)
-                if not ok:
-                    continue
-                tmp = os.path.join(SHM_DIR, f".{s.camera_uid}.tmp")
-                final = os.path.join(SHM_DIR, f"{s.camera_uid}.jpg")
+def _preview_loop(s, period, enc):
+    """Per-camera preview loop. Resize the frame to tile size FIRST, then scale
+    the (full-res) detection boxes down and draw them on the small frame — so we
+    never copy/annotate an 11 MB 1440p frame. One of these runs per camera, so
+    a slow encode on one tile can't stall the others."""
+    tmp = os.path.join(SHM_DIR, f".{s.camera_uid}.tmp")
+    final = os.path.join(SHM_DIR, f"{s.camera_uid}.jpg")
+    while True:
+        t0 = time.time()
+        frame = s.get_frame()
+        if frame is not None:
+            h, w = frame.shape[:2]
+            small = cv2.resize(frame, (PREVIEW_W, PREVIEW_H))
+            sx, sy = PREVIEW_W / max(1, w), PREVIEW_H / max(1, h)
+            for (x1, y1, x2, y2, label, color) in get_annotations(s.camera_uid):
+                p1 = (int(x1 * sx), int(y1 * sy))
+                p2 = (int(x2 * sx), int(y2 * sy))
+                cv2.rectangle(small, p1, p2, color, 2)
+                if label:
+                    cv2.putText(small, label, (p1[0], max(16, p1[1] - 6)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            ok, buf = cv2.imencode(".jpg", small, enc)
+            if ok:
                 try:
                     with open(tmp, "wb") as f:
                         f.write(buf.tobytes())
                     os.replace(tmp, final)   # atomic swap so readers never see a half-written file
                 except OSError:
                     pass
-            dt = time.time() - t0
-            if dt < period:
-                time.sleep(period - dt)
+        dt = time.time() - t0
+        if dt < period:
+            time.sleep(period - dt)
 
-    th = threading.Thread(target=loop, daemon=True)
-    th.start()
-    return th
+
+def start_preview_writer(streams):
+    """One preview thread PER camera: overlay the latest boxes on the latest frame
+    and write a JPEG to SHM at PREVIEW_FPS. Display FPS is decoupled from the
+    (slower) detection loop, and cameras no longer serialize behind each other."""
+    os.makedirs(SHM_DIR, exist_ok=True)
+    period = 1.0 / max(1.0, PREVIEW_FPS)
+    enc = [int(cv2.IMWRITE_JPEG_QUALITY), PREVIEW_QUALITY]
+    threads = []
+    for s in streams:
+        th = threading.Thread(target=_preview_loop, args=(s, period, enc), daemon=True)
+        th.start()
+        threads.append(th)
+    return threads
 
 
 # Box colours (BGR) by identity outcome.
@@ -267,6 +299,14 @@ def main():
         from segmenter import SAM2Segmenter
         segmenter = SAM2Segmenter()
 
+    # Detection (the grid) gets a HIGH-priority CUDA stream; the heavy identity
+    # work gets a LOW-priority one. On the single GPU this lets the detector's
+    # kernels be scheduled ahead of face/body/SAM2 kernels, so the live grid stays
+    # smooth even while identity churns behind it. No-ops on CPU.
+    _cuda = torch.cuda.is_available()
+    hi_stream = torch.cuda.Stream(priority=-1) if _cuda else None   # detection / grid
+    lo_stream = torch.cuda.Stream(priority=0) if _cuda else None    # background identity
+
     session = None
     if args.emit:
         import requests
@@ -282,123 +322,206 @@ def main():
     # ONCE per track (then locked) instead of per frame — no Unknown/Visitor churn,
     # one database id per person. Detection (fast) and identity (background) share
     # the tracks under this lock.
+    def _make_tracker():
+        """Kalman-motion tracker (Oc-SORT) by default — stable IDs through
+        occlusion, far fewer spurious new tracks. TRACKER=simple forces the old
+        IoU tracker; falls back to it automatically if BoxMOT can't load."""
+        name = os.environ.get("TRACKER", "ocsort").lower()
+        if name in ("ocsort", "bytetrack", "motion", "boxmot"):
+            try:
+                return MotionTracker()
+            except Exception as e:  # noqa: BLE001
+                print(f"[tracker] BoxMOT unavailable ({e}); using SimpleTracker")
+        return SimpleTracker()
+
     state_lock = threading.Lock()
-    trackers = {c.camera_uid: SimpleTracker() for c in cameras}
+    trackers = {c.camera_uid: _make_tracker() for c in cameras}
+    print(f"[tracker] using {type(next(iter(trackers.values()))).__name__}")
     frames = {}          # uid -> latest frame (for the identity worker to crop from)
     stop_flag = threading.Event()
 
+    def _resolve_track(cam, uid, frame, t, box):
+        """Heavy identity for ONE track on the LOW-priority GPU stream, using
+        BEST-SHOT tracklet resolution: probe the track a few times, keep the
+        highest-quality face, and (re-)emit identity from that best shot. Returns
+        True if features were found this probe."""
+        with _stream_ctx(lo_stream):
+            crop = crop_person(frame, box)                  # raw crop → face
+            if crop is None:
+                return False
+            body_crop = crop
+            if segmenter is not None:
+                try:
+                    segmenter.set_frame(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                    mask = segmenter.mask_for_box(box)
+                    masked = crop_person(frame, box, mask=mask)
+                    if masked is not None:
+                        body_crop = masked                  # background-blanked → body ReID
+                except Exception as e:  # noqa: BLE001 — fall back to raw crop
+                    print(f"    → segment failed: {e}")
+            face_emb, body_emb = identifier.extract(crop, body_bgr=body_crop)
+        if lo_stream is not None:
+            lo_stream.synchronize()
+        if face_emb is None and body_emb is None:
+            return False                     # no usable features yet — retry later
+
+        face_q = identifier.last_face_quality  # AdaFace-norm quality of THIS probe's face
+        stamp_ms = int(time.time() * 1000)
+        with state_lock:
+            t.probes += 1
+            # Keep the best face shot seen so far (and the body paired with it).
+            improved = face_emb is not None and face_q > t.best_face_q
+            if improved:
+                t.best_face_emb, t.best_body_emb, t.best_face_q = face_emb, body_emb, face_q
+            elif t.best_body_emb is None and body_emb is not None:
+                t.best_body_emb = body_emb              # keep a body even before any face
+            # Snapshots: one body crop per track; refresh the face thumb on a better shot.
+            if t.snap_path is None:
+                t.snap_path = save_snapshot(uid, crop, stamp_ms, t.id)
+            if improved and identifier.last_face_crop is not None:
+                t.face_path = save_face_snapshot(uid, identifier.last_face_crop, stamp_ms, t.id)
+            # Decide whether to (re-)emit. Wait for a few probes so the FIRST emit
+            # uses the best-of-N face (a poor first face can enroll a bad gallery
+            # entry the person then fails to re-match). After that, only re-emit if
+            # a clearly better face turns up (upgrades the stored vector).
+            budget_done = t.probes >= IDENTITY_MAX_PROBES
+            have_face = t.best_face_emb is not None
+            ready = have_face and (budget_done or t.emitted)
+            ready = ready or (budget_done and not have_face)   # body-only fallback → Unknown
+            if not ready:
+                return True                          # keep probing; worker retries this track
+            if t.emitted and not (t.best_face_q > t.emit_face_q * (1.0 + IDENTITY_REEMIT_FRAC)):
+                return True                          # already sent our best; nothing better yet
+            emit_face, emit_body = t.best_face_emb, t.best_body_emb
+            snap, emit_q = t.snap_path, t.best_face_q
+            t.emitted = True
+            t.emit_face_q = emit_q
+
+        disp = color = None
+        locked = False
+        if args.emit:
+            payload = build_payload(uid, box[4], emit_face, emit_body, snap, stamp_ms, t.id)
+            try:
+                j = session.post(f"{args.brain_url}/events", json=payload, timeout=10).json()
+                disp, color = _display_from_brain(j)
+                locked = j.get("label") in ("Visitor", "Employee")
+            except Exception as e:  # noqa: BLE001 — keep the worker alive
+                print(f"    → POST failed: {e}")
+        if disp is None:                     # offline / no --emit → local gallery
+            res = identifier.identify_features(
+                emit_face, emit_body, detection_conf=box[4], face_threshold=cam.match_threshold)
+            if res["label"] == "Employee":
+                disp, color, locked = f"Employee {res['name'] or res['person_id'] or ''}".strip(), _COL_EMP, True
+            elif res["label"] == "Visitor":
+                disp, color, locked = f"Visitor {res['person_id'] or ''}".strip(), _COL_VIS, True
+            else:
+                disp, color = "Unknown", _COL_UNKNOWN
+        with state_lock:
+            t.label, t.color = disp, color
+            if locked:
+                t.resolved = True            # lock: never re-classified → no churn, one id
+        feat = ("F" if emit_face is not None else "-") + ("B" if emit_body is not None else "-")
+        print(f"[{uid}] track#{t.id} -> {disp}  (det {box[4]:.2f} feat {feat} q{emit_q:.0f} p{t.probes})")
+        return True
+
     def identity_worker():
-        """Resolve identity ONCE per track, then lock it. Labels come from the
-        Brain's POST /events response (authoritative database id)."""
+        """Background identity SERVICE. Each pass it picks the single most-overdue
+        STABLE track across all identify cameras, resolves it on the low-priority
+        GPU stream, then sleeps so the detector (grid) keeps the GPU. Labels and DB
+        updates may lag a few seconds by design — the grid never waits on this."""
+        gap = 1.0 / max(0.5, IDENTITY_MAX_RATE)      # min seconds between heavy resolves
         while not stop_flag.is_set():
-            ran = False
-            for cam in id_cams:
-                uid = cam.camera_uid
-                now = time.time()
-                with state_lock:
+            now = time.time()
+            pick = None      # (cam, uid, frame, track, box, overdue)
+            with state_lock:
+                for cam in id_cams:
+                    uid = cam.camera_uid
                     frame = frames.get(uid)
-                    # First attempt after resolve_interval; if still Unknown, back off
-                    # to 5s so unknown/distant people don't spam the log.
-                    pend = [(t, tuple(t.box)) for t in trackers[uid].tracks
-                            if not t.resolved and t.misses == 0
-                            and now - t.last_resolve >= (5.0 if t.emitted else resolve_interval)]
-                if frame is None or not pend:
-                    continue
-                # SAM 2 once per (camera, frame): give it the frame, then pull a
-                # per-box mask below. Blanking the background is what makes the
-                # body vector describe the PERSON instead of the shared scene.
-                seg_ready = False
-                for t, box in pend:
-                    t.last_resolve = now
-                    crop = crop_person(frame, box)          # raw crop → face
-                    if crop is None:
+                    if frame is None:
                         continue
-                    body_crop = crop
-                    if segmenter is not None:
-                        try:
-                            if not seg_ready:
-                                segmenter.set_frame(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                                seg_ready = True
-                            mask = segmenter.mask_for_box(box)
-                            masked = crop_person(frame, box, mask=mask)
-                            if masked is not None:
-                                body_crop = masked        # background-blanked → body ReID
-                        except Exception as e:  # noqa: BLE001 — fall back to raw crop
-                            print(f"    → segment failed: {e}")
-                    face_emb, body_emb = identifier.extract(crop, body_bgr=body_crop)
-                    if face_emb is None and body_emb is None:
-                        continue                 # no usable features yet — stays 'Unknown', retry
-                    ran = True
-                    t.emitted = True
-                    stamp_ms = int(now * 1000)
-                    snap = save_snapshot(uid, crop, stamp_ms, t.id)
-                    # Also save a face thumbnail when a face was found, so the UI
-                    # can show BOTH a full-body crop and a face crop per person.
-                    if identifier.last_face_crop is not None:
-                        save_face_snapshot(uid, identifier.last_face_crop, stamp_ms, t.id)
-                    disp = color = None
-                    locked = False
-                    if args.emit:
-                        payload = build_payload(uid, box[4], face_emb, body_emb, snap, stamp_ms, t.id)
-                        try:
-                            j = session.post(f"{args.brain_url}/events", json=payload, timeout=10).json()
-                            disp, color = _display_from_brain(j)
-                            locked = j.get("label") in ("Visitor", "Employee")
-                        except Exception as e:  # noqa: BLE001 — keep the loop alive
-                            print(f"    → POST failed: {e}")
-                    if disp is None:             # offline / no --emit → local gallery
-                        res = identifier.identify_features(
-                            face_emb, body_emb, detection_conf=box[4],
-                            face_threshold=cam.match_threshold)
-                        if res["label"] == "Employee":
-                            disp, color, locked = f"Employee {res['name'] or res['person_id'] or ''}".strip(), _COL_EMP, True
-                        elif res["label"] == "Visitor":
-                            disp, color, locked = f"Visitor {res['person_id'] or ''}".strip(), _COL_VIS, True
-                        else:
-                            disp, color = "Unknown", _COL_UNKNOWN
-                    with state_lock:
-                        t.label, t.color = disp, color
-                        if locked:
-                            t.resolved = True    # lock: never re-classified → no churn, one id
-                    feat = ("F" if face_emb is not None else "-") + ("B" if body_emb is not None else "-")
-                    print(f"[{uid}] track#{t.id} -> {disp}  (det {box[4]:.2f} feat {feat})")
-            if not ran:
-                time.sleep(0.1)
+                    for t in trackers[uid].tracks:
+                        # Only STABLE, currently-visible, not-yet-locked tracks. A
+                        # still-unknown track re-tries after the latency budget.
+                        if t.resolved or t.misses != 0 or t.hits < IDENTITY_MIN_HITS:
+                            continue
+                        due_after = IDENTITY_LATENCY_BUDGET if t.emitted else resolve_interval
+                        overdue = now - t.last_resolve - due_after
+                        if overdue < 0:
+                            continue
+                        if pick is None or overdue > pick[5]:
+                            pick = (cam, uid, frame, t, tuple(t.box), overdue)
+                if pick is not None:
+                    pick[3].last_resolve = now   # claim now so we don't re-pick it next pass
+            if pick is None:
+                time.sleep(0.05)
+                continue
+            cam, uid, frame, t, box, _ = pick
+            try:
+                _resolve_track(cam, uid, frame, t, box)
+            except Exception as e:  # noqa: BLE001 — never kill the worker
+                print(f"    → identity error [{uid}#{t.id}]: {e}")
+            time.sleep(gap)                  # YIELD the GPU to the detector between resolves
 
     if id_cams:
         threading.Thread(target=identity_worker, daemon=True).start()
 
     last_detect = {c.camera_uid: 0.0 for c in cameras}
-    print(f"Running (boxes ~{1/detect_interval:.0f} fps/cam, tracker-based identity, "
-          f"preview -> {SHM_DIR}). Ctrl-C to stop.")
+    print(f"Running (boxes ~{1/detect_interval:.0f} fps/cam, batched fp16 detect, "
+          f"tracker-based identity, preview -> {SHM_DIR}). Ctrl-C to stop.")
+    perf = {"detect_s": 0.0, "calls": 0, "cams": 0, "last_report": time.time()}
     try:
         while True:
-            did_work = False
+            now = time.time()
+            # Gather every camera whose detect_interval has elapsed, then run them
+            # all through ONE batched GPU forward pass (one launch, not N).
+            due = []
             for stream in streams:
                 uid = stream.camera_uid
-                cam = roles[uid]
-                now = time.time()
                 if now - last_detect[uid] < detect_interval:
                     continue
                 frame = stream.get_frame()
                 if frame is None:
                     continue
                 last_detect[uid] = now
-                did_work = True
+                due.append((stream, frame))
 
-                boxes = detector.detect(frame, conf=args.conf, normalized=False)
+            if not due:
+                time.sleep(0.01)                  # nothing due — avoid busy-spin
+                continue
+
+            t0 = time.time()
+            with _stream_ctx(hi_stream):                 # detection on the HIGH-priority stream
+                box_lists = detector.detect_batch([f for _, f in due], conf=args.conf)
+            if hi_stream is not None:
+                hi_stream.synchronize()
+            perf["detect_s"] += time.time() - t0
+            perf["calls"] += 1
+            perf["cams"] += len(due)
+
+            for (stream, frame), boxes in zip(due, box_lists):
+                uid = stream.camera_uid
+                cam = roles[uid]
                 with state_lock:
                     frames[uid] = frame
-                    tks = trackers[uid].update(boxes)
+                    tks = trackers[uid].update(boxes, frame)
                 if cam.runs_identity:
-                    # unresolved tracks show 'Unknown' (red) until identity locks them
-                    annos = [(*t.box[:4], t.label or "Unknown", t.color or _COL_UNKNOWN) for t in tks]
+                    # Neutral 'person' (grey) until the background worker resolves the
+                    # track; it then recolors to Employee/Visitor/Unknown. So a box
+                    # shows up LIVE the instant the detector sees someone, and the name
+                    # fills in a few seconds later.
+                    annos = [(*t.box[:4], t.label or "person", t.color or _COL_PERSON) for t in tks]
                 else:
                     annos = [(*t.box[:4], "person", _COL_PERSON) for t in tks]
                 set_annotations(uid, annos)
 
-            if not did_work:
-                time.sleep(0.02)                  # avoid busy-spin when nothing is due
+            if now - perf["last_report"] >= 5.0 and perf["calls"]:
+                with state_lock:
+                    backlog = sum(1 for c in id_cams for t in trackers[c.camera_uid].tracks
+                                  if not t.resolved and t.misses == 0 and t.hits >= IDENTITY_MIN_HITS)
+                print(f"[perf] grid: detect {perf['detect_s']/perf['calls']*1000:.0f} ms/batch, "
+                      f"{perf['calls']/(now-perf['last_report']):.1f} batches/s, "
+                      f"{perf['cams']/perf['calls']:.1f} cams/batch | identity backlog {backlog}")
+                perf.update(detect_s=0.0, calls=0, cams=0, last_report=now)
     except KeyboardInterrupt:
         print("\nStopping...")
     finally:

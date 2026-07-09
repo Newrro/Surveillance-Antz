@@ -15,7 +15,7 @@ from sqlalchemy import text
 from api.auth import require_admin
 from db import vector_store
 from db.connection import get_session
-from services import presence_cache
+from services import dedup_service, presence_cache
 
 logger = logging.getLogger("admin")
 
@@ -79,3 +79,35 @@ async def clear_unknowns_endpoint(_: str = Depends(require_admin)) -> dict:
     """Manual 'clear today's unknowns' — same as the automatic midnight sweep."""
     removed = await clear_unknowns()
     return {"status": "ok", "removed": removed, "message": f"Cleared {removed} unknown(s). Visitors kept."}
+
+
+@router.post("/consolidate")
+async def consolidate_endpoint(apply: bool = False, _: str = Depends(require_admin)) -> dict:
+    """Gallery consolidation (Phase 2): fold VISITOR identities that are really the
+    SAME person (matching face-gallery centroids) into their oldest id. Runs
+    IN-PROCESS so it shares the Brain's embedded-Qdrant client (a standalone script
+    can't open the same on-disk Qdrant while the Brain holds it).
+
+    ?apply=false (default) → DRY RUN: returns the merge plan, changes nothing.
+    ?apply=true            → executes the merges and commits."""
+    async with get_session() as session:
+        plans = await dedup_service.consolidate_visitors(session, apply=apply)
+        if apply:
+            await session.commit()
+    merges = [
+        {"keep": p.primary, "keep_label": p.primary_label,
+         "merged": p.duplicates, "merged_labels": p.labels, "similarity": p.similarity}
+        for p in plans
+    ]
+    total = sum(len(p.duplicates) for p in plans)
+    return {
+        "status": "ok",
+        "applied": apply,
+        "duplicates_found": total,
+        "clusters": len(merges),
+        "merges": merges,
+        "message": (f"Merged {total} duplicate visitor(s) into {len(merges)} identities."
+                    if apply else
+                    f"DRY RUN — found {total} duplicate(s) in {len(merges)} cluster(s). "
+                    f"POST again with ?apply=true to merge."),
+    }

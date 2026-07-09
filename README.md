@@ -11,6 +11,9 @@ log of everything that happened.
                      embeddings)            tracking + DB)     live feed, logs)
 ```
 
+> **New to the codebase?** Read [`ARCHITECTURE.md`](ARCHITECTURE.md) — a full teaching
+> walkthrough of every part and file (rich HTML version at [`docs/architecture.html`](docs/architecture.html)).
+
 ## The three parts
 
 | Part | Folder | Owner | Responsibility | Status |

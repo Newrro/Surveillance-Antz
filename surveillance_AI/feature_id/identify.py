@@ -25,6 +25,7 @@ class Identifier:
         self.gallery = Gallery()
         self.extractor = self.body     # backward-compat alias
         self.last_face_crop = None     # aligned face image from the last extract()
+        self.last_face_quality = 0.0   # AdaFace-norm quality of that face (best-shot)
 
     def _too_small(self, crop):
         if crop is None or crop.size == 0:
@@ -40,6 +41,7 @@ class Identifier:
         camera scene. Face always uses the raw crop — alignment needs true pixels.
         """
         face, self.last_face_crop = self.face.embed_with_face(person_bgr)
+        self.last_face_quality = self.face.last_norm if face is not None else 0.0
         bb = person_bgr if body_bgr is None else body_bgr
         body = None if self._too_small(bb) else self.body.embed(bb)
         return face, body

@@ -1402,8 +1402,10 @@ function onPersonCardClick(e, userId) {
 
 /* The merge button on a card starts selection mode with that card pre-selected. */
 function enterMergeMode(userId) {
-  mergeMode = true;
-  mergeSelection.clear();
+  // First card starts merge mode with a clean selection; clicking the merge
+  // button on further cards ADDS them (don't reset — that was the "always 1
+  // selected" bug). Once in merge mode, clicking card BODIES also toggles.
+  if (!mergeMode) { mergeMode = true; mergeSelection.clear(); }
   if (userId && PEOPLE[userId]) mergeSelection.add(userId);
   renderReport();
   updateMergeBar();

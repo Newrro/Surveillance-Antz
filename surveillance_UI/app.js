@@ -672,18 +672,19 @@ function closePersonLog() { document.getElementById('plog-modal').classList.remo
 function closePersonLogIfBackdrop(e) { if (e.target.id === 'plog-modal') closePersonLog(); }
 
 /* Enlarged photo popup — opened from the avatar in the person-details modal. */
-/* Try each body-crop URL's sibling <stem>_face.jpg in turn; show the FIRST that
-   loads. A confirmed Visitor has a face on file, but it was captured on some
-   sighting — not necessarily the newest one shown — so we scan the person's
-   whole history instead of guessing from one photo. */
-function showFirstFace(imgEl, figEl, bodyUrls) {
-  const faces = [...new Set(bodyUrls.filter(Boolean)
-    .map(u => u.replace(/\.jpg(\?.*)?$/i, '_face.jpg')))];
+/* Try each body-crop URL's sibling <stem><suffix> in turn; show the FIRST that
+   loads. The face (<stem>_face.jpg) and full scene (<stem>_full.jpg) share the
+   body crop's stem, but were captured on some sighting — not necessarily the
+   newest one shown — so we scan the person's whole history instead of guessing
+   from one photo. */
+function showFirstSibling(imgEl, figEl, bodyUrls, suffix) {
+  const cands = [...new Set(bodyUrls.filter(Boolean)
+    .map(u => u.replace(/\.jpg(\?.*)?$/i, suffix)))];
   figEl.style.display = 'none';
   let i = 0;
   const tryNext = () => {
-    if (i >= faces.length) return;             // no face crop anywhere → stays hidden
-    const u = faces[i++];
+    if (i >= cands.length) return;             // none found anywhere → stays hidden
+    const u = cands[i++];
     const probe = new Image();
     probe.onload = () => { imgEl.src = u; figEl.style.display = ''; };
     probe.onerror = tryNext;
@@ -704,13 +705,15 @@ function openPersonPhoto(snapshotOverride) {
   if (bodyUrl) { bodyImg.src = bodyUrl; bodyFig.style.display = ''; }
   else { bodyFig.style.display = 'none'; }
 
-  // Prefer this sighting's face, then any face across the person's history.
+  // Prefer this sighting's crops, then any across the person's history.
   const bodies = [];
   if (snapshotOverride) bodies.push(snapshotOverride);
   bodies.push(...p.history.map(h => h.snapshot).filter(Boolean).slice().reverse());
   if (p.photo) bodies.push(p.photo);
-  showFirstFace(document.getElementById('photo-face-img'),
-                document.getElementById('photo-face-fig'), bodies);
+  showFirstSibling(document.getElementById('photo-face-img'),
+                   document.getElementById('photo-face-fig'), bodies, '_face.jpg');
+  showFirstSibling(document.getElementById('photo-full-img'),
+                   document.getElementById('photo-full-fig'), bodies, '_full.jpg');
 
   document.getElementById('photo-name').textContent = personName(p);
   document.getElementById('photo-sub').textContent =
@@ -790,6 +793,54 @@ async function clearUnknowns() {
     alert('Clear failed: ' + e.message);
   } finally {
     if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-eraser"></i> Clear all unknowns'; }
+  }
+}
+
+/* Settings → Merge duplicate visitors: preview the face-centroid merge plan
+   (dry-run, safe) then optionally apply. Two-step so a human always sees which
+   Visitor cards will be folded together before anything changes. */
+function _renderConsolidatePlan(r) {
+  const box = document.getElementById('consolidate-result');
+  const applyBtn = document.getElementById('consolidate-apply-btn');
+  if (!r.duplicates_found) {
+    box.textContent = 'No duplicate visitors found — nothing to merge.';
+    if (applyBtn) applyBtn.style.display = 'none';
+    return;
+  }
+  const lines = r.merges.map(m =>
+    `• keep ${m.keep_label} ← merge ${m.merged_labels.join(', ')}  (face sim ${m.similarity})`);
+  box.textContent = `Found ${r.duplicates_found} duplicate(s) in ${r.clusters} cluster(s):\n` + lines.join('\n');
+  if (applyBtn) applyBtn.style.display = '';   // reveal Apply now that there's a plan
+}
+async function consolidatePreview() {
+  const btn = document.getElementById('consolidate-preview-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Scanning…'; }
+  try {
+    if (!BRAIN_ON) throw new Error('Brain not connected');
+    _renderConsolidatePlan(await Brain.consolidate({ user: AUTH.username, pass: AUTH.password }, false));
+  } catch (e) {
+    document.getElementById('consolidate-result').textContent = 'Preview failed: ' + e.message;
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-users-group"></i> Preview duplicates'; }
+  }
+}
+async function consolidateApply() {
+  if (!confirm('Merge the previewed duplicate Visitors? This rewrites their sightings onto one id and cannot be undone.')) return;
+  const btn = document.getElementById('consolidate-apply-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Merging…'; }
+  try {
+    if (!BRAIN_ON) throw new Error('Brain not connected');
+    const r = await Brain.consolidate({ user: AUTH.username, pass: AUTH.password }, true);
+    await connectBrain();
+    renderGrid(); renderReport(); renderRecords();
+    if (currentView === 'log') renderLog();
+    document.getElementById('consolidate-result').textContent =
+      `Merged ${r.duplicates_found} duplicate(s) into ${r.clusters} identity(ies).`;
+    btn.style.display = 'none';
+  } catch (e) {
+    document.getElementById('consolidate-result').textContent = 'Merge failed: ' + e.message;
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-git-merge"></i> Apply merges'; }
   }
 }
 
@@ -1167,8 +1218,20 @@ function personCard(p) {
   const sub = p.category === 'Employee' ? `${p.employeeId} · ${p.department}`
             : p.category === 'Visitor'  ? 'Visitor'
             : 'Unidentified';
+  // In merge mode a card is a SELECTION toggle (not a link). Only real identities
+  // (with an identity_id) can be merged; ephemeral ones are disabled.
+  const selectable = mergeMode && p.identityId != null;
+  const selected = mergeMode && mergeSel.has(p.userId);
+  const cls = 'person-card'
+    + (selected ? ' merge-selected' : '')
+    + (mergeMode && !selectable ? ' merge-disabled' : '')
+    + (mergeMode ? ' merge-mode' : '');
+  const onclick = !mergeMode ? `onclick="openPersonLog('${p.userId}')"`
+                : selectable ? `onclick="toggleMergeSelect('${p.userId}')"` : '';
+  const check = mergeMode ? `<div class="merge-check">${selected ? '<i class="ti ti-check"></i>' : ''}</div>` : '';
   return `
-    <div class="person-card" onclick="openPersonLog('${p.userId}')">
+    <div class="${cls}" ${onclick}>
+      ${check}
       <div class="person-card-head">
         <div class="avatar" style="${photoCss(p)}">${p.initials}</div>
         <div>
@@ -1180,6 +1243,87 @@ function personCard(p) {
       <div class="kv"><span class="k">Gender</span><span class="v">${p.gender}</span></div>
       <div class="kv"><span class="k">Entries</span><span class="v">${p.history.length}</span></div>
     </div>`;
+}
+
+/* ---------- Manual merge (Report view) ----------
+   Select 2+ people that are really the same person and fold them into one id.
+   The surviving id ("primary") is an Employee if one is selected, else the
+   oldest (lowest identity_id). No similarity gate — the human decides. */
+let mergeMode = false;
+const mergeSel = new Set();
+
+function _updateMergeUI() {
+  const on = mergeMode, n = mergeSel.size;
+  document.getElementById('merge-start-btn').style.display = on ? 'none' : '';
+  document.getElementById('merge-cancel-btn').style.display = on ? '' : 'none';
+  const mBtn = document.getElementById('merge-do-btn');
+  const dBtn = document.getElementById('delete-do-btn');
+  mBtn.style.display = on ? '' : 'none';
+  dBtn.style.display = on ? '' : 'none';
+  mBtn.disabled = n < 2;                                  // merge needs 2+
+  dBtn.disabled = n < 1;                                  // delete needs 1+
+  mBtn.innerHTML = `<i class="ti ti-git-merge"></i> Merge selected${n ? ` (${n})` : ''}`;
+  dBtn.innerHTML = `<i class="ti ti-trash"></i> Delete selected${n ? ` (${n})` : ''}`;
+  const sub = document.getElementById('report-sub');
+  sub.textContent = on
+    ? 'Select mode — tick cards, then Merge (2+ same person) or Delete. Click Cancel to exit.'
+    : 'Grouped by category · click anyone to open their full log';
+}
+function startMergeMode() { mergeMode = true; mergeSel.clear(); renderReport(); _updateMergeUI(); }
+function cancelMergeMode() { mergeMode = false; mergeSel.clear(); renderReport(); _updateMergeUI(); }
+function toggleMergeSelect(userId) {
+  if (mergeSel.has(userId)) mergeSel.delete(userId); else mergeSel.add(userId);
+  renderReport(); _updateMergeUI();
+}
+async function doMerge() {
+  const chosen = [...mergeSel].map(uid => PEOPLE[uid]).filter(p => p && p.identityId != null);
+  if (chosen.length < 2) { alert('Select at least two people to merge.'); return; }
+  // Primary = an employee if selected, else the oldest (lowest) identity_id.
+  const emp = chosen.filter(p => p.category === 'Employee').sort((a, b) => a.identityId - b.identityId)[0];
+  const primary = emp || chosen.slice().sort((a, b) => a.identityId - b.identityId)[0];
+  const dups = chosen.filter(p => p !== primary);
+  const names = dups.map(p => personName(p)).join(', ');
+  if (!confirm(`Merge ${dups.length} card(s) into ${personName(primary)} (${primary.userId})?\n\n`
+             + `Folding in: ${names}\n\nTheir sightings move onto ${personName(primary)} and the other cards are deleted. This cannot be undone.`)) return;
+  const btn = document.getElementById('merge-do-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Merging…'; }
+  try {
+    if (!BRAIN_ON) throw new Error('Brain not connected');
+    const r = await Brain.mergeIdentities({ user: AUTH.username, pass: AUTH.password },
+      primary.identityId, dups.map(p => p.identityId));
+    mergeMode = false; mergeSel.clear();
+    await connectBrain();
+    renderGrid(); renderReport(); renderRecords();
+    if (currentView === 'log') renderLog();
+    _updateMergeUI();
+    alert(`Merged ${r.count} card(s) into ${personName(primary)}.`);
+  } catch (e) {
+    alert('Merge failed: ' + e.message);
+    _updateMergeUI();
+  }
+}
+async function doDelete() {
+  const chosen = [...mergeSel].map(uid => PEOPLE[uid]).filter(p => p && p.identityId != null);
+  if (!chosen.length) { alert('Select at least one person to delete.'); return; }
+  const names = chosen.map(p => `${personName(p)} (${p.userId})`).join('\n');
+  if (!confirm(`Permanently delete ${chosen.length} person(s)?\n\n${names}\n\n`
+             + `Their sightings, sessions and photos are removed. This cannot be undone.`)) return;
+  const btn = document.getElementById('delete-do-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
+  try {
+    if (!BRAIN_ON) throw new Error('Brain not connected');
+    const r = await Brain.deleteIdentities({ user: AUTH.username, pass: AUTH.password },
+      chosen.map(p => p.identityId));
+    mergeMode = false; mergeSel.clear();
+    await connectBrain();
+    renderGrid(); renderReport(); renderRecords();
+    if (currentView === 'log') renderLog();
+    _updateMergeUI();
+    alert(`Deleted ${r.count} person(s).`);
+  } catch (e) {
+    alert('Delete failed: ' + e.message);
+    _updateMergeUI();
+  }
 }
 
 /* ---------- Records ---------- */

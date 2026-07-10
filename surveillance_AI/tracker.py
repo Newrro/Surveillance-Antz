@@ -30,7 +30,8 @@ class Track:
     __slots__ = ("id", "box", "hits", "misses",
                  "label", "color", "resolved", "last_resolve", "emitted",
                  "snap_path", "face_path",
-                 "best_face_emb", "best_body_emb", "best_face_q", "emit_face_q", "probes")
+                 "best_face_emb", "best_body_emb", "best_face_q", "emit_face_q", "probes",
+                 "face_emb_sum", "face_w_sum", "emit_face_w")
 
     def __init__(self, tid, box):
         self.id = tid
@@ -44,15 +45,19 @@ class Track:
         self.emitted = False       # at least one /events POST sent for this track
         self.snap_path = None      # body-crop snapshot saved once per track (dedupe)
         self.face_path = None      # face-crop snapshot saved once per track
-        # ── best-shot tracklet identity (Part 2) ──
-        # We probe the track over several frames and keep the HIGHEST-quality face
-        # (AdaFace feature-norm) instead of resolving off the first, possibly
-        # blurry/side-on frame. Identity is emitted from the best shot, so the same
-        # person is far likelier to re-match one gallery entry (less fragmentation).
-        self.best_face_emb = None   # best face embedding seen so far on this track
+        # ── quality-weighted temporal face pooling (Part 2, Phase 3b) ──
+        # A single "best shot" is still one noisy frame, so the SAME person's face
+        # can enroll as several gallery entries that don't re-match (measured: one
+        # person fragmenting into 4+ Visitor ids). Instead we POOL every probe's
+        # face embedding into a quality-weighted centroid and identify/enroll from
+        # that — a far more stable vector that re-matches one gallery entry.
+        self.face_emb_sum = None    # Σ (quality · face_vec) over probes (np.float32[512])
+        self.face_w_sum = 0.0       # Σ quality — pooled vec = normalize(sum), weight = this
+        self.emit_face_w = 0.0      # face_w_sum at last emit (re-emit when pool grows enough)
+        self.best_face_emb = None   # highest-quality single shot (kept only for reference)
         self.best_body_emb = None   # body embedding paired with the best face shot
-        self.best_face_q = 0.0      # quality of best_face_emb
-        self.emit_face_q = 0.0      # quality of the face we last emitted (re-emit only if beaten)
+        self.best_face_q = 0.0      # quality of best_face_emb (drives the saved face thumbnail)
+        self.emit_face_q = 0.0      # (legacy) quality of the face we last emitted
         self.probes = 0             # number of heavy identity attempts on this track
 
 

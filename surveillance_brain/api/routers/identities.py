@@ -14,9 +14,15 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import require_admin
-from api.schemas import ConversionResponse, NameRequest, PromoteRequest
-from db.connection import get_db
-from services import conversion_service
+from api.schemas import (
+    ConversionResponse,
+    DeleteIdentitiesRequest,
+    MergeRequest,
+    NameRequest,
+    PromoteRequest,
+)
+from db.connection import get_db, get_session
+from services import conversion_service, dedup_service
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +105,59 @@ async def demote(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Demote failed: {e}",
         )
+
+
+@router.post(
+    "/merge",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_admin)],
+    summary="Manually merge duplicate identities into one (folds duplicates → primary)",
+)
+async def merge(body: MergeRequest, _: str = Depends(require_admin)) -> dict:
+    """Fold every id in `duplicate_ids` INTO `primary_id`: their sightings +
+    sessions are re-pointed to the primary and the duplicate identities (and their
+    vectors) are deleted. The primary keeps its id, label, name and history.
+
+    Used by the dashboard's manual 'select + merge' — the human decides these are
+    the same person, so there's no similarity gate (unlike the auto-consolidator)."""
+    dups = [d for d in dict.fromkeys(body.duplicate_ids) if d != body.primary_id]
+    if not dups:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="need at least one duplicate id distinct from primary_id")
+    merged: list[int] = []
+    async with get_session() as session:
+        for dup in dups:
+            try:
+                await dedup_service.merge_identities(session, primary_id=body.primary_id, duplicate_id=dup)
+                merged.append(dup)
+            except ValueError as e:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        await session.commit()
+    logger.info("Manual merge: folded %s into %d", merged, body.primary_id)
+    return {"status": "ok", "primary_id": body.primary_id, "merged": merged, "count": len(merged)}
+
+
+@router.post(
+    "/delete",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_admin)],
+    summary="Permanently delete identities (sightings, sessions, vectors, row)",
+)
+async def delete_identities(body: DeleteIdentitiesRequest, _: str = Depends(require_admin)) -> dict:
+    """Hard-delete each id: its detection_events, presence_sessions, embeddings and
+    the identity row. Used by the dashboard's 'select + delete'. Irreversible."""
+    ids = list(dict.fromkeys(body.identity_ids))
+    deleted: list[int] = []
+    async with get_session() as session:
+        for iid in ids:
+            try:
+                await dedup_service.purge_identity(session, iid)
+                deleted.append(iid)
+            except ValueError:
+                continue                     # already gone — skip, keep deleting the rest
+        await session.commit()
+    logger.info("Manual delete: purged %s", deleted)
+    return {"status": "ok", "deleted": deleted, "count": len(deleted)}
 
 
 @router.post(

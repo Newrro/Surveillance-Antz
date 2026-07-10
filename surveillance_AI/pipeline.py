@@ -77,6 +77,21 @@ PREVIEW_W = int(os.environ.get("PREVIEW_W", "1280"))
 PREVIEW_H = int(os.environ.get("PREVIEW_H", "720"))
 PREVIEW_QUALITY = int(os.environ.get("PREVIEW_QUALITY", "85"))
 
+# ── Decoupled detection resolution ─────────────────────────────────────────
+# Frames now arrive at NATIVE resolution (nvr_stream) so face/body crops keep
+# their pixels. Detection doesn't need that: RT-DETR resizes to a fixed input
+# internally, so we run it on a cheap downscaled COPY (longest side capped here)
+# and scale the boxes back to full-res coords. Crops are then taken from the
+# full-res frame. Bigger = catches smaller/distant people; smaller = less lag.
+DETECT_MAX_SIDE = int(os.environ.get("DETECT_MAX_SIDE", "960"))
+
+# ── Full-scene verification snapshot ───────────────────────────────────────
+# Beside the face + body crops we save the whole frame (box drawn) so the UI can
+# show the crops IN CONTEXT — you can eyeball whether they came from the right
+# person. Downscaled + moderate quality: this is for human review, not features.
+FULL_FRAME_MAX_W = int(os.environ.get("FULL_FRAME_MAX_W", "1280"))
+FULL_FRAME_QUALITY = int(os.environ.get("FULL_FRAME_QUALITY", "88"))
+
 # ── Identity as a lagged background service ────────────────────────────────
 # The grid (live detection boxes) is the real-time FOREGROUND; identity is a
 # throttled BACKGROUND worker that is allowed to lag a few seconds. These knobs
@@ -227,6 +242,20 @@ def crop_person(frame_bgr, box_xyxy, mask=None):
     return frame_bgr[y1:y2, x1:x2].copy()
 
 
+def _pooled_face(emb_sum, w_sum):
+    """Quality-weighted temporal pool → one L2-normalized face vector. Averaging
+    several frames' embeddings (weighted by quality) cancels per-frame noise, so
+    the same person enrolls/matches ONE stable gallery vector (less fragmentation).
+    Returns a plain list (JSON-serializable for the Brain payload), or None."""
+    if emb_sum is None or w_sum <= 0:
+        return None
+    v = np.asarray(emb_sum, dtype=np.float32)
+    n = float(np.linalg.norm(v))
+    if n <= 0:
+        return None
+    return (v / n).tolist()
+
+
 def save_snapshot(camera_uid, crop_bgr, stamp_ms, idx):
     """Save the full-body crop under storage/img/<camera_uid>/ and return its path."""
     out_dir = os.path.join(STORAGE_IMG, camera_uid)
@@ -243,6 +272,23 @@ def save_face_snapshot(camera_uid, face_bgr, stamp_ms, idx):
     os.makedirs(out_dir, exist_ok=True)
     fname = f"{stamp_ms}_{idx}_face.jpg"
     cv2.imwrite(os.path.join(out_dir, fname), face_bgr)
+    return f"storage/img/{camera_uid}/{fname}"
+
+
+def save_frame_snapshot(camera_uid, frame_bgr, box_xyxy, stamp_ms, idx):
+    """Save the whole scene (downscaled, person's box drawn) as <stem>_full.jpg,
+    sharing the body snapshot's stem so the UI derives it the same way it does the
+    face. A verification companion — lets a human confirm the crops are the right
+    person, not part of the identity signal."""
+    out_dir = os.path.join(STORAGE_IMG, camera_uid)
+    os.makedirs(out_dir, exist_ok=True)
+    h, w = frame_bgr.shape[:2]
+    s = FULL_FRAME_MAX_W / w if w > FULL_FRAME_MAX_W else 1.0
+    img = cv2.resize(frame_bgr, (int(w * s), int(h * s))) if s < 1.0 else frame_bgr.copy()
+    x1, y1, x2, y2 = (int(v * s) for v in box_xyxy[:4])
+    cv2.rectangle(img, (x1, y1), (x2, y2), _COL_VIS, 2)
+    fname = f"{stamp_ms}_{idx}_full.jpg"
+    cv2.imwrite(os.path.join(out_dir, fname), img, [int(cv2.IMWRITE_JPEG_QUALITY), FULL_FRAME_QUALITY])
     return f"storage/img/{camera_uid}/{fname}"
 
 
@@ -369,33 +415,42 @@ def main():
         stamp_ms = int(time.time() * 1000)
         with state_lock:
             t.probes += 1
-            # Keep the best face shot seen so far (and the body paired with it).
-            improved = face_emb is not None and face_q > t.best_face_q
-            if improved:
-                t.best_face_emb, t.best_body_emb, t.best_face_q = face_emb, body_emb, face_q
+            # Pool this probe's face into a QUALITY-WEIGHTED running centroid, so we
+            # identify/enroll from many frames averaged (weighted by quality) rather
+            # than one best shot — a stable vector that re-matches one gallery entry.
+            if face_emb is not None:
+                w = max(1e-3, float(face_q))
+                fv = np.asarray(face_emb, dtype=np.float32) * w
+                t.face_emb_sum = fv if t.face_emb_sum is None else t.face_emb_sum + fv
+                t.face_w_sum += w
+                if face_q > t.best_face_q:               # best single shot → snapshot + paired body
+                    t.best_face_emb, t.best_body_emb, t.best_face_q = face_emb, body_emb, face_q
             elif t.best_body_emb is None and body_emb is not None:
                 t.best_body_emb = body_emb              # keep a body even before any face
             # Snapshots: one body crop per track; refresh the face thumb on a better shot.
             if t.snap_path is None:
                 t.snap_path = save_snapshot(uid, crop, stamp_ms, t.id)
-            if improved and identifier.last_face_crop is not None:
+                save_frame_snapshot(uid, frame, box, stamp_ms, t.id)   # full scene for verification
+            if face_emb is not None and face_q >= t.best_face_q and identifier.last_face_crop is not None:
                 t.face_path = save_face_snapshot(uid, identifier.last_face_crop, stamp_ms, t.id)
             # Decide whether to (re-)emit. Wait for a few probes so the FIRST emit
-            # uses the best-of-N face (a poor first face can enroll a bad gallery
-            # entry the person then fails to re-match). After that, only re-emit if
-            # a clearly better face turns up (upgrades the stored vector).
+            # pools several faces (a poor single face enrolls a bad gallery entry the
+            # person then fails to re-match). After that, re-emit only once the pool
+            # has grown meaningfully (more/better face evidence → sharper centroid).
             budget_done = t.probes >= IDENTITY_MAX_PROBES
-            have_face = t.best_face_emb is not None
+            have_face = t.face_w_sum > 0.0
             ready = have_face and (budget_done or t.emitted)
             ready = ready or (budget_done and not have_face)   # body-only fallback → Unknown
             if not ready:
                 return True                          # keep probing; worker retries this track
-            if t.emitted and not (t.best_face_q > t.emit_face_q * (1.0 + IDENTITY_REEMIT_FRAC)):
-                return True                          # already sent our best; nothing better yet
-            emit_face, emit_body = t.best_face_emb, t.best_body_emb
+            if t.emitted and not (t.face_w_sum > t.emit_face_w * (1.0 + IDENTITY_REEMIT_FRAC)):
+                return True                          # already sent our pooled best; nothing better yet
+            emit_face = _pooled_face(t.face_emb_sum, t.face_w_sum)
+            emit_body = t.best_body_emb
             snap, emit_q = t.snap_path, t.best_face_q
             t.emitted = True
-            t.emit_face_q = emit_q
+            t.emit_face_w = t.face_w_sum
+            t.emit_face_q = t.best_face_q
 
         disp = color = None
         locked = False
@@ -490,10 +545,24 @@ def main():
                 continue
 
             t0 = time.time()
+            # Detect on a downscaled COPY (cheap CPU pre-proc; RT-DETR resizes
+            # internally regardless), then scale boxes back to full-res so the
+            # tracker and crops operate on native pixels.
+            det_frames, det_scales = [], []
+            for _, frame in due:
+                fh, fw = frame.shape[:2]
+                s = DETECT_MAX_SIDE / max(fh, fw) if max(fh, fw) > DETECT_MAX_SIDE else 1.0
+                small = cv2.resize(frame, (int(fw * s), int(fh * s)), interpolation=cv2.INTER_AREA) if s < 1.0 else frame
+                det_frames.append(small)
+                det_scales.append(s)
             with _stream_ctx(hi_stream):                 # detection on the HIGH-priority stream
-                box_lists = detector.detect_batch([f for _, f in due], conf=args.conf)
+                box_lists = detector.detect_batch(det_frames, conf=args.conf)
             if hi_stream is not None:
                 hi_stream.synchronize()
+            box_lists = [
+                [(x1 / s, y1 / s, x2 / s, y2 / s, sc) for (x1, y1, x2, y2, sc) in boxes]
+                for boxes, s in zip(box_lists, det_scales)
+            ]
             perf["detect_s"] += time.time() - t0
             perf["calls"] += 1
             perf["cams"] += len(due)

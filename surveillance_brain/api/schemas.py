@@ -170,6 +170,18 @@ class ConversionResponse(BaseModel):
     new_type: str
 
 
+class MergeRequest(BaseModel):
+    """Fold `duplicate_ids` into `primary_id` (all become one person). The caller
+    picks which id survives — the UI keeps an employee, else the oldest."""
+    primary_id: int
+    duplicate_ids: List[int] = Field(..., min_length=1)
+
+
+class DeleteIdentitiesRequest(BaseModel):
+    """Permanently delete these identities (sightings, sessions, vectors, row)."""
+    identity_ids: List[int] = Field(..., min_length=1)
+
+
 # ---------------------------------------------------------------------------
 # /search
 # ---------------------------------------------------------------------------

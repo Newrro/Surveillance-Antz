@@ -28,10 +28,21 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Face
 # ---------------------------------------------------------------------------
-async def insert_face(identity_id: int, embedding: Sequence[float], source: Optional[str] = None) -> str:
-    return await vector_store.upsert_embedding(
-        config.QDRANT_FACE_COLLECTION, identity_id, embedding, source
+async def insert_face(identity_id: int, embedding: Sequence[float], source: Optional[str] = None,
+                      quality: Optional[float] = None) -> str:
+    pid = await vector_store.upsert_embedding(
+        config.QDRANT_FACE_COLLECTION, identity_id, embedding, source, quality
     )
+    await _cap_views(config.QDRANT_FACE_COLLECTION, identity_id)
+    return pid
+
+
+async def _cap_views(collection: str, identity_id: int) -> None:
+    """Best-effort gallery view-cap (Phase 3d) — never break ingestion over it."""
+    try:
+        await vector_store.enforce_view_cap(collection, identity_id, config.GALLERY_MAX_VIEWS)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("view-cap failed for identity %d: %s", identity_id, e)
 
 
 async def search_face(embedding: Sequence[float], limit: int = 5) -> List[Tuple[int, float]]:
@@ -41,10 +52,13 @@ async def search_face(embedding: Sequence[float], limit: int = 5) -> List[Tuple[
 # ---------------------------------------------------------------------------
 # Body (ReID)
 # ---------------------------------------------------------------------------
-async def insert_body(identity_id: int, embedding: Sequence[float], source: Optional[str] = None) -> str:
-    return await vector_store.upsert_embedding(
-        config.QDRANT_BODY_COLLECTION, identity_id, embedding, source
+async def insert_body(identity_id: int, embedding: Sequence[float], source: Optional[str] = None,
+                      quality: Optional[float] = None) -> str:
+    pid = await vector_store.upsert_embedding(
+        config.QDRANT_BODY_COLLECTION, identity_id, embedding, source, quality
     )
+    await _cap_views(config.QDRANT_BODY_COLLECTION, identity_id)
+    return pid
 
 
 async def search_body(embedding: Sequence[float], limit: int = 5) -> List[Tuple[int, float]]:

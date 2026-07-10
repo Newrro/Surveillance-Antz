@@ -191,7 +191,13 @@
         <div class="view-header">
           <div>
             <h1 class="view-title">Report</h1>
-            <p class="view-sub">Grouped by category · click anyone to open their full log</p>
+            <p class="view-sub" id="report-sub">Grouped by category · click anyone to open their full log</p>
+          </div>
+          <div class="merge-tools">
+            <button class="btn" id="merge-start-btn" onclick="startMergeMode()"><i class="ti ti-checkbox"></i> Select</button>
+            <button class="btn btn-primary" id="merge-do-btn" onclick="doMerge()" style="display:none"><i class="ti ti-git-merge"></i> Merge selected</button>
+            <button class="btn btn-danger" id="delete-do-btn" onclick="doDelete()" style="display:none"><i class="ti ti-trash"></i> Delete selected</button>
+            <button class="btn" id="merge-cancel-btn" onclick="cancelMergeMode()" style="display:none">Cancel</button>
           </div>
         </div>
         <div id="report-groups"></div>
@@ -247,6 +253,14 @@
           <h2>Daily reset</h2>
           <p class="desc">Clear all Unknowns (people not yet confirmed as Visitors). Confirmed Visitors and Employees are kept, so returning people are still recognised. Runs automatically every midnight.</p>
           <button class="btn" id="clear-unknowns-btn" onclick="clearUnknowns()"><i class="ti ti-eraser"></i> Clear all unknowns</button>
+        </div>
+
+        <div class="settings-section">
+          <h2>Merge duplicate visitors</h2>
+          <p class="desc">The same person can enroll as several Visitor cards when their face was captured from different angles. This finds Visitors whose faces match (face only — never clothing) and folds them into one. Preview first; nothing changes until you apply.</p>
+          <button class="btn" id="consolidate-preview-btn" onclick="consolidatePreview()"><i class="ti ti-users-group"></i> Preview duplicates</button>
+          <button class="btn btn-primary" id="consolidate-apply-btn" onclick="consolidateApply()" style="display:none"><i class="ti ti-git-merge"></i> Apply merges</button>
+          <div id="consolidate-result" class="desc" style="margin-top:10px;white-space:pre-wrap"></div>
         </div>
 
         <div class="settings-section">
@@ -368,6 +382,10 @@
       <figure class="photo-fig" id="photo-body-fig">
         <img class="photo-img" id="photo-body-img" alt="full body">
         <figcaption>Full body</figcaption>
+      </figure>
+      <figure class="photo-fig" id="photo-full-fig">
+        <img class="photo-img" id="photo-full-img" alt="full scene">
+        <figcaption>Full scene</figcaption>
       </figure>
     </div>
     <div class="photo-name" id="photo-name">—</div>

@@ -853,13 +853,16 @@ td.mono { font-family: var(--font-mono); font-size: 12.5px; color: var(--text-se
 }
 .photo-name { font-size: 16px; font-weight: 600; color: var(--text-primary); }
 .photo-sub { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); }
-/* Dual face + full-body crops in the enlarged photo popup */
-.photo-imgs { display: flex; gap: 16px; align-items: flex-end; margin-bottom: 8px; }
+/* Face + full-body crops, plus the full-scene verification frame, in the popup */
+.photo-imgs { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: center; margin-bottom: 8px; }
 .photo-fig { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .photo-fig figcaption { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .photo-img { border-radius: var(--radius); border: 1.5px solid var(--accent); object-fit: cover; background: var(--accent-dim); }
 #photo-face-img { width: 180px; height: 180px; }
 #photo-body-img { width: 180px; height: 234px; }
+/* Full scene: wider (16:9), whole frame visible (contain, not cropped) so the
+   drawn box can be checked against the crops. */
+#photo-full-img { width: 416px; height: 234px; max-width: 100%; object-fit: contain; }
 .inside-stat {
   display: flex; align-items: center; gap: 12px;
   background: var(--accent-dim); border: 1px solid var(--accent);
@@ -895,6 +898,19 @@ td.mono { font-family: var(--font-mono); font-size: 12.5px; color: var(--text-se
 .person-card-head .avatar { width: 38px; height: 38px; }
 .person-card-head .name { font-size: 13.5px; font-weight: 600; }
 .person-card-head .sub { font-size: 11.5px; color: var(--text-muted); }
+
+/* ---------- Manual merge selection (Report view) ---------- */
+.merge-tools { display: flex; gap: 8px; align-items: center; }
+.person-card.merge-mode { position: relative; }
+.person-card.merge-selected { border-color: var(--accent); box-shadow: var(--glow); background: var(--accent-dim); }
+.person-card.merge-disabled { opacity: 0.4; cursor: not-allowed; }
+.person-card.merge-disabled:hover { border-color: var(--border); box-shadow: var(--shadow); transform: none; }
+.merge-check {
+  position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 50%;
+  border: 1.5px solid var(--accent); display: flex; align-items: center; justify-content: center;
+  font-size: 13px; color: #042; background: var(--bg-0);
+}
+.person-card.merge-selected .merge-check { background: var(--accent); color: #042; }
 
 /* ---------- Person log modal (opens at ~3/4 of the screen) ---------- */
 .modal-plog {

@@ -28,7 +28,7 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from sqlalchemy import update
+from sqlalchemy import delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import config
@@ -112,6 +112,21 @@ async def merge_identities(session: AsyncSession, primary_id: int, duplicate_id:
     await session.flush()
 
     logger.info("Merged identity %d into %d", duplicate_id, primary_id)
+
+
+async def purge_identity(session: AsyncSession, identity_id: int) -> None:
+    """Delete an identity ENTIRELY — its sightings, sessions, embeddings and the
+    identity row (CASCADE drops its visitor/employee extension). Unlike merge,
+    nothing is preserved. Caller owns the transaction. Admin path only."""
+    identity = await identity_repo.fetch_identity_by_id(session, identity_id)
+    if identity is None:
+        raise ValueError(f"identity_id={identity_id} not found")
+    await session.execute(delete(DetectionEvent).where(DetectionEvent.identity_id == identity_id))
+    await session.execute(delete(PresenceSession).where(PresenceSession.identity_id == identity_id))
+    await embedding_repo.delete_embeddings_for_identity(identity_id)
+    await session.delete(identity)
+    await session.flush()
+    logger.info("Purged identity %d (events + sessions + vectors + row)", identity_id)
 
 
 # ---------------------------------------------------------------------------

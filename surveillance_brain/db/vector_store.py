@@ -29,6 +29,7 @@ FastAPI event loop.
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from typing import List, Optional, Sequence, Tuple
 
@@ -122,12 +123,14 @@ async def upsert_embedding(
     identity_id: int,
     vector: Sequence[float],
     source: Optional[str] = None,
+    quality: Optional[float] = None,
 ) -> str:
     """
     Insert a new embedding point into a collection.  Returns the point id.
 
     A fresh UUID point-id is generated every call, so multiple embeddings
-    can coexist for one identity (we never overwrite).
+    can coexist for one identity (we never overwrite). `created_at` (epoch
+    seconds) is stamped so the gallery can cap/decay stale views (Phase 3d).
     """
     if len(vector) != config.EMBEDDING_DIMENSIONS:
         raise ValueError(
@@ -142,11 +145,43 @@ async def upsert_embedding(
             PointStruct(
                 id=point_id,
                 vector=list(vector),
-                payload={"identity_id": int(identity_id), "source": source},
+                payload={
+                    "identity_id": int(identity_id),
+                    "source": source,
+                    "created_at": time.time(),
+                    "quality": float(quality) if quality is not None else None,
+                },
             )
         ],
     )
     return point_id
+
+
+async def enforce_view_cap(collection: str, identity_id: int, cap: int) -> int:
+    """Bound an identity's stored views: keep the newest `cap`, drop older ones
+    (Phase 3d gallery hygiene — stops one person's vector set growing unbounded
+    and lets stale views age out). Best-effort; returns how many were deleted.
+    Points missing `created_at` (pre-3d) sort oldest, so they're pruned first."""
+    if cap <= 0:
+        return 0
+    client = get_client()
+    flt = Filter(must=[FieldCondition(key="identity_id", match=MatchValue(value=int(identity_id)))])
+    pts = []
+    offset = None
+    while True:
+        batch, offset = await client.scroll(
+            collection_name=collection, scroll_filter=flt,
+            with_vectors=False, with_payload=True, limit=256, offset=offset,
+        )
+        pts.extend(batch)
+        if offset is None:
+            break
+    if len(pts) <= cap:
+        return 0
+    pts.sort(key=lambda p: (p.payload or {}).get("created_at") or 0.0)  # oldest first
+    stale = [p.id for p in pts[: len(pts) - cap]]
+    await client.delete(collection_name=collection, points_selector=stale)
+    return len(stale)
 
 
 # ---------------------------------------------------------------------------

@@ -39,13 +39,51 @@ import numpy as np
 # ── GPU (NVDEC) hardware decode ────────────────────────────────────────────
 # Many 1440p HEVC streams saturate the CPU under OpenCV's software decoder. When
 # a system ffmpeg with *_cuvid decoders is present, we decode on the GPU instead
-# (a per-camera ffmpeg subprocess, downscaled), dropping decode from ~1 core per
-# camera to ~0.1. Auto-enabled for rtsp:// URLs; force off with GPU_DECODE=0.
+# (a per-camera ffmpeg subprocess), dropping decode from ~1 core per camera to
+# ~0.1. Auto-enabled for rtsp:// URLs; force off with GPU_DECODE=0.
+#
+# RESOLUTION: identity quality is bounded by the pixels on a face/body, so we
+# decode at NATIVE resolution (probed per camera) up to GPU_DECODE_MAX_H, instead
+# of hard-downscaling every stream to 720p. Detection is decoupled — the pipeline
+# runs the detector on a cheap downscaled copy (RT-DETR resizes internally anyway)
+# and crops faces/bodies from this full-res frame. NVDEC decode + a fixed-input
+# detector means higher res costs GPU memory bandwidth, not inference time.
+# Set GPU_DECODE_W and GPU_DECODE_H explicitly to force a fixed size (old behavior).
 GPU_DECODE = os.environ.get("GPU_DECODE", "auto").lower()      # auto | 1 | 0
 GPU_DECODE_CODEC = os.environ.get("GPU_DECODE_CODEC", "hevc_cuvid")
-GPU_DECODE_W = int(os.environ.get("GPU_DECODE_W", "1280"))     # output width  (16:9 → 1280x720)
-GPU_DECODE_H = int(os.environ.get("GPU_DECODE_H", "720"))      # output height
+# Explicit fixed-size override (both must be set). Otherwise decode native, capped.
+GPU_DECODE_W = int(os.environ["GPU_DECODE_W"]) if "GPU_DECODE_W" in os.environ else None
+GPU_DECODE_H = int(os.environ["GPU_DECODE_H"]) if "GPU_DECODE_H" in os.environ else None
+GPU_DECODE_MAX_H = int(os.environ.get("GPU_DECODE_MAX_H", "1440"))  # cap native height (VRAM/bandwidth guard)
 GPU_DECODE_FPS = os.environ.get("GPU_DECODE_FPS", "6")         # decode fps cap (cooldown gates processing anyway)
+
+
+def _probe_dims(url, codec=None):
+    """Probe a stream's native (width, height) with ffprobe, or None on failure."""
+    fp = shutil.which("ffprobe")
+    if not fp or not url:
+        return None
+    cmd = [fp, "-v", "error", "-rtsp_transport", "tcp",
+           "-select_streams", "v:0", "-show_entries", "stream=width,height",
+           "-of", "csv=p=0:s=x", url]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        w, h = out.stdout.strip().split("x")[:2]
+        w, h = int(w), int(h)
+        return (w, h) if w > 0 and h > 0 else None
+    except Exception:
+        return None
+
+
+def _target_dims(native_w, native_h):
+    """Decode target: explicit override if set, else native capped to MAX_H
+    (aspect-preserved, even dimensions for the encoder)."""
+    if GPU_DECODE_W and GPU_DECODE_H:
+        return GPU_DECODE_W, GPU_DECODE_H
+    if native_h > GPU_DECODE_MAX_H:
+        scale = GPU_DECODE_MAX_H / native_h
+        return (int(native_w * scale) // 2) * 2, (GPU_DECODE_MAX_H // 2) * 2
+    return (native_w // 2) * 2, (native_h // 2) * 2
 
 _gpu_ok_cache = None
 
@@ -160,12 +198,18 @@ class FFmpegCameraStream(threading.Thread):
     subprocess, downscaled to WxH. Same interface as CameraStream so it is a
     drop-in replacement (camera_uid, label, get_frame(), stop())."""
 
-    def __init__(self, camera, width=GPU_DECODE_W, height=GPU_DECODE_H, fps=GPU_DECODE_FPS):
+    def __init__(self, camera, width=None, height=None, fps=GPU_DECODE_FPS):
         super().__init__(daemon=True)
         self.camera_uid = camera.camera_uid
         self.label = camera.label
         self.url = camera.stream_url
-        self.w, self.h, self.fps = width, height, fps
+        self.fps = fps
+        if width and height:                     # caller forced a size
+            self.w, self.h = width, height
+        else:
+            native = _probe_dims(self.url) or (1280, 720)
+            self.w, self.h = _target_dims(*native)
+            print(f"[{self.camera_uid}] native {native[0]}x{native[1]} -> decode {self.w}x{self.h}")
         self.frame = None
         self.lock = threading.Lock()
         self.running = True

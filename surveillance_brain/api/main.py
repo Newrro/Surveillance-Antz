@@ -70,6 +70,14 @@ async def lifespan(app: FastAPI):
         except Exception as e:  # noqa: BLE001
             logger.error("Failed to start schedulers: %s", e)
 
+    # Periodic gallery consolidation — independent of the flush scheduler (so it
+    # runs in native mode too) and in-process (shares the embedded Qdrant).
+    try:
+        from workers import consolidation
+        consolidation.start()
+    except Exception as e:  # noqa: BLE001
+        logger.error("Failed to start consolidation worker: %s", e)
+
     yield
 
     logger.info("Shutting down — closing Redis + Qdrant")
@@ -78,6 +86,11 @@ async def lifespan(app: FastAPI):
         await stop_scheduler()
     except Exception as e:  # noqa: BLE001
         logger.warning("Scheduler shutdown error: %s", e)
+    try:
+        from workers import consolidation
+        await consolidation.stop()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Consolidation shutdown error: %s", e)
     await presence_cache.close_client()
     await vector_store.close_client()
 

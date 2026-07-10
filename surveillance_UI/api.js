@@ -331,6 +331,40 @@ const Brain = (() => {
     return res.json();
   }
 
+  // Manually merge duplicate identities: fold duplicateIds into primaryId.
+  async function mergeIdentities(auth, primaryId, duplicateIds) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (auth) headers.Authorization = 'Basic ' + btoa(`${auth.user}:${auth.pass}`);
+    const res = await fetch(BASE + '/identities/merge', {
+      method: 'POST', headers,
+      body: JSON.stringify({ primary_id: primaryId, duplicate_ids: duplicateIds }),
+    });
+    if (!res.ok) throw new Error(`POST /identities/merge -> HTTP ${res.status}`);
+    return res.json();
+  }
+
+  // Permanently delete identities (sightings, sessions, vectors, row).
+  async function deleteIdentities(auth, ids) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (auth) headers.Authorization = 'Basic ' + btoa(`${auth.user}:${auth.pass}`);
+    const res = await fetch(BASE + '/identities/delete', {
+      method: 'POST', headers, body: JSON.stringify({ identity_ids: ids }),
+    });
+    if (!res.ok) throw new Error(`POST /identities/delete -> HTTP ${res.status}`);
+    return res.json();
+  }
+
+  // Gallery consolidation (Phase 2): fold duplicate Visitors (same face) into one.
+  // apply=false → dry-run preview (safe); apply=true → perform the merges.
+  async function consolidate(auth, apply = false) {
+    const headers = {};
+    if (auth) headers.Authorization = 'Basic ' + btoa(`${auth.user}:${auth.pass}`);
+    const res = await fetch(BASE + '/admin/consolidate?apply=' + (apply ? 'true' : 'false'),
+      { method: 'POST', headers });
+    if (!res.ok) throw new Error(`POST /admin/consolidate -> HTTP ${res.status}`);
+    return res.json();
+  }
+
   // Give a person a friendly name, keeping their id + VIS/EMP label.
   async function setName(identityId, name) {
     const res = await fetch(BASE + `/identities/${identityId}/name`, {
@@ -345,7 +379,7 @@ const Brain = (() => {
   return {
     get base() { return state.base; },
     get connected() { return state.connected; },
-    health, hydrate, connectLive, applyLiveEvent, enrollEmployee, findLive, resetDatabase, setName, promoteToEmployee, clearUnknowns,
+    health, hydrate, connectLive, applyLiveEvent, enrollEmployee, findLive, resetDatabase, setName, promoteToEmployee, clearUnknowns, consolidate, mergeIdentities, deleteIdentities,
     // exposed for reuse/testing
     _map: { splitTime, locationFor, personKey, upsertPerson },
   };

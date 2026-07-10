@@ -104,6 +104,23 @@ class Settings(BaseSettings):
     # collapses clear duplicates that slipped through, never near-strangers.
     CONSOLIDATE_FACE_THRESHOLD: float = 0.55
 
+    # Scheduled consolidation (Phase 2): run the face-centroid merge as a periodic
+    # IN-PROCESS job (must be in-process — it shares the embedded Qdrant the Brain
+    # holds). SAFE DEFAULT: log the merge plan but DO NOT apply — auto-merging a
+    # borderline face match can fold two people together (measured a 0.58 cross-
+    # person plan). Flip CONSOLIDATE_APPLY=1 only once the threshold is trusted;
+    # otherwise use the Settings → "Merge duplicate visitors" button (human review).
+    # Gallery hygiene (Phase 3d): cap the stored views per identity per modality.
+    # Newest kept, oldest pruned on each new insert — bounds vector-set growth and
+    # lets stale views age out (a person's look drifts over days). 0 = unbounded.
+    GALLERY_MAX_VIEWS: int = 12
+
+    CONSOLIDATE_ENABLE: bool = True
+    CONSOLIDATE_APPLY: bool = False              # False = log-only dry run each cycle
+    CONSOLIDATE_EVERY_MINUTES: int = 60
+    # A STRICTER threshold for unattended auto-apply than the manual button uses.
+    CONSOLIDATE_AUTO_FACE_THRESHOLD: float = 0.62
+
     # Progressive learning: when a matched sighting scores BELOW this, store its
     # embedding(s) as an additional view for that identity, so future sightings
     # from a new angle (or with the face now visible) still match — this is what
@@ -194,7 +211,12 @@ FACE_SIMILARITY_THRESHOLD: Final[float] = _settings.FACE_SIMILARITY_THRESHOLD
 BODY_SIMILARITY_THRESHOLD: Final[float] = _settings.BODY_SIMILARITY_THRESHOLD
 BODY_MERGE_THRESHOLD: Final[float] = _settings.BODY_MERGE_THRESHOLD
 BODY_MERGE_WINDOW_SECONDS: Final[int] = _settings.BODY_MERGE_WINDOW_SECONDS
+GALLERY_MAX_VIEWS: Final[int] = _settings.GALLERY_MAX_VIEWS
 CONSOLIDATE_FACE_THRESHOLD: Final[float] = _settings.CONSOLIDATE_FACE_THRESHOLD
+CONSOLIDATE_ENABLE: Final[bool] = _settings.CONSOLIDATE_ENABLE
+CONSOLIDATE_APPLY: Final[bool] = _settings.CONSOLIDATE_APPLY
+CONSOLIDATE_EVERY_MINUTES: Final[int] = _settings.CONSOLIDATE_EVERY_MINUTES
+CONSOLIDATE_AUTO_FACE_THRESHOLD: Final[float] = _settings.CONSOLIDATE_AUTO_FACE_THRESHOLD
 LEARN_SIMILARITY_CEILING: Final[float] = _settings.LEARN_SIMILARITY_CEILING
 EMBEDDING_DIMENSIONS: Final[int] = _settings.EMBEDDING_DIMENSIONS
 

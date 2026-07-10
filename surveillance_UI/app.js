@@ -142,6 +142,17 @@ async function login() {
   renderUnclassified();
   renderDepartments();
   showView('grid');
+  playNavAnimation();
+}
+
+/* Nav entrance: the pill drops in first, then each icon flies up one by one.
+   Toggling the class (with a reflow between) restarts it on every sign-in. */
+function playNavAnimation() {
+  const nav = document.querySelector('.nav');
+  if (!nav) return;
+  nav.classList.remove('nav-animate');
+  void nav.offsetWidth; // force reflow so the animation replays
+  nav.classList.add('nav-animate');
 }
 
 function logout() {
@@ -175,6 +186,9 @@ const SEARCH_PLACEHOLDER = {
 };
 
 function showView(name) {
+  // Leaving the Report view drops merge/select mode so the floating bar can't
+  // linger over another view.
+  if (name !== 'report' && mergeMode) cancelMergeMode();
   document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
   document.getElementById('view-' + name).classList.remove('hidden');
   document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
@@ -496,8 +510,7 @@ function openPersonLog(userId) {
   // Rename only Visitors/Employees (not Unknowns); "Make employee" only for Visitors.
   const renameBtn = document.getElementById('plog-rename');
   if (renameBtn) renameBtn.style.display = (p.category === 'Unknown') ? 'none' : '';
-  const promoteBtn = document.getElementById('plog-promote');
-  if (promoteBtn) promoteBtn.style.display = (p.category === 'Visitor') ? '' : 'none';
+  renderPlogPromote(p);   // inline "Make employee" control (Visitors only)
 
   // Details of the person
   const rows = [];
@@ -752,22 +765,53 @@ async function renameCurrentPerson() {
   if (currentView === 'log') renderLog();
 }
 
-/* Promote the Visitor currently open in the modal to an Employee (keeps id + history). */
+/* Promote control in the person-log modal header — shown for Visitors only.
+   Clicking "Make employee" swaps the button for an inline name + department form. */
+function renderPlogPromote(p) {
+  const el = document.getElementById('plog-promote');
+  if (!el) return;
+  el.innerHTML = (p.category === 'Visitor')
+    ? `<button class="btn btn-primary plog-promote-btn" onclick="showPromoteToEmployee()"><i class="ti ti-user-check"></i> Make employee</button>`
+    : '';
+}
+
+/* Reveal the inline promote form: a name field, a department field, Confirm/Cancel. */
+function showPromoteToEmployee() {
+  const el = document.getElementById('plog-promote');
+  const p = PEOPLE[plogPersonId];
+  if (!el || !p) return;
+  const esc = s => (s || '').replace(/"/g, '&quot;');
+  el.innerHTML = `
+    <span class="plog-promote-form">
+      <input id="plog-promote-name" type="text" placeholder="Name" value="${esc(p.name)}">
+      <input id="plog-dept-sel" type="text" placeholder="Department" value="${esc(p.department || 'General')}" list="plog-dept-options">
+      <datalist id="plog-dept-options">${DEPARTMENTS.map(d => `<option value="${esc(d)}"></option>`).join('')}</datalist>
+      <button class="btn btn-primary" onclick="promoteCurrentPerson()"><i class="ti ti-check"></i> Confirm</button>
+      <button class="btn" title="Cancel" onclick="renderPlogPromote(PEOPLE[plogPersonId])"><i class="ti ti-x"></i></button>
+    </span>`;
+  document.getElementById('plog-promote-name')?.focus();
+}
+
+/* Promote the Visitor currently open in the modal to an Employee (keeps id + history).
+   Reads the inline promote form when it's open, else falls back to prompts. */
 async function promoteCurrentPerson() {
   const p = PEOPLE[plogPersonId];
   if (!p || p.identityId == null) return;
-  const name = window.prompt('Employee name:', p.name || '');
-  if (name === null || !name.trim()) return;
-  const department = (window.prompt('Department:', p.department || 'General') || 'General').trim();
+  const nameEl = document.getElementById('plog-promote-name');
+  const deptEl = document.getElementById('plog-dept-sel');
+  let name = nameEl ? nameEl.value.trim() : (window.prompt('Employee name:', p.name || '') || '').trim();
+  if (!name) { if (nameEl) nameEl.focus(); return; }
+  let department = deptEl ? deptEl.value.trim() : (window.prompt('Department:', p.department || 'General') || '').trim();
+  if (!department) department = 'General';
   try {
     const r = await Brain.promoteToEmployee(
-      p.identityId, { name: name.trim(), department },
+      p.identityId, { name, department },
       { user: AUTH.username, pass: AUTH.password });
     p.category = 'Employee';
-    p.name = name.trim();
+    p.name = name;
     p.department = department;
     p.employeeId = (r && r.new_label) || p.employeeId;
-    p.initials = name.trim().split(/\s+/).map(s => s[0]).slice(0, 2).join('').toUpperCase();
+    p.initials = name.split(/\s+/).map(s => s[0]).slice(0, 2).join('').toUpperCase();
     if (department && !DEPARTMENTS.includes(department)) DEPARTMENTS.push(department);
     openPersonLog(plogPersonId);       // refresh the modal (badge, buttons, details)
     renderReport(); renderRecords();
@@ -1111,6 +1155,23 @@ const WEEKDAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','S
 let logYear, logMonth, logDay;   // selected month/year (0-indexed month) + selected day-of-month
 let logInit = false;
 
+/* Log category toggle buttons — drive the SAME hidden #log-category filter that
+   renderLogSheet()/clearLogFilters() read, so their logic stays unchanged.
+   No button active === "" === all categories (the cleared state). */
+function setLogCat(cat) {
+  const el = document.getElementById('log-category');
+  if (el) el.value = cat;
+  syncLogCatButtons();
+  renderLogSheet();
+}
+function syncLogCatButtons() {
+  const cur = document.getElementById('log-category')?.value || '';
+  ['Employee', 'Visitor', 'Unknown'].forEach(c => {
+    const btn = document.getElementById('log-cat-' + c);
+    if (btn) btn.classList.toggle('active', c === cur);
+  });
+}
+
 const pad2 = n => String(n).padStart(2, '0');
 const isoDate = (y, m, d) => `${y}-${pad2(m + 1)}-${pad2(d)}`;
 
@@ -1196,6 +1257,7 @@ function renderLogSheet() {
   const dayName = WEEKDAYS[new Date(logYear, logMonth, logDay).getDay()];
   document.getElementById('log-sheet-date').textContent = dateStr;
   document.getElementById('log-sheet-day').textContent = dayName;
+  syncLogCatButtons();   // keep the category toggle in sync with the filter value
 
   const person = document.getElementById('log-person').value.trim().toLowerCase();
   const loc    = document.getElementById('log-loc').value;                 // exact (dropdown)
@@ -1317,7 +1379,8 @@ function personCard(p) {
   const selectable = mergeMode && p.identityId != null;
   const selected = mergeMode && mergeSel.has(p.userId);
   const cls = 'person-card'
-    + (selected ? ' merge-selected' : '')
+    + (selectable ? ' selectable' : '')
+    + (selected ? ' merge-selected selected' : '')
     + (mergeMode && !selectable ? ' merge-disabled' : '')
     + (mergeMode ? ' merge-mode' : '');
   const onclick = !mergeMode ? `onclick="openPersonLog('${p.userId}')"`
@@ -1346,20 +1409,28 @@ function personCard(p) {
 let mergeMode = false;
 const mergeSel = new Set();
 
+/* Drive the floating bottom action bar (not header buttons): show it while in
+   select mode, update the count, and enable Merge at 2+ / Delete at 1+ selected. */
 function _updateMergeUI() {
   const on = mergeMode, n = mergeSel.size;
-  document.getElementById('merge-start-btn').style.display = on ? 'none' : '';
-  document.getElementById('merge-cancel-btn').style.display = on ? '' : 'none';
+  const startBtn = document.getElementById('merge-start-btn');
+  if (startBtn) startBtn.style.display = on ? 'none' : '';   // hide "Select" while selecting
+  const bar = document.getElementById('merge-bar');
+  if (bar) bar.classList.toggle('open', on);
+  const count = document.getElementById('merge-bar-count');
+  if (count) count.textContent = n;
   const mBtn = document.getElementById('merge-do-btn');
   const dBtn = document.getElementById('delete-do-btn');
-  mBtn.style.display = on ? '' : 'none';
-  dBtn.style.display = on ? '' : 'none';
-  mBtn.disabled = n < 2;                                  // merge needs 2+
-  dBtn.disabled = n < 1;                                  // delete needs 1+
-  mBtn.innerHTML = `<i class="ti ti-git-merge"></i> Merge selected${n ? ` (${n})` : ''}`;
-  dBtn.innerHTML = `<i class="ti ti-trash"></i> Delete selected${n ? ` (${n})` : ''}`;
+  if (mBtn) {
+    mBtn.disabled = n < 2;                                  // merge needs 2+
+    mBtn.innerHTML = `<i class="ti ti-git-merge"></i> Merge selected${n ? ` (${n})` : ''}`;
+  }
+  if (dBtn) {
+    dBtn.disabled = n < 1;                                  // delete needs 1+
+    dBtn.innerHTML = `<i class="ti ti-trash"></i> Delete selected${n ? ` (${n})` : ''}`;
+  }
   const sub = document.getElementById('report-sub');
-  sub.textContent = on
+  if (sub) sub.textContent = on
     ? 'Select mode — tick cards, then Merge (2+ same person) or Delete. Click Cancel to exit.'
     : 'Grouped by category · click anyone to open their full log';
 }

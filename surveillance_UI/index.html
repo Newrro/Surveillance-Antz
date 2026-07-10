@@ -156,15 +156,9 @@
                   <input type="time" id="log-time-to" onchange="renderLogSheet()">
                 </div>
               </div>
-              <div class="filter-field">
-                <label>Category</label>
-                <select id="log-category" onchange="renderLogSheet()">
-                  <option value="">All categories</option>
-                  <option>Employee</option>
-                  <option>Visitor</option>
-                  <option>Unknown</option>
-                </select>
-              </div>
+              <!-- Category is now a toggle in the datasheet head; this hidden field
+                   still backs the filter renderLogSheet()/clearLogFilters() read. -->
+              <input type="hidden" id="log-category" value="">
               <button class="btn btn-block" onclick="clearLogFilters()"><i class="ti ti-filter-off"></i> Clear all filters</button>
             </div>
           </div>
@@ -175,6 +169,11 @@
               <div>
                 <div class="log-sheet-date" id="log-sheet-date">—</div>
                 <div class="log-sheet-day" id="log-sheet-day">—</div>
+              </div>
+              <div class="log-cat-toggle">
+                <button class="log-cat-btn" id="log-cat-Employee" onclick="setLogCat('Employee')"><i class="ti ti-id-badge-2"></i> Employees</button>
+                <button class="log-cat-btn" id="log-cat-Visitor" onclick="setLogCat('Visitor')"><i class="ti ti-user"></i> Visitors</button>
+                <button class="log-cat-btn" id="log-cat-Unknown" onclick="setLogCat('Unknown')"><i class="ti ti-arrow-down"></i> Unknowns</button>
               </div>
             </div>
             <div class="table-wrap">
@@ -198,9 +197,6 @@
           </div>
           <div class="merge-tools">
             <button class="btn" id="merge-start-btn" onclick="startMergeMode()"><i class="ti ti-checkbox"></i> Select</button>
-            <button class="btn btn-primary" id="merge-do-btn" onclick="doMerge()" style="display:none"><i class="ti ti-git-merge"></i> Merge selected</button>
-            <button class="btn btn-danger" id="delete-do-btn" onclick="doDelete()" style="display:none"><i class="ti ti-trash"></i> Delete selected</button>
-            <button class="btn" id="merge-cancel-btn" onclick="cancelMergeMode()" style="display:none">Cancel</button>
           </div>
         </div>
         <div id="report-groups"></div>
@@ -331,9 +327,7 @@
       <button class="btn plog-rename" id="plog-rename" onclick="renameCurrentPerson()" title="Give this person a name">
         <i class="ti ti-pencil"></i> Rename
       </button>
-      <button class="btn plog-rename" id="plog-promote" onclick="promoteCurrentPerson()" title="Promote this visitor to an employee">
-        <i class="ti ti-user-check"></i> Make employee
-      </button>
+      <span class="plog-promote" id="plog-promote"></span>
       <button class="sidebar-close" onclick="closePersonLog()"><i class="ti ti-x"></i></button>
     </div>
 
@@ -502,6 +496,14 @@
       </div>
     </div>
   </div>
+</div>
+
+<!-- ===================== Merge selection bar (Report) — floating bottom dock ===================== -->
+<div class="merge-bar" id="merge-bar">
+  <span class="merge-bar-info"><b id="merge-bar-count">0</b> selected · tick 2+ of the same person to merge, or delete</span>
+  <button class="btn btn-primary" id="merge-do-btn" onclick="doMerge()" disabled><i class="ti ti-git-merge"></i> Merge selected</button>
+  <button class="btn btn-danger" id="delete-do-btn" onclick="doDelete()" disabled><i class="ti ti-trash"></i> Delete selected</button>
+  <button class="btn" id="merge-cancel-btn" onclick="cancelMergeMode()"><i class="ti ti-x"></i> Cancel</button>
 </div>
 
 <script src="data.js"></script>

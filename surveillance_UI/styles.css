@@ -131,6 +131,31 @@ button {
 .nav-ico i { font-size: 21px; }
 .nav-label { font-size: 10px; letter-spacing: 0.02em; font-weight: 500; }
 
+/* ---- Nav entrance: outer pill drops in, then icons fly up one by one ---- */
+@keyframes navBlockIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(34px) scale(0.92); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0)    scale(1); }
+}
+@keyframes navItemIn {
+  from { opacity: 0; transform: translateY(30px) scale(0.6); }
+  to   { opacity: 1; transform: translateY(0)    scale(1); }
+}
+.nav.nav-animate {
+  animation: navBlockIn 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+/* Hold each icon hidden until the pill has settled, then stagger them in. */
+.nav.nav-animate > * {
+  animation: navItemIn 0.42s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.nav.nav-animate > *:nth-child(1) { animation-delay: 0.44s; }
+.nav.nav-animate > *:nth-child(2) { animation-delay: 0.56s; }
+.nav.nav-animate > *:nth-child(3) { animation-delay: 0.68s; }
+.nav.nav-animate > *:nth-child(4) { animation-delay: 0.80s; }
+.nav.nav-animate > *:nth-child(5) { animation-delay: 0.92s; }
+@media (prefers-reduced-motion: reduce) {
+  .nav.nav-animate, .nav.nav-animate > * { animation: none; }
+}
+
 @keyframes hud-spin     { to { transform: rotate(360deg); } }
 @keyframes hud-spin-rev { to { transform: rotate(-360deg); } }
 
@@ -935,6 +960,44 @@ td.mono { font-family: var(--font-mono); font-size: 12.5px; color: var(--text-se
 }
 .person-card.merge-selected .merge-check { background: var(--accent); color: #042; }
 
+/* Selection mode (ported): highlight selectable/selected cards + optional checkbox */
+.person-card-check {
+  position: absolute; top: 8px; right: 8px; z-index: 3;
+  width: 24px; height: 24px; border-radius: 50%;
+  border: 1.5px solid var(--border-strong); background: rgba(0, 0, 0, 0.28);
+  display: none; align-items: center; justify-content: center;
+  color: transparent;
+}
+.person-card-check i { font-size: 14px; }
+.person-card.selectable { cursor: pointer; }
+.person-card.selectable .person-card-merge,
+.person-card.selectable .person-card-del { display: none; }
+.person-card.selectable .person-card-check { display: flex; }
+.person-card.selected { border-color: var(--accent); box-shadow: var(--glow); }
+.person-card.selected .person-card-check {
+  background: var(--accent); border-color: var(--accent); color: #06210a;
+}
+
+/* Merge action bar — floats above the nav dock while selecting */
+.merge-bar {
+  position: fixed; left: 50%; bottom: 92px;
+  transform: translateX(-50%) translateY(16px);
+  z-index: 46;
+  display: flex; align-items: center; gap: 14px;
+  padding: 10px 12px 10px 18px;
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 18px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.20);
+  -webkit-backdrop-filter: var(--glass-blur);
+          backdrop-filter: var(--glass-blur);
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: opacity 0.2s, transform 0.2s, visibility 0.2s;
+}
+.merge-bar.open { opacity: 1; visibility: visible; pointer-events: auto; transform: translateX(-50%) translateY(0); }
+.merge-bar-info { font-size: 13px; color: var(--text-primary); }
+.merge-bar-info b { color: var(--accent); font-family: var(--font-mono); }
+
 /* ---------- Person log modal (opens at ~3/4 of the screen) ---------- */
 .modal-plog {
   width: 82vw; height: 82vh; max-width: 82vw; max-height: 82vh;
@@ -947,6 +1010,21 @@ td.mono { font-family: var(--font-mono); font-size: 12.5px; color: var(--text-se
 .plog-who .id { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
 .plog-head .sidebar-close { margin-left: auto; }
 .modal-actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+
+/* Inline promote-to-employee control in the person-log modal header */
+.plog-promote { display: inline-flex; align-items: center; }
+.plog-promote-btn { padding: 5px 12px; font-size: 12.5px; }
+.plog-promote-form { display: inline-flex; align-items: center; gap: 6px; }
+.plog-promote-form select,
+.plog-promote-form input {
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text-primary); font-size: 12.5px; padding: 6px 10px; font-family: inherit;
+}
+.plog-promote-form input { width: 130px; }
+.plog-dept-label {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; color: var(--text-secondary);
+}
 
 /* Two-column body: details/report on the left, movement log on the right. */
 .plog-body-grid {
@@ -1077,6 +1155,21 @@ td.mono { font-family: var(--font-mono); font-size: 12.5px; color: var(--text-se
   min-height: 0; overflow: hidden;          /* contain the scroll to the table below */
 }
 .log-sheet-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin-bottom: 14px; }
+/* Category toggle next to the datasheet date (replaces the old dropdown) */
+.log-cat-toggle {
+  display: inline-flex; gap: 4px; padding: 4px;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.log-cat-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px; border: none; border-radius: 10px;
+  background: none; color: var(--text-secondary); cursor: pointer;
+  font: inherit; font-size: 12.5px; font-weight: 500;
+  transition: background 0.15s, color 0.15s;
+}
+.log-cat-btn i { font-size: 15px; }
+.log-cat-btn:hover { color: var(--text-primary); }
+.log-cat-btn.active { background: var(--accent); color: #06210a; }
 .log-sheet-date { font-size: 16px; font-weight: 600; font-family: var(--font-mono); }
 .log-sheet-day { font-size: 12.5px; color: var(--text-secondary); margin-top: 2px; }
 .log-sheet .table-wrap { box-shadow: none; flex: 1; min-height: 0; overflow-y: auto; }

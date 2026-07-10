@@ -15,7 +15,13 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from api.auth import require_admin
-from api.schemas import EmployeeIn, EmployeeListResponse, EmployeeOut, EmployeeRecord
+from api.schemas import (
+    EmployeeIn,
+    EmployeeListResponse,
+    EmployeeOut,
+    EmployeePhotoIn,
+    EmployeeRecord,
+)
 from services import enrollment_service
 
 logger = logging.getLogger(__name__)
@@ -65,4 +71,33 @@ async def enroll_employee(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Enrollment failed: {e}",
+        )
+
+
+@router.post(
+    "/enroll-photo",
+    response_model=EmployeeOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_admin)],
+    summary="Enroll an employee from uploaded face photo(s) (admin only)",
+)
+async def enroll_employee_photo(
+    body: EmployeePhotoIn,
+    _: str = Depends(require_admin),
+) -> EmployeeOut:
+    """Feed face photo(s) → the Brain embeds them (via the AI face model) and
+    enrolls the employee. This is the 'upload a photo of my staff' path."""
+    try:
+        result = await enrollment_service.enroll_employee_from_images(
+            name=body.name, department=body.department,
+            images_b64=body.images, email=body.email,
+        )
+        return EmployeeOut(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Photo enrollment failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Photo enrollment failed: {e}",
         )

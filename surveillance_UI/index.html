@@ -43,6 +43,9 @@
     <button class="nav-item" data-view="log" onclick="showView('log')" title="Log">
       <span class="nav-ico"><i class="ti ti-calendar-event"></i></span><span class="nav-label">Log</span>
     </button>
+    <button class="nav-item" data-view="attendance" onclick="showView('attendance'); renderAttendance()" title="Attendance">
+      <span class="nav-ico"><i class="ti ti-clipboard-check"></i></span><span class="nav-label">Today</span>
+    </button>
     <button class="nav-item" data-view="report" onclick="showView('report')" title="Report">
       <span class="nav-ico"><i class="ti ti-chart-bar"></i></span><span class="nav-label">Report</span>
     </button>
@@ -203,6 +206,22 @@
         <div id="report-groups"></div>
       </section>
 
+      <!-- ---------- Attendance (daily register) ---------- -->
+      <section class="view hidden" id="view-attendance">
+        <div class="view-header">
+          <div>
+            <h1 class="view-title">Today on campus</h1>
+            <p class="view-sub">Daily attendance — employees &amp; recognised visitors</p>
+          </div>
+          <input type="date" id="att-date" onchange="renderAttendance()">
+        </div>
+        <div class="att-summary" id="att-summary"></div>
+        <h2 class="att-h">Employees</h2>
+        <div class="att-table" id="att-employees"></div>
+        <h2 class="att-h">Visitors seen today</h2>
+        <div class="att-table" id="att-visitors"></div>
+      </section>
+
       <!-- ---------- Records ---------- -->
       <section class="view hidden" id="view-records">
         <div class="view-header">
@@ -210,6 +229,7 @@
             <h1 class="view-title">Records</h1>
             <p class="view-sub">Registered employee &amp; visitor datasheets</p>
           </div>
+          <button class="btn btn-primary" onclick="openEnroll()"><i class="ti ti-user-plus"></i> Enroll employee</button>
         </div>
         <div class="filters">
           <input type="text" id="records-search" placeholder="Search by name or employee ID…" style="min-width:240px" oninput="renderRecords()">
@@ -390,6 +410,28 @@
     </div>
     <div class="photo-name" id="photo-name">—</div>
     <div class="photo-sub" id="photo-sub">—</div>
+  </div>
+</div>
+
+<!-- ===================== Enroll employee modal ===================== -->
+<div class="modal-backdrop" id="enroll-modal" onclick="closeEnrollIfBackdrop(event)">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Enroll employee</h3>
+      <button class="sidebar-close" onclick="closeEnroll()"><i class="ti ti-x"></i></button>
+    </div>
+    <p class="desc">Upload one or more clear, front-facing face photos. More angles = more reliable recognition. The system extracts the face and remembers this person.</p>
+    <div class="field"><label>Name</label><input type="text" id="enroll-name" placeholder="e.g. Akash Kumar"></div>
+    <div class="field"><label>Department</label><input type="text" id="enroll-dept" placeholder="e.g. Security"></div>
+    <div class="field"><label>Email (optional)</label><input type="text" id="enroll-email" placeholder="name@company.com"></div>
+    <div class="field"><label>Face photo(s)</label><input type="file" id="enroll-files" accept="image/*" multiple></div>
+    <div id="enroll-preview" class="enroll-preview"></div>
+    <div id="enroll-status" class="desc"></div>
+    <div class="modal-actions">
+      <span style="flex:1"></span>
+      <button class="btn" onclick="closeEnroll()"><i class="ti ti-x"></i> Cancel</button>
+      <button class="btn btn-primary" id="enroll-submit" onclick="doEnrollEmployee()"><i class="ti ti-user-plus"></i> Enroll</button>
+    </div>
   </div>
 </div>
 

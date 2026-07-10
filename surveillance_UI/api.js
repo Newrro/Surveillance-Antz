@@ -302,6 +302,27 @@ const Brain = (() => {
     return getJSON('/search?q=' + encodeURIComponent(q));
   }
 
+  // Daily attendance register for a given day (YYYY-MM-DD, default today).
+  async function attendance(date) {
+    return getJSON('/attendance' + (date ? '?date=' + encodeURIComponent(date) : ''));
+  }
+
+  // Enroll an employee from uploaded face photo(s). images = array of base64.
+  async function enrollEmployeePhoto({ name, department, email, images, auth }) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (auth) headers.Authorization = 'Basic ' + btoa(`${auth.user}:${auth.pass}`);
+    const res = await fetch(BASE + '/employees/enroll-photo', {
+      method: 'POST', headers,
+      body: JSON.stringify({ name, department, email: email || null, images }),
+    });
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try { detail = (await res.json()).detail || detail; } catch (e) {}
+      throw new Error(detail);
+    }
+    return res.json();
+  }
+
   // Wipe the whole database (people/events/sessions/embeddings). Admin Basic auth.
   async function resetDatabase(auth) {
     const headers = {};
@@ -379,7 +400,7 @@ const Brain = (() => {
   return {
     get base() { return state.base; },
     get connected() { return state.connected; },
-    health, hydrate, connectLive, applyLiveEvent, enrollEmployee, findLive, resetDatabase, setName, promoteToEmployee, clearUnknowns, consolidate, mergeIdentities, deleteIdentities,
+    health, hydrate, connectLive, applyLiveEvent, enrollEmployee, findLive, resetDatabase, setName, promoteToEmployee, clearUnknowns, consolidate, mergeIdentities, deleteIdentities, enrollEmployeePhoto, attendance,
     // exposed for reuse/testing
     _map: { splitTime, locationFor, personKey, upsertPerson },
   };

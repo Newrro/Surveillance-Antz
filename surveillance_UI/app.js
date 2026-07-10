@@ -844,6 +844,50 @@ async function consolidateApply() {
   }
 }
 
+/* Records → Enroll employee: upload face photo(s) → Brain embeds + enrolls. */
+let enrollFiles = [];
+function openEnroll() {
+  ['enroll-name', 'enroll-dept', 'enroll-email'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('enroll-files').value = '';
+  document.getElementById('enroll-preview').innerHTML = '';
+  document.getElementById('enroll-status').textContent = '';
+  enrollFiles = [];
+  const inp = document.getElementById('enroll-files');
+  inp.onchange = () => {
+    const prev = document.getElementById('enroll-preview'); prev.innerHTML = '';
+    enrollFiles = [...inp.files];
+    enrollFiles.forEach(f => { const im = new Image(); im.src = URL.createObjectURL(f); im.className = 'enroll-thumb'; prev.appendChild(im); });
+  };
+  document.getElementById('enroll-modal').classList.add('open');
+}
+function closeEnroll() { document.getElementById('enroll-modal').classList.remove('open'); }
+function closeEnrollIfBackdrop(e) { if (e.target.id === 'enroll-modal') closeEnroll(); }
+function _readAsDataURL(file) {
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+}
+async function doEnrollEmployee() {
+  const name = document.getElementById('enroll-name').value.trim();
+  const dept = document.getElementById('enroll-dept').value.trim();
+  const email = document.getElementById('enroll-email').value.trim();
+  const status = document.getElementById('enroll-status');
+  if (!name || !dept) { status.textContent = 'Name and department are required.'; return; }
+  if (!enrollFiles.length) { status.textContent = 'Add at least one face photo.'; return; }
+  const btn = document.getElementById('enroll-submit'); btn.disabled = true; btn.textContent = 'Enrolling…';
+  try {
+    if (!BRAIN_ON) throw new Error('Brain not connected');
+    const images = await Promise.all(enrollFiles.map(_readAsDataURL));
+    const r = await Brain.enrollEmployeePhoto({ name, department: dept, email, images,
+      auth: { user: AUTH.username, pass: AUTH.password } });
+    status.textContent = `Enrolled ${r.name} (${r.label}) from ${r.photos_used || 1} photo(s).`;
+    await connectBrain(); renderRecords(); renderReport();
+    setTimeout(closeEnroll, 1400);
+  } catch (e) {
+    status.textContent = 'Enroll failed: ' + e.message;
+  } finally {
+    btn.disabled = false; btn.innerHTML = '<i class="ti ti-user-plus"></i> Enroll';
+  }
+}
+
 /* Settings → Danger zone: wipe the whole database (people/events/snapshots),
    keeping cameras. Uses the single admin credentials. */
 async function deleteDatabase() {
@@ -1190,6 +1234,44 @@ function renderLogSheet() {
 /* ---------- Report page ---------- */
 let reportSearch = '';
 const REPORT_GROUPS = ['Employee', 'Visitor', 'Unknown'];
+
+/* ---------- Attendance (daily register) ---------- */
+function _fmtTime(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+async function renderAttendance() {
+  const dateEl = document.getElementById('att-date');
+  if (dateEl && !dateEl.value) dateEl.value = new Date().toISOString().slice(0, 10);
+  const date = dateEl ? dateEl.value : '';
+  const sum = document.getElementById('att-summary');
+  const emp = document.getElementById('att-employees');
+  const vis = document.getElementById('att-visitors');
+  sum.innerHTML = '<p class="desc">Loading…</p>'; emp.innerHTML = ''; vis.innerHTML = '';
+  try {
+    if (!BRAIN_ON) throw new Error('Brain not connected');
+    const a = await Brain.attendance(date);
+    sum.innerHTML = `
+      <div class="att-stat"><div class="n">${a.employees_present}/${a.employees_total}</div><div class="l">Employees present</div></div>
+      <div class="att-stat"><div class="n">${a.visitors_count}</div><div class="l">Visitors recognised</div></div>
+      <div class="att-stat att-muted"><div class="n">${a.unknown_count}</div><div class="l">Unidentified</div></div>`;
+    emp.innerHTML = a.employees.length ? `
+      <table class="att-tbl"><thead><tr><th>Name</th><th>Dept</th><th>Status</th><th>First seen</th><th>Last seen</th><th>Cameras</th></tr></thead><tbody>
+      ${a.employees.map(e => `<tr class="${e.present ? '' : 'att-absent'}">
+        <td>${e.name || e.label}</td><td>${e.department || ''}</td>
+        <td>${e.present ? '<span class="att-badge in">Present</span>' : '<span class="att-badge out">Absent</span>'}</td>
+        <td>${_fmtTime(e.first_seen)}</td><td>${_fmtTime(e.last_seen)}</td><td>${e.cameras || '—'}</td></tr>`).join('')}
+      </tbody></table>` : '<p class="desc">No employees enrolled yet — use Records → Enroll employee.</p>';
+    vis.innerHTML = a.visitors.length ? `
+      <table class="att-tbl"><thead><tr><th>Visitor</th><th>First seen</th><th>Last seen</th><th>Cameras</th><th>Sightings</th></tr></thead><tbody>
+      ${a.visitors.map(v => `<tr onclick="openPersonLog('ID-${v.identity_id}')" style="cursor:pointer">
+        <td>${v.name || v.label}</td><td>${_fmtTime(v.first_seen)}</td><td>${_fmtTime(v.last_seen)}</td>
+        <td>${v.cameras}</td><td>${v.sightings}</td></tr>`).join('')}
+      </tbody></table>` : '<p class="desc">No visitors recognised on this day.</p>';
+  } catch (e) {
+    sum.innerHTML = '<p class="desc">Attendance failed: ' + e.message + '</p>';
+  }
+}
 
 function renderReport() {
   const q = reportSearch.toLowerCase();

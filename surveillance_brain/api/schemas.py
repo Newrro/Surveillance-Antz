@@ -104,6 +104,16 @@ class PersonProfile(BaseModel):
 # ---------------------------------------------------------------------------
 # /employees
 # ---------------------------------------------------------------------------
+class EmployeePhotoIn(BaseModel):
+    """Enroll an employee from uploaded face PHOTO(S). The browser base64-encodes
+    the image file(s); the Brain shells out to the AI face extractor to embed them
+    (avoids a python-multipart dependency and keeps the ML model in the AI venv)."""
+    name: str = Field(..., min_length=1, max_length=128)
+    department: str = Field(..., min_length=1, max_length=64)
+    email: Optional[str] = None
+    images: List[str] = Field(..., min_length=1, description="base64 JPEG/PNG (data URL ok)")
+
+
 class EmployeeIn(BaseModel):
     """
     Enroll an employee.  The embedding is produced by Part 1 (the Brain runs

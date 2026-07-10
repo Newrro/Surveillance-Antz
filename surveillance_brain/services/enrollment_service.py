@@ -18,7 +18,12 @@ the person's movement history.
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import json
 import logging
+import os
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -27,6 +32,10 @@ from db.models import IdentityType
 from repositories import embedding_repo, identity_repo
 
 logger = logging.getLogger(__name__)
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_AI_PY = os.path.join(_REPO_ROOT, "surveillance_AI", "venv", "bin", "python")
+_ENROLL_SCRIPT = os.path.join(_REPO_ROOT, "surveillance_AI", "enroll_face.py")
 
 
 async def enroll_employee(
@@ -78,6 +87,64 @@ async def enroll_employee(
         "email": email,
         "photo_path": photo_path,
     }
+
+
+async def enroll_employee_from_images(
+    name: str,
+    department: str,
+    images_b64: Sequence[str],
+    email: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Enroll an employee from uploaded face PHOTO(S). Decodes the base64 images,
+    shells out to the AI venv's face extractor (the Brain has no ML model) to get
+    AdaFace embeddings, enrolls with the best face, and stores the rest as extra
+    gallery views. Raises ValueError if no clear face is found."""
+    if not images_b64:
+        raise ValueError("no images provided")
+    stamp = int(time.time() * 1000)
+    outdir = os.path.join(_REPO_ROOT, "storage", "enroll", str(stamp))
+    os.makedirs(outdir, exist_ok=True)
+
+    paths: List[str] = []
+    for i, b64 in enumerate(images_b64):
+        raw = base64.b64decode(b64.split(",", 1)[-1])       # tolerate data: URL prefix
+        p = os.path.join(outdir, f"{i}.jpg")
+        with open(p, "wb") as f:
+            f.write(raw)
+        paths.append(p)
+
+    proc = await asyncio.create_subprocess_exec(
+        _AI_PY, _ENROLL_SCRIPT, *paths, "--face-out", outdir,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    out, err = await proc.communicate()
+    try:
+        line = out.decode().strip().splitlines()[-1]
+        results = json.loads(line)["results"]
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"face embedding failed: {(err.decode()[:300] or str(e))}")
+
+    good = [r for r in results if r.get("ok")]
+    if not good:
+        errs = "; ".join(r.get("error", "") for r in results) or "no face detected"
+        raise ValueError(f"No clear face found in the photo(s): {errs}")
+    good.sort(key=lambda r: r.get("quality", 0.0), reverse=True)   # best face leads
+
+    best = good[0]
+    face_path = best.get("face_path")
+    rel_photo = os.path.relpath(face_path, _REPO_ROOT) if face_path else None
+    result = await enroll_employee(
+        name=name, department=department,
+        face_embedding=best["embedding"], email=email, photo_path=rel_photo,
+    )
+    for r in good[1:]:                                   # extra photos → extra views
+        await embedding_repo.store_embeddings(
+            result["identity_id"], face_embedding=r["embedding"], source="enroll_photo",
+        )
+    result["photos_used"] = len(good)
+    logger.info("Enrolled employee %s (id=%d) from %d photo(s)",
+                result["label"], result["identity_id"], len(good))
+    return result
 
 
 async def list_employees(limit: int = 500, offset: int = 0) -> List[Dict[str, Any]]:

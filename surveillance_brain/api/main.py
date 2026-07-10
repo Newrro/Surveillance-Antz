@@ -21,7 +21,9 @@ from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
 
 import config
-from api.routers import admin, employees, events, identities, live, logs, person, search
+from api.routers import (
+    admin, attendance, employees, events, identities, live, logs, person, search,
+)
 from api.schemas import HealthResponse
 from db import vector_store
 from db.connection import init_db
@@ -124,6 +126,7 @@ app.include_router(search.router)
 app.include_router(identities.router)
 app.include_router(logs.router)
 app.include_router(admin.router)
+app.include_router(attendance.router)
 
 
 @app.get(

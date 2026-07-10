@@ -15,11 +15,13 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.schemas import DetectionEventIn, EventOut, EventsResponse
-from db.connection import get_db
-from db.models import Classification
+from api.auth import require_admin
+from api.schemas import DeleteEventsRequest, DetectionEventIn, EventOut, EventsResponse
+from db.connection import get_db, get_session
+from db.models import Classification, DetectionEvent
 from services import ingestion_service, log_service
 
 logger = logging.getLogger(__name__)
@@ -115,3 +117,23 @@ async def list_events(
         offset=offset,
     )
     return EventsResponse(count=len(events), events=[EventOut(**e) for e in events])
+
+
+@router.post(
+    "/delete",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_admin)],
+    summary="Delete individual sightings (detection_events) by id",
+)
+async def delete_events(body: DeleteEventsRequest, _: str = Depends(require_admin)) -> dict:
+    """Remove specific sightings from a person's history (admin). Does not touch the
+    person's identity or face gallery — just drops the chosen detection rows."""
+    ids = [i for i in dict.fromkeys(body.event_ids)]
+    async with get_session() as session:
+        result = await session.execute(
+            sa_delete(DetectionEvent).where(DetectionEvent.id.in_(ids))
+        )
+        await session.commit()
+    deleted = result.rowcount or 0
+    logger.info("Deleted %d sighting(s): %s", deleted, ids)
+    return {"status": "ok", "deleted": deleted}

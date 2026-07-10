@@ -664,14 +664,40 @@ function renderPersonLog() {
       <td class="mono">${to12h(h.time)}</td>
       <td>${h.location}</td>
       <td>
-        <div class="plog-cap" title="Click to enlarge · ${h.location}" style="cursor:pointer"
-             onclick="openPersonPhoto('${h.snapshot || ''}')">
-          <div class="avatar" style="width:30px;height:30px;font-size:11px;${h.snapshot ? photoCssUrl(h.snapshot) : photoCss(p)}">${p.initials}</div>
-          <i class="ti ti-camera"></i>
+        <div class="plog-row-actions">
+          <div class="plog-cap" title="Click to enlarge · ${h.location}" style="cursor:pointer"
+               onclick="openPersonPhoto('${h.snapshot || ''}')">
+            <div class="avatar" style="width:30px;height:30px;font-size:11px;${h.snapshot ? photoCssUrl(h.snapshot) : photoCss(p)}">${p.initials}</div>
+            <i class="ti ti-camera"></i>
+          </div>
+          ${h.event_id != null ? `<button class="plog-del-btn" title="Delete this sighting"
+                onclick="deleteSightingRow(${h.event_id})"><i class="ti ti-trash"></i></button>` : ''}
         </div>
       </td>
     </tr>`).join('')
     : `<tr><td colspan="3" style="color:var(--text-muted)">No sightings on this day for these filters.</td></tr>`;
+}
+
+/* Delete one sighting (detection_event) from a person's log, then refresh. */
+async function deleteSightingRow(eventId) {
+  if (!confirm('Delete this sighting from the log? (the person is kept)')) return;
+  try {
+    if (!BRAIN_ON) throw new Error('Brain not connected');
+    await Brain.deleteSighting({ user: AUTH.username, pass: AUTH.password }, [eventId]);
+    await connectBrain();                       // re-hydrate so the row is gone
+    const p = PEOPLE[plogPersonId];
+    if (p) {
+      renderPlogSide();
+      renderPlogChart(p, isoDate(plogYear, plogMonth, plogDay));
+      renderPersonLog();
+    } else {
+      closePersonLog();                         // that was their last sighting
+    }
+    renderReport(); renderRecords();
+    if (currentView === 'log') renderLog();
+  } catch (e) {
+    alert('Delete sighting failed: ' + e.message);
+  }
 }
 
 function clearPersonLogFilters() {

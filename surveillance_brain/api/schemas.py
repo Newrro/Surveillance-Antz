@@ -192,6 +192,11 @@ class DeleteIdentitiesRequest(BaseModel):
     identity_ids: List[int] = Field(..., min_length=1)
 
 
+class DeleteEventsRequest(BaseModel):
+    """Delete individual sightings (detection_events) by id."""
+    event_ids: List[int] = Field(..., min_length=1)
+
+
 # ---------------------------------------------------------------------------
 # /search
 # ---------------------------------------------------------------------------

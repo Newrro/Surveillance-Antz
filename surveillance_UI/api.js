@@ -184,7 +184,8 @@ const Brain = (() => {
     const loc = locationFor(evt, camNameById);
     // De-dupe identical (date,time,location) rows so repeated pings don't pile up.
     if (!p.history.some(h => h.date === st.date && h.time === st.time && h.location === loc)) {
-      p.history.push({ date: st.date, time: st.time, location: loc, snapshot: evt.snapshot || null });
+      p.history.push({ date: st.date, time: st.time, location: loc,
+                       snapshot: evt.snapshot || null, event_id: evt.event_id ?? null });
       p.history.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
     }
     return { key, person: p, loc, when: st };
@@ -307,6 +308,17 @@ const Brain = (() => {
     return getJSON('/attendance' + (date ? '?date=' + encodeURIComponent(date) : ''));
   }
 
+  // Delete individual sightings (detection_events) by id.
+  async function deleteSighting(auth, eventIds) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (auth) headers.Authorization = 'Basic ' + btoa(`${auth.user}:${auth.pass}`);
+    const res = await fetch(BASE + '/events/delete', {
+      method: 'POST', headers, body: JSON.stringify({ event_ids: eventIds }),
+    });
+    if (!res.ok) throw new Error(`POST /events/delete -> HTTP ${res.status}`);
+    return res.json();
+  }
+
   // Enroll an employee from uploaded face photo(s). images = array of base64.
   async function enrollEmployeePhoto({ name, department, email, images, auth }) {
     const headers = { 'Content-Type': 'application/json' };
@@ -400,7 +412,7 @@ const Brain = (() => {
   return {
     get base() { return state.base; },
     get connected() { return state.connected; },
-    health, hydrate, connectLive, applyLiveEvent, enrollEmployee, findLive, resetDatabase, setName, promoteToEmployee, clearUnknowns, consolidate, mergeIdentities, deleteIdentities, enrollEmployeePhoto, attendance,
+    health, hydrate, connectLive, applyLiveEvent, enrollEmployee, findLive, resetDatabase, setName, promoteToEmployee, clearUnknowns, consolidate, mergeIdentities, deleteIdentities, enrollEmployeePhoto, attendance, deleteSighting,
     // exposed for reuse/testing
     _map: { splitTime, locationFor, personKey, upsertPerson },
   };

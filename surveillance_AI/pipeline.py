@@ -109,6 +109,16 @@ IDENTITY_LATENCY_BUDGET = float(os.environ.get("IDENTITY_LATENCY_BUDGET", "4.0")
 IDENTITY_MAX_PROBES = int(os.environ.get("IDENTITY_MAX_PROBES", "3"))      # frames sampled before first emit
 IDENTITY_REEMIT_FRAC = float(os.environ.get("IDENTITY_REEMIT_FRAC", "0.15"))  # re-emit if a face is this much better
 
+# ── Face quality gate (IDENTITY_REDESIGN.md Phase A) ───────────────────────
+# Precision-first: only faces above this quality (AdaFace-norm × sharpness proxy)
+# feed identity. A low-quality face contributes NOTHING to the template, so a
+# track with only bad faces stays faceless → Unknown, rather than enrolling a
+# garbage vector that later false-matches. Biggest single precision lever.
+FACE_MIN_QUALITY = float(os.environ.get("FACE_MIN_QUALITY", "18.0"))
+# Skip identity on a track whose box is heavily overlapped by ANOTHER person's box
+# (the crop would contain a neighbour → wrong face). Fraction of THIS box covered.
+OCCLUSION_OVERLAP = float(os.environ.get("OCCLUSION_OVERLAP", "0.45"))
+
 
 def _stream_ctx(s):
     """Run the enclosed GPU ops on CUDA stream `s` (or a no-op on CPU)."""
@@ -196,6 +206,24 @@ def _iou(a, b):
         return 0.0
     ua = (ax2 - ax1) * (ay2 - ay1) + (bx2 - bx1) * (by2 - by1) - inter
     return inter / ua if ua > 0 else 0.0
+
+
+def _overlap_frac(a, b):
+    """Fraction of box `a` that is covered by box `b` (intersection / area(a))."""
+    ax1, ay1, ax2, ay2 = a[:4]
+    bx1, by1, bx2, by2 = b[:4]
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    area = max(1.0, (ax2 - ax1) * (ay2 - ay1))
+    return inter / area
+
+
+def _occluded(box, others):
+    """True if another person's box covers too much of this one — the crop would
+    include a neighbour, so the face we extract might be the wrong person."""
+    return any(_overlap_frac(box, o) > OCCLUSION_OVERLAP for o in others)
 
 
 def _label_for_box(box, id_labels):
@@ -388,9 +416,14 @@ def main():
 
     def _resolve_track(cam, uid, frame, t, box):
         """Heavy identity for ONE track on the LOW-priority GPU stream, using
-        BEST-SHOT tracklet resolution: probe the track a few times, keep the
-        highest-quality face, and (re-)emit identity from that best shot. Returns
-        True if features were found this probe."""
+        quality-gated temporal pooling. Returns True if features were found."""
+        # Occlusion gate: if another person's box heavily covers this one, the crop
+        # would include a neighbour (wrong face) — skip and retry once they separate.
+        with state_lock:
+            others = [tuple(o.box) for o in trackers[uid].tracks
+                      if o.id != t.id and o.misses == 0]
+        if _occluded(box, others):
+            return False
         with _stream_ctx(lo_stream):
             crop = crop_person(frame, box)                  # raw crop → face
             if crop is None:
@@ -418,7 +451,9 @@ def main():
             # Pool this probe's face into a QUALITY-WEIGHTED running centroid, so we
             # identify/enroll from many frames averaged (weighted by quality) rather
             # than one best shot — a stable vector that re-matches one gallery entry.
-            if face_emb is not None:
+            # QUALITY GATE: only faces above the floor feed identity. A low-quality
+            # face is ignored entirely (not pooled) — precision over coverage.
+            if face_emb is not None and face_q >= FACE_MIN_QUALITY:
                 w = max(1e-3, float(face_q))
                 fv = np.asarray(face_emb, dtype=np.float32) * w
                 t.face_emb_sum = fv if t.face_emb_sum is None else t.face_emb_sum + fv

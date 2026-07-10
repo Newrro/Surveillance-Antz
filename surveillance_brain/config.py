@@ -80,6 +80,23 @@ class Settings(BaseSettings):
     # face never won and everything fell back to body ReID.
     FACE_SIMILARITY_THRESHOLD: float = 0.42
 
+    # ── OPEN-SET 1:N face identification (IDENTITY_REDESIGN.md Phase A) ──────
+    # Identity is FACE-ONLY and tuned for PRECISION. Three-way decision on the
+    # tracklet's face template vs the gallery, where s1/s2 = top-1/top-2 cosine to
+    # DISTINCT identities:
+    #   assign to id1  iff  s1 >= FACE_ASSIGN_THRESHOLD AND (s1 - s2) >= FACE_MARGIN
+    #   new provisional iff s1 <  FACE_NEW_THRESHOLD
+    #   otherwise      ABSTAIN → Unknown (ambiguous; never guess, never merge)
+    # The MARGIN is what rejects look-alikes; the abstain band is what stops the
+    # over-merge magnets. Calibrate on tools/mtmct_eval (drive FPIR down).
+    FACE_ASSIGN_THRESHOLD: float = 0.62      # confident same-person (assign + confirm)
+    FACE_MARGIN: float = 0.08                # top-1 must beat top-2 by this
+    FACE_NEW_THRESHOLD: float = 0.45         # below this to everyone → clearly new person
+    # Quality floor (AdaFace-norm × sharpness proxy) a face must clear to be used
+    # for identity at all. Low-quality faces contribute nothing (→ tracklet may be
+    # faceless → Unknown). This is the single biggest precision lever.
+    FACE_MIN_QUALITY: float = 18.0
+
     # Cosine similarity floor for a BODY ReID match — used only as a
     # fallback when the face embedding is absent or below threshold.
     # OSNet is noisy, so this must be conservative: too low merges different
@@ -208,6 +225,10 @@ QDRANT_BODY_COLLECTION: Final[str] = _settings.QDRANT_BODY_COLLECTION
 
 DETECTION_CONF_THRESHOLD: Final[float] = _settings.DETECTION_CONF_THRESHOLD
 FACE_SIMILARITY_THRESHOLD: Final[float] = _settings.FACE_SIMILARITY_THRESHOLD
+FACE_ASSIGN_THRESHOLD: Final[float] = _settings.FACE_ASSIGN_THRESHOLD
+FACE_MARGIN: Final[float] = _settings.FACE_MARGIN
+FACE_NEW_THRESHOLD: Final[float] = _settings.FACE_NEW_THRESHOLD
+FACE_MIN_QUALITY: Final[float] = _settings.FACE_MIN_QUALITY
 BODY_SIMILARITY_THRESHOLD: Final[float] = _settings.BODY_SIMILARITY_THRESHOLD
 BODY_MERGE_THRESHOLD: Final[float] = _settings.BODY_MERGE_THRESHOLD
 BODY_MERGE_WINDOW_SECONDS: Final[int] = _settings.BODY_MERGE_WINDOW_SECONDS

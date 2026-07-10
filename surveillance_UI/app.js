@@ -1273,6 +1273,9 @@ async function renderAttendance() {
   }
 }
 
+let unknownReportOpen = false;   // the Unknown group is large + noisy — collapsed by default
+function toggleUnknownGroup() { unknownReportOpen = !unknownReportOpen; renderReport(); }
+
 function renderReport() {
   const q = reportSearch.toLowerCase();
   const container = document.getElementById('report-groups');
@@ -1283,15 +1286,24 @@ function renderReport() {
         (personName(p) + ' ' + p.userId + ' ' + (p.employeeId || '') + ' ' + p.category).toLowerCase().includes(q));
     }
     if (!people.length) return '';
+    // The Unknown group can be huge under precision-first identity — make it a
+    // collapsible section (collapsed by default; a search always expands it).
+    const collapsible = (cat === 'Unknown') && !q;
+    const open = !collapsible || unknownReportOpen;
+    const head = collapsible
+      ? `<div class="report-head report-head-toggle" onclick="toggleUnknownGroup()">
+           <span class="report-caret-btn ${open ? 'open' : ''}"><i class="ti ti-chevron-right"></i></span>
+           <span class="badge badge-${cat}">${cat}</span>
+           <span class="report-count">${people.length}</span>
+         </div>`
+      : `<div class="report-head">
+           <span class="badge badge-${cat}">${cat}</span>
+           <span class="report-count">${people.length}</span>
+         </div>`;
     return `
       <div class="report-section">
-        <div class="report-head">
-          <span class="badge badge-${cat}">${cat}</span>
-          <span class="report-count">${people.length}</span>
-        </div>
-        <div class="people-grid">
-          ${people.map(p => personCard(p)).join('')}
-        </div>
+        ${head}
+        ${open ? `<div class="people-grid">${people.map(p => personCard(p)).join('')}</div>` : ''}
       </div>`;
   }).join('') || `<p style="color:var(--text-muted)">No people match this search.</p>`;
 }

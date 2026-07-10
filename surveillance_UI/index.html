@@ -43,9 +43,6 @@
     <button class="nav-item" data-view="log" onclick="showView('log')" title="Log">
       <span class="nav-ico"><i class="ti ti-calendar-event"></i></span><span class="nav-label">Log</span>
     </button>
-    <button class="nav-item" data-view="attendance" onclick="showView('attendance'); renderAttendance()" title="Attendance">
-      <span class="nav-ico"><i class="ti ti-clipboard-check"></i></span><span class="nav-label">Today</span>
-    </button>
     <button class="nav-item" data-view="report" onclick="showView('report')" title="Report">
       <span class="nav-ico"><i class="ti ti-chart-bar"></i></span><span class="nav-label">Report</span>
     </button>
@@ -195,27 +192,8 @@
             <h1 class="view-title">Report</h1>
             <p class="view-sub" id="report-sub">Grouped by category · click anyone to open their full log</p>
           </div>
-          <div class="merge-tools">
-            <button class="btn" id="merge-start-btn" onclick="startMergeMode()"><i class="ti ti-checkbox"></i> Select</button>
-          </div>
         </div>
         <div id="report-groups"></div>
-      </section>
-
-      <!-- ---------- Attendance (daily register) ---------- -->
-      <section class="view hidden" id="view-attendance">
-        <div class="view-header">
-          <div>
-            <h1 class="view-title">Today on campus</h1>
-            <p class="view-sub">Daily attendance — employees &amp; recognised visitors</p>
-          </div>
-          <input type="date" id="att-date" onchange="renderAttendance()">
-        </div>
-        <div class="att-summary" id="att-summary"></div>
-        <h2 class="att-h">Employees</h2>
-        <div class="att-table" id="att-employees"></div>
-        <h2 class="att-h">Visitors seen today</h2>
-        <div class="att-table" id="att-visitors"></div>
       </section>
 
       <!-- ---------- Records ---------- -->
@@ -242,17 +220,6 @@
             <p class="view-sub">Reclassification, departments &amp; database</p>
           </div>
           <button class="btn" onclick="logout()"><i class="ti ti-logout"></i> Log out</button>
-        </div>
-
-        <div class="settings-section">
-          <h2>Reclassify persons</h2>
-          <p class="desc">Confirm an identity by moving a person between categories, or delete a record entirely.</p>
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Photo</th><th>Name / ID</th><th>Category</th><th>First seen</th><th style="text-align:right">Actions</th></tr></thead>
-              <tbody id="unclassified-body"></tbody>
-            </table>
-          </div>
         </div>
 
         <div class="settings-section">
@@ -500,10 +467,9 @@
 
 <!-- ===================== Merge selection bar (Report) — floating bottom dock ===================== -->
 <div class="merge-bar" id="merge-bar">
-  <span class="merge-bar-info"><b id="merge-bar-count">0</b> selected · tick 2+ of the same person to merge, or delete</span>
-  <button class="btn btn-primary" id="merge-do-btn" onclick="doMerge()" disabled><i class="ti ti-git-merge"></i> Merge selected</button>
-  <button class="btn btn-danger" id="delete-do-btn" onclick="doDelete()" disabled><i class="ti ti-trash"></i> Delete selected</button>
-  <button class="btn" id="merge-cancel-btn" onclick="cancelMergeMode()"><i class="ti ti-x"></i> Cancel</button>
+  <span class="merge-bar-info"><b id="merge-bar-count">0</b> selected · tick 2+ records that are the same person</span>
+  <button class="btn btn-primary" id="merge-bar-go" onclick="mergePeople()" disabled><i class="ti ti-git-merge"></i> Merge into one</button>
+  <button class="btn" id="merge-cancel-btn" onclick="exitMergeMode()"><i class="ti ti-x"></i> Cancel</button>
 </div>
 
 <script src="data.js"></script>

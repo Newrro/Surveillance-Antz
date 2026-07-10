@@ -139,7 +139,6 @@ async function login() {
   renderLog();
   renderReport();
   renderRecords();
-  renderUnclassified();
   renderDepartments();
   showView('grid');
   playNavAnimation();
@@ -188,7 +187,7 @@ const SEARCH_PLACEHOLDER = {
 function showView(name) {
   // Leaving the Report view drops merge/select mode so the floating bar can't
   // linger over another view.
-  if (name !== 'report' && mergeMode) cancelMergeMode();
+  if (name !== 'report' && mergeMode) exitMergeMode();
   document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
   document.getElementById('view-' + name).classList.remove('hidden');
   document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
@@ -1297,46 +1296,14 @@ function renderLogSheet() {
 let reportSearch = '';
 const REPORT_GROUPS = ['Employee', 'Visitor', 'Unknown'];
 
-/* ---------- Attendance (daily register) ---------- */
-function _fmtTime(iso) {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-async function renderAttendance() {
-  const dateEl = document.getElementById('att-date');
-  if (dateEl && !dateEl.value) dateEl.value = new Date().toISOString().slice(0, 10);
-  const date = dateEl ? dateEl.value : '';
-  const sum = document.getElementById('att-summary');
-  const emp = document.getElementById('att-employees');
-  const vis = document.getElementById('att-visitors');
-  sum.innerHTML = '<p class="desc">Loading…</p>'; emp.innerHTML = ''; vis.innerHTML = '';
-  try {
-    if (!BRAIN_ON) throw new Error('Brain not connected');
-    const a = await Brain.attendance(date);
-    sum.innerHTML = `
-      <div class="att-stat"><div class="n">${a.employees_present}/${a.employees_total}</div><div class="l">Employees present</div></div>
-      <div class="att-stat"><div class="n">${a.visitors_count}</div><div class="l">Visitors recognised</div></div>
-      <div class="att-stat att-muted"><div class="n">${a.unknown_count}</div><div class="l">Unidentified</div></div>`;
-    emp.innerHTML = a.employees.length ? `
-      <table class="att-tbl"><thead><tr><th>Name</th><th>Dept</th><th>Status</th><th>First seen</th><th>Last seen</th><th>Cameras</th></tr></thead><tbody>
-      ${a.employees.map(e => `<tr class="${e.present ? '' : 'att-absent'}">
-        <td>${e.name || e.label}</td><td>${e.department || ''}</td>
-        <td>${e.present ? '<span class="att-badge in">Present</span>' : '<span class="att-badge out">Absent</span>'}</td>
-        <td>${_fmtTime(e.first_seen)}</td><td>${_fmtTime(e.last_seen)}</td><td>${e.cameras || '—'}</td></tr>`).join('')}
-      </tbody></table>` : '<p class="desc">No employees enrolled yet — use Records → Enroll employee.</p>';
-    vis.innerHTML = a.visitors.length ? `
-      <table class="att-tbl"><thead><tr><th>Visitor</th><th>First seen</th><th>Last seen</th><th>Cameras</th><th>Sightings</th></tr></thead><tbody>
-      ${a.visitors.map(v => `<tr onclick="openPersonLog('ID-${v.identity_id}')" style="cursor:pointer">
-        <td>${v.name || v.label}</td><td>${_fmtTime(v.first_seen)}</td><td>${_fmtTime(v.last_seen)}</td>
-        <td>${v.cameras}</td><td>${v.sightings}</td></tr>`).join('')}
-      </tbody></table>` : '<p class="desc">No visitors recognised on this day.</p>';
-  } catch (e) {
-    sum.innerHTML = '<p class="desc">Attendance failed: ' + e.message + '</p>';
-  }
+/* Most recent sighting across a person's whole history (for the "Last seen" line). */
+function lastSeen(p) {
+  if (!p.history || !p.history.length) return null;
+  return p.history.reduce((a, b) => (a.date + a.time) >= (b.date + b.time) ? a : b);
 }
 
-let unknownReportOpen = false;   // the Unknown group is large + noisy — collapsed by default
-function toggleUnknownGroup() { unknownReportOpen = !unknownReportOpen; renderReport(); }
+let unknownOpen = false;   // the Unknown group is a dropdown — collapsed by default
+function toggleUnknownGroup() { unknownOpen = !unknownOpen; renderReport(); }
 
 function renderReport() {
   const q = reportSearch.toLowerCase();
@@ -1348,24 +1315,34 @@ function renderReport() {
         (personName(p) + ' ' + p.userId + ' ' + (p.employeeId || '') + ' ' + p.category).toLowerCase().includes(q));
     }
     if (!people.length) return '';
-    // The Unknown group can be huge under precision-first identity — make it a
-    // collapsible section (collapsed by default; a search always expands it).
-    const collapsible = (cat === 'Unknown') && !q;
-    const open = !collapsible || unknownReportOpen;
-    const head = collapsible
-      ? `<div class="report-head report-head-toggle" onclick="toggleUnknownGroup()">
-           <span class="report-caret-btn ${open ? 'open' : ''}"><i class="ti ti-chevron-right"></i></span>
-           <span class="badge badge-${cat}">${cat}</span>
-           <span class="report-count">${people.length}</span>
-         </div>`
-      : `<div class="report-head">
-           <span class="badge badge-${cat}">${cat}</span>
-           <span class="report-count">${people.length}</span>
-         </div>`;
+
+    const cards = `<div class="people-grid">${people.map(p => personCard(p)).join('')}</div>`;
+
+    // Unknowns are hidden behind a dropdown so they don't flood the page — a search
+    // auto-expands them so matches are never hidden.
+    if (cat === 'Unknown') {
+      const open = unknownOpen || !!q;
+      return `
+        <div class="report-section">
+          <div class="report-head">
+            <span class="badge badge-${cat}">${cat}</span>
+            <span class="report-count">${people.length}</span>
+            <button class="report-caret-btn ${open ? 'open' : ''}" onclick="toggleUnknownGroup()"
+                    title="${open ? 'Hide' : 'Show'} unknown detections" aria-label="Toggle unknown detections">
+              <i class="ti ti-chevron-down"></i>
+            </button>
+          </div>
+          ${open ? cards : ''}
+        </div>`;
+    }
+
     return `
       <div class="report-section">
-        ${head}
-        ${open ? `<div class="people-grid">${people.map(p => personCard(p)).join('')}</div>` : ''}
+        <div class="report-head">
+          <span class="badge badge-${cat}">${cat}</span>
+          <span class="report-count">${people.length}</span>
+        </div>
+        ${cards}
       </div>`;
   }).join('') || `<p style="color:var(--text-muted)">No people match this search.</p>`;
 }
@@ -1374,120 +1351,134 @@ function personCard(p) {
   const sub = p.category === 'Employee' ? `${p.employeeId} · ${p.department}`
             : p.category === 'Visitor'  ? 'Visitor'
             : 'Unidentified';
-  // In merge mode a card is a SELECTION toggle (not a link). Only real identities
-  // (with an identity_id) can be merged; ephemeral ones are disabled.
-  const selectable = mergeMode && p.identityId != null;
-  const selected = mergeMode && mergeSel.has(p.userId);
+  const last = lastSeen(p);
+  const lastStr = last ? `${last.location} · ${to12h(last.time)}` : '—';
+  const selected = mergeSelection.has(p.userId);
   const cls = 'person-card'
-    + (selectable ? ' selectable' : '')
-    + (selected ? ' merge-selected selected' : '')
-    + (mergeMode && !selectable ? ' merge-disabled' : '')
-    + (mergeMode ? ' merge-mode' : '');
-  const onclick = !mergeMode ? `onclick="openPersonLog('${p.userId}')"`
-                : selectable ? `onclick="toggleMergeSelect('${p.userId}')"` : '';
-  const check = mergeMode ? `<div class="merge-check">${selected ? '<i class="ti ti-check"></i>' : ''}</div>` : '';
+    + (mergeMode ? ' selectable' : '')
+    + (selected ? ' selected' : '');
+  // Keep the REAL snapshot avatar (photoCss) with the initials as fallback text.
   return `
-    <div class="${cls}" ${onclick}>
-      ${check}
+    <div class="${cls}" onclick="onPersonCardClick(event, '${p.userId}')">
+      <span class="person-card-check"><i class="ti ti-check"></i></span>
+      <button class="person-card-merge" title="Merge duplicates"
+              onclick="event.stopPropagation(); enterMergeMode('${p.userId}')">
+        <i class="ti ti-git-merge"></i>
+      </button>
+      <button class="person-card-del" title="Delete record"
+              onclick="event.stopPropagation(); deletePerson('${p.userId}')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 7h16"></path>
+          <path d="M10 11v6M14 11v6"></path>
+          <path d="M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12"></path>
+          <path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"></path>
+        </svg>
+      </button>
       <div class="person-card-head">
-        <div class="avatar" style="${photoCss(p)}">${p.initials}</div>
+        <div class="avatar person-card-photo" style="${photoCss(p)}">${p.initials}</div>
         <div>
           <div class="name">${personName(p)}</div>
           <div class="sub">${sub}</div>
         </div>
       </div>
       <div class="kv"><span class="k">User ID</span><span class="v">${p.userId}</span></div>
-      <div class="kv"><span class="k">Gender</span><span class="v">${p.gender}</span></div>
-      <div class="kv"><span class="k">Entries</span><span class="v">${p.history.length}</span></div>
+      <div class="kv"><span class="k">Last seen</span><span class="v">${lastStr}</span></div>
     </div>`;
 }
 
-/* ---------- Manual merge (Report view) ----------
-   Select 2+ people that are really the same person and fold them into one id.
-   The surviving id ("primary") is an Employee if one is selected, else the
-   oldest (lowest identity_id). No similarity gate — the human decides. */
+/* ---------- Report: merge / delete identities (wired to the Brain) ----------
+   A card's merge button starts selection mode; ticking 2+ cards then "Merge into
+   one" folds them into a single identity server-side. A card's trash button
+   deletes that one identity. Both re-hydrate from the Brain, then re-render. */
 let mergeMode = false;
-const mergeSel = new Set();
+const mergeSelection = new Set();
 
-/* Drive the floating bottom action bar (not header buttons): show it while in
-   select mode, update the count, and enable Merge at 2+ / Delete at 1+ selected. */
-function _updateMergeUI() {
-  const on = mergeMode, n = mergeSel.size;
-  const startBtn = document.getElementById('merge-start-btn');
-  if (startBtn) startBtn.style.display = on ? 'none' : '';   // hide "Select" while selecting
-  const bar = document.getElementById('merge-bar');
-  if (bar) bar.classList.toggle('open', on);
-  const count = document.getElementById('merge-bar-count');
-  if (count) count.textContent = n;
-  const mBtn = document.getElementById('merge-do-btn');
-  const dBtn = document.getElementById('delete-do-btn');
-  if (mBtn) {
-    mBtn.disabled = n < 2;                                  // merge needs 2+
-    mBtn.innerHTML = `<i class="ti ti-git-merge"></i> Merge selected${n ? ` (${n})` : ''}`;
-  }
-  if (dBtn) {
-    dBtn.disabled = n < 1;                                  // delete needs 1+
-    dBtn.innerHTML = `<i class="ti ti-trash"></i> Delete selected${n ? ` (${n})` : ''}`;
-  }
-  const sub = document.getElementById('report-sub');
-  if (sub) sub.textContent = on
-    ? 'Select mode — tick cards, then Merge (2+ same person) or Delete. Click Cancel to exit.'
-    : 'Grouped by category · click anyone to open their full log';
+/* Card click: toggles selection while merging, otherwise opens the person log. */
+function onPersonCardClick(e, userId) {
+  if (mergeMode) { toggleMergeSelect(userId); return; }
+  openPersonLog(userId);
 }
-function startMergeMode() { mergeMode = true; mergeSel.clear(); renderReport(); _updateMergeUI(); }
-function cancelMergeMode() { mergeMode = false; mergeSel.clear(); renderReport(); _updateMergeUI(); }
+
+/* The merge button on a card starts selection mode with that card pre-selected. */
+function enterMergeMode(userId) {
+  mergeMode = true;
+  mergeSelection.clear();
+  if (userId && PEOPLE[userId]) mergeSelection.add(userId);
+  renderReport();
+  updateMergeBar();
+}
+
 function toggleMergeSelect(userId) {
-  if (mergeSel.has(userId)) mergeSel.delete(userId); else mergeSel.add(userId);
-  renderReport(); _updateMergeUI();
+  if (mergeSelection.has(userId)) mergeSelection.delete(userId);
+  else mergeSelection.add(userId);
+  renderReport();
+  updateMergeBar();
 }
-async function doMerge() {
-  const chosen = [...mergeSel].map(uid => PEOPLE[uid]).filter(p => p && p.identityId != null);
-  if (chosen.length < 2) { alert('Select at least two people to merge.'); return; }
-  // Primary = an employee if selected, else the oldest (lowest) identity_id.
-  const emp = chosen.filter(p => p.category === 'Employee').sort((a, b) => a.identityId - b.identityId)[0];
-  const primary = emp || chosen.slice().sort((a, b) => a.identityId - b.identityId)[0];
-  const dups = chosen.filter(p => p !== primary);
-  const names = dups.map(p => personName(p)).join(', ');
-  if (!confirm(`Merge ${dups.length} card(s) into ${personName(primary)} (${primary.userId})?\n\n`
-             + `Folding in: ${names}\n\nTheir sightings move onto ${personName(primary)} and the other cards are deleted. This cannot be undone.`)) return;
-  const btn = document.getElementById('merge-do-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Merging…'; }
+
+function exitMergeMode() {
+  mergeMode = false;
+  mergeSelection.clear();
+  updateMergeBar();
+  renderReport();
+}
+
+/* Merge-only floating bar: show while selecting, update count, enable at 2+. */
+function updateMergeBar() {
+  const bar = document.getElementById('merge-bar');
+  if (!bar) return;
+  bar.classList.toggle('open', mergeMode);
+  const count = document.getElementById('merge-bar-count');
+  if (count) count.textContent = mergeSelection.size;
+  const go = document.getElementById('merge-bar-go');
+  if (go) go.disabled = mergeSelection.size < 2;
+}
+
+/* Combine every selected record into one identity via the Brain. The primary keeps
+   the strongest identity (Employee > Visitor > Unknown, then a real name, then the
+   richest history); the others are folded into it. */
+async function mergePeople() {
+  const ids = [...mergeSelection].map(id => PEOPLE[id]).filter(x => x && x.identityId != null);
+  if (ids.length < 2) { alert('Select at least two records (with a real identity) to merge.'); return; }
+  const rank = { Employee: 3, Visitor: 2, Unknown: 1 };
+  const people = ids.slice().sort((a, b) =>
+    (rank[b.category] - rank[a.category]) ||
+    ((b.name ? 1 : 0) - (a.name ? 1 : 0)) ||
+    (b.history.length - a.history.length));
+  const primary = people[0];
+  const dups = people.slice(1);
+  if (!confirm(`Merge ${people.length} records into "${personName(primary)}" (${primary.userId})? Their movement logs will be combined and the other records removed. This can't be undone.`)) return;
+  const go = document.getElementById('merge-bar-go');
+  if (go) { go.disabled = true; go.textContent = 'Merging…'; }
   try {
     if (!BRAIN_ON) throw new Error('Brain not connected');
     const r = await Brain.mergeIdentities({ user: AUTH.username, pass: AUTH.password },
       primary.identityId, dups.map(p => p.identityId));
-    mergeMode = false; mergeSel.clear();
     await connectBrain();
-    renderGrid(); renderReport(); renderRecords();
-    if (currentView === 'log') renderLog();
-    _updateMergeUI();
-    alert(`Merged ${r.count} card(s) into ${personName(primary)}.`);
+    exitMergeMode();
+    renderReport(); renderRecords(); renderLog(); renderGrid();
+    alert(`Merged ${(r && r.count != null) ? r.count : dups.length} record(s) into ${personName(primary)}.`);
   } catch (e) {
     alert('Merge failed: ' + e.message);
-    _updateMergeUI();
+    updateMergeBar();
   }
 }
-async function doDelete() {
-  const chosen = [...mergeSel].map(uid => PEOPLE[uid]).filter(p => p && p.identityId != null);
-  if (!chosen.length) { alert('Select at least one person to delete.'); return; }
-  const names = chosen.map(p => `${personName(p)} (${p.userId})`).join('\n');
-  if (!confirm(`Permanently delete ${chosen.length} person(s)?\n\n${names}\n\n`
-             + `Their sightings, sessions and photos are removed. This cannot be undone.`)) return;
-  const btn = document.getElementById('delete-do-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
+
+/* Delete one person's identity via the Brain (per-card trash button). */
+async function deletePerson(userId) {
+  const p = PEOPLE[userId];
+  if (!p) return;
+  if (p.identityId == null) { alert('This record has no identity to delete.'); return; }
+  if (!confirm(`Delete record for ${personName(p)} (${userId})? This removes their log and any live detections. This can't be undone.`)) return;
   try {
     if (!BRAIN_ON) throw new Error('Brain not connected');
-    const r = await Brain.deleteIdentities({ user: AUTH.username, pass: AUTH.password },
-      chosen.map(p => p.identityId));
-    mergeMode = false; mergeSel.clear();
+    await Brain.deleteIdentities({ user: AUTH.username, pass: AUTH.password }, [p.identityId]);
+    mergeSelection.delete(userId);
     await connectBrain();
-    renderGrid(); renderReport(); renderRecords();
-    if (currentView === 'log') renderLog();
-    _updateMergeUI();
-    alert(`Deleted ${r.count} person(s).`);
+    renderReport(); renderRecords(); renderLog(); renderGrid();
+    if (mergeMode) updateMergeBar();
   } catch (e) {
     alert('Delete failed: ' + e.message);
-    _updateMergeUI();
   }
 }
 
@@ -1575,79 +1566,6 @@ function addOperator() {
   document.getElementById('op-new-user').value = '';
   document.getElementById('op-new-pass').value = '';
   renderOperators();
-}
-
-/* ---------- Settings: reclassify ---------- */
-const CONVERT_TARGETS = { Unknown: ['Visitor', 'Employee'], Visitor: ['Employee', 'Unknown'] };
-
-function renderUnclassified() {
-  const body = document.getElementById('unclassified-body');
-  const people = Object.values(PEOPLE);
-  body.innerHTML = people.length ? people.map(p => {
-    const first = p.history[0] || {};
-    const targets = CONVERT_TARGETS[p.category] || [];
-    const convert = targets.length ? `
-            <select id="conv-${p.userId}">
-              ${targets.map(t => `<option value="${t}">${t}</option>`).join('')}
-            </select>
-            <button class="btn btn-primary" onclick="convertPerson('${p.userId}')"><i class="ti ti-transform"></i> Convert</button>` : '';
-    return `
-      <tr>
-        <td><div class="avatar" style="width:28px;height:28px;font-size:11px;${photoCss(p)}">${p.initials}</div></td>
-        <td>${personName(p)} <span class="mono" style="color:var(--text-muted)">${p.userId}</span></td>
-        <td><span class="badge badge-${p.category}">${p.category}</span></td>
-        <td class="mono">${first.date || '—'} ${first.time || ''}</td>
-        <td style="text-align:right">
-          <div class="settings-row-actions" style="justify-content:flex-end">
-            ${convert}
-            <button class="btn btn-danger" onclick="deletePerson('${p.userId}')"><i class="ti ti-trash"></i> Delete</button>
-          </div>
-        </td>
-      </tr>`;
-  }).join('')
-    : `<tr><td colspan="5" style="color:var(--text-muted)">No person records.</td></tr>`;
-}
-
-function deletePerson(userId) {
-  const p = PEOPLE[userId];
-  if (!p) return;
-  if (!confirm(`Delete record for ${personName(p)} (${userId})? This removes their log and any live detections.`)) return;
-  delete PEOPLE[userId];
-  // Drop any live-feed detection boxes that referenced this person, so the
-  // grid / camera views don't try to render a missing record.
-  Object.keys(DETECTIONS).forEach(cam => {
-    DETECTIONS[cam] = DETECTIONS[cam].filter(d => d.personId !== userId);
-  });
-  renderUnclassified();
-  renderReport();
-  renderRecords();
-  renderLog();
-  renderGrid();
-}
-
-function convertPerson(userId) {
-  const p = PEOPLE[userId];
-  const target = document.getElementById('conv-' + userId).value;
-  if (target === 'Employee') {
-    const name = p.name || prompt('Name for this employee:', '');
-    if (name === null) return;
-    const empId = prompt('Assign an employee ID:', 'EMP-' + Math.floor(1000 + Math.random() * 9000));
-    if (empId === null) return;
-    const dept = prompt('Department (' + DEPARTMENTS.join(', ') + '):', DEPARTMENTS[0]);
-    if (dept === null) return;
-    p.category = 'Employee';
-    p.name = name || 'Employee ' + userId;
-    p.employeeId = empId;
-    p.department = dept;
-    if (p.initials === '??') p.initials = p.name.split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase();
-  } else {
-    p.category = target;
-  }
-  // Refresh every view that shows people.
-  renderUnclassified();
-  renderReport();
-  renderRecords();
-  renderLog();
 }
 
 /* ---------- Settings: departments ---------- */

@@ -914,53 +914,78 @@ td.mono { font-family: var(--font-mono); font-size: 12.5px; color: var(--text-se
 .report-count { font-size: 12px; color: var(--text-muted); }
 .people-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
 .person-card {
+  position: relative;
   background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 14px; cursor: pointer; box-shadow: var(--shadow);
   transition: border-color 0.15s, box-shadow 0.15s, transform 0.12s;
 }
 .person-card:hover { border-color: var(--accent); box-shadow: var(--glow); transform: translateY(-2px); }
-.person-card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.person-card-head .avatar { width: 38px; height: 38px; }
+.person-card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+/* Bigger, square snapshot thumbnail (real photo via photoCss, initials fallback) */
+.person-card-head .avatar.person-card-photo {
+  width: 96px; height: 96px; border-radius: var(--radius-sm);
+  font-size: 30px; flex-shrink: 0;
+}
 .person-card-head .name { font-size: 13.5px; font-weight: 600; }
 .person-card-head .sub { font-size: 11.5px; color: var(--text-muted); }
+/* Keep the "Last seen" label on one line; let its value wrap/align right */
+.person-card .kv { gap: 12px; }
+.person-card .kv .k { white-space: nowrap; flex-shrink: 0; }
+.person-card .kv .v { text-align: right; }
 
-/* ---------- Manual merge selection (Report view) ---------- */
-.merge-tools { display: flex; gap: 8px; align-items: center; }
-/* Collapsible Unknown group in the report */
-.report-head-toggle { cursor: pointer; user-select: none; }
-.report-caret-btn { display: inline-flex; transition: transform 0.15s; color: var(--text-muted); margin-right: 4px; }
-.report-caret-btn.open { transform: rotate(90deg); }
-/* Attendance (daily register) */
-.att-summary { display: flex; gap: 14px; margin-bottom: 22px; flex-wrap: wrap; }
-.att-stat { background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 16px 22px; min-width: 150px; box-shadow: var(--shadow); }
-.att-stat .n { font-size: 28px; font-weight: 700; color: var(--accent); }
-.att-stat .l { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-top: 4px; }
-.att-stat.att-muted .n { color: var(--text-muted); }
-.att-h { font-size: 14px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); margin: 20px 0 10px; }
-.att-table { overflow-x: auto; }
-.att-tbl { width: 100%; border-collapse: collapse; }
-.att-tbl th { text-align: left; font-size: 11px; text-transform: uppercase; color: var(--text-muted); padding: 8px 12px; border-bottom: 1px solid var(--border); }
-.att-tbl td { padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
-.att-tbl tr.att-absent td { color: var(--text-muted); }
-.att-badge { font-size: 11px; padding: 2px 9px; border-radius: 999px; font-weight: 600; }
-.att-badge.in { background: rgba(70,180,80,0.18); color: #6bd47a; }
-.att-badge.out { background: var(--bg-2); color: var(--text-muted); }
+/* Per-card delete button — top-right, immediately left of the merge button */
+.person-card-del {
+  position: absolute; top: 8px; right: 42px; z-index: 2;
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--text-muted);
+  opacity: 0.55;
+  transition: opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
+}
+.person-card-del i { font-size: 15px; }
+.person-card-del svg { width: 15px; height: 15px; display: block; }
+.person-card:hover .person-card-del { opacity: 1; }
+.person-card-del:hover {
+  background: var(--danger); color: #ffffff; border-color: var(--danger);
+  box-shadow: 0 0 14px rgba(255, 107, 107, 0.5);
+}
+
+/* Per-card merge button — top-right corner */
+.person-card-merge {
+  position: absolute; top: 8px; right: 8px; z-index: 2;
+  width: 27px; height: 27px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.28); color: var(--text-muted);
+  opacity: 0.55; transition: opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
+}
+.person-card-merge i { font-size: 15px; }
+.person-card:hover .person-card-merge { opacity: 1; }
+.person-card-merge:hover {
+  background: var(--accent); color: #06210a; border-color: var(--accent);
+  box-shadow: var(--glow);
+}
+
+/* Collapsible Unknown group — caret button next to the label */
+.report-caret-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; margin-left: 2px;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text-secondary); cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.report-caret-btn:hover { color: var(--text-primary); border-color: var(--accent); }
+.report-caret-btn i { font-size: 15px; transition: transform 0.15s; }
+.report-caret-btn.open i { transform: rotate(180deg); }
+
 /* Enroll-employee photo preview */
 .enroll-preview { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 10px; }
 .enroll-thumb { height: 84px; width: 84px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); }
-.person-card.merge-mode { position: relative; }
-.person-card.merge-selected { border-color: var(--accent); box-shadow: var(--glow); background: var(--accent-dim); }
-.person-card.merge-disabled { opacity: 0.4; cursor: not-allowed; }
-.person-card.merge-disabled:hover { border-color: var(--border); box-shadow: var(--shadow); transform: none; }
-.merge-check {
-  position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 50%;
-  border: 1.5px solid var(--accent); display: flex; align-items: center; justify-content: center;
-  font-size: 13px; color: #042; background: var(--bg-0);
-}
-.person-card.merge-selected .merge-check { background: var(--accent); color: #042; }
 
-/* Selection mode (ported): highlight selectable/selected cards + optional checkbox */
+/* Selection mode: hide the per-card action buttons, show a checkbox instead */
 .person-card-check {
   position: absolute; top: 8px; right: 8px; z-index: 3;
   width: 24px; height: 24px; border-radius: 50%;

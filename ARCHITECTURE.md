@@ -17,7 +17,7 @@
 
 - **Foundations** — [What this system is](#what-this-system-is) · [Architecture & data flow](#architecture--data-flow) · [Life of one detection](#life-of-one-detection) · [The two contracts](#the-two-contracts) · [Repository map](#repository-map)
 - **Part 1 · Perception** — [Overview & models](#part-1--perception) · [Pipeline loop](#ingest--the-pipeline-loop) · [Identity engine](#the-identity-engine--feature_id) · [File reference](#part-1-file-reference)
-- **Part 2 · Brain** — [Overview & layers](#part-2--brain) · [Database schema](#database-schema) · [Identity resolution](#identity-resolution--the-confirmed-visitor-model) · [API surface](#api-surface) · [File reference](#part-2-file-reference)
+- **Part 2 · Brain** — [Overview & layers](#part-2--brain) · [Database schema](#database-schema) · [Identity resolution](#identity-resolution--self-calibrating-recall-first-cluster-corrected) · [API surface](#api-surface) · [File reference](#part-2-file-reference)
 - **Part 3 · Interface** — [Overview & files](#part-3--interface)
 - **Shared & Ops** — [Camera registry](#the-camera-registry) · [Running the system](#running-the-system) · [Storage & retention](#storage--retention) · [Gotchas](#gotchas--teaching-notes) · [Glossary](#glossary)
 
@@ -87,10 +87,14 @@ of the whole system — everything else is detail hanging off these steps.
    along in the payload.
 6. **Part 1 POSTs the detection.** The Part 1 → Part 2 contract (camera, timestamp, confidence, the
    512-d embeddings, snapshot path) hits the Brain's `POST /events`.
-7. **The Brain re-resolves identity.** `identity_resolver` gates on confidence, then does a **face**
-   vector search in Qdrant. On a face miss it tries a *constrained body re-link* (same camera + last
-   90 s + high body cosine) before minting anything new; still nothing → a fresh Unknown visitor is
-   enrolled; a match → Employee/Visitor.
+7. **The Brain re-resolves identity (recall-first, self-calibrating).** `identity_resolver` gates on
+   confidence and requires a face (no face → Unknown, no id — that's a non-capture, not a person to
+   name). It runs a **best-of-set** face search in Qdrant (the max cosine over each identity's *several*
+   stored templates), and compares the top score against a threshold that **self-calibrates** per
+   deployment to sit just above the impostor similarity the cameras actually produce. A confident match
+   re-uses that identity (Employee/Visitor); otherwise the well-captured face is enrolled as a **new
+   Visitor immediately** (confirmed the moment a body was captured too). Any duplicate an occasional
+   online miss creates is folded back within minutes by deferred clustering (step 12).
 8. **Presence & dedup.** Redis records "this identity is at this camera now" (TTL'd); a 30-second
    window suppresses duplicate log rows. An `is_exit_camera` sighting closes the presence session
    instead.
@@ -99,6 +103,10 @@ of the whole system — everything else is detail hanging off these steps.
 11. **The dashboard updates.** Part 3 folds the event into its in-memory people model and repaints
     badges/logs — while the camera tile shows the annotated frame the pipeline already wrote to
     shared memory.
+12. **Deferred clustering corrects the gallery (background, every ~2 min).** A worker re-clusters the
+    Visitor face templates and folds any duplicates of one person into their oldest id. This — not the
+    single online decision — is the *source of truth* for identity, and it's what makes the recall-first
+    online step safe: guess fast now, self-correct continuously.
 
 ---
 
@@ -136,12 +144,13 @@ the fallback.
 | `event_id`, `duplicate` | Postgres row id (null if duplicate); dedup flag. |
 | `zone_id`, `snapshot`, `clip` | Location + media pointers. |
 
-> **Doc drift to know about.** The contract file and some docstrings still say "below **0.80** →
-> Unknown." The live thresholds are now **detection 0.50 / face 0.42 / body 0.85** — the Brain's
-> `.env` was previously stuck at the stale **0.80 / 0.65 / 0.60** and *overrides* `config.py`, so the
-> 0.65 face floor meant the same person almost never re-matched and every sighting minted a new
-> Visitor. `.env` is now realigned to the intended values. Trust the loaded constants, not the prose —
-> and remember `.env` beats `config.py` (see Gotchas).
+> **On thresholds — there is no single magic number any more.** Detection is still gated at
+> **0.50**. But the *face-match* threshold is **self-calibrated at runtime** (see
+> [Identity resolution](#identity-resolution--self-calibrating-recall-first-cluster-corrected)); it
+> floats to just above the observed impostor similarity rather than being hand-set. The old fixed
+> `FACE_ASSIGN_THRESHOLD 0.62` / `FACE_NEW_THRESHOLD 0.45` are retired (kept in `config.py`, unused).
+> `.env` still overrides `config.py`, so when debugging accuracy, check `GET /admin/calibration` for
+> the *live* thresholds rather than trusting any prose or default (see Gotchas).
 
 ---
 
@@ -327,42 +336,78 @@ into either `employees` or `visitors`. Promoting a visitor to an employee *mutat
 | `presence_sessions` | entry/exit time + camera, status (inside/exited). | Historical presence; Redis holds the live view. |
 | `detection_events` | The ledger: per-detection row with classification, matched_by, similarity, snapshot. | identity_id nullable (Unknowns). The one unbounded table. |
 
-### Identity resolution — the confirmed-visitor model
+### Identity resolution — self-calibrating, recall-first, cluster-corrected
 
-This is the Brain's brain (`services/identity_resolver.py`). Identity is **face-first**: clothing
-alone never *creates* an identity, but a tightly-constrained body signal is allowed to *re-join* a
-sighting that was about to fragment. Live thresholds: detection **0.50**, face **0.42**, body-fallback
-**0.85**, body-relink **0.82**.
+This is the Brain's brain (`services/identity_resolver.py` + `services/calibration_service.py` +
+`services/dedup_service.py`). It is **face-only for identity**: clothing/body appearance never creates
+or joins an identity (uniforms make it actively harmful); the body vector is kept only as the snapshot
+*picture*.
 
-1. **Confidence gate.** Below `DETECTION_CONF_THRESHOLD` (0.50) → Unknown, no search.
-2. **Body-only stays Unknown.** A sighting with no face embedding is never *identified* — recognizing
-   people by clothing (OSNet) would merge different strangers. The body vector is stored only as a
-   *picture* attached to a face-identified person.
-3. **Face search.** A face vector search in Qdrant; a hit ≥ `FACE_SIMILARITY_THRESHOLD` (0.42) → the
-   matched identity.
-4. **Constrained body re-link (face miss).** Before minting a new Visitor, if we have a face *and* a
-   body this frame, check the body against identities **seen on the same camera within
-   `BODY_MERGE_WINDOW_SECONDS` (90 s)** at ≥ `BODY_MERGE_THRESHOLD` (0.82) → re-link to that identity
-   instead of creating a duplicate. The camera + short-window + high-cosine gate is what makes this
-   safe: it re-joins one lingering person whose face just didn't match this frame, but *cannot* merge
-   two strangers on different cameras or minutes apart. (Recency comes from Postgres, since the Qdrant
-   payload has no camera/time.)
-5. **New face → Unknown + enroll.** Still nothing → mint a `VIS-YYYY-NNNN`, store the face (and body)
-   vectors, return Unknown — not yet confirmed.
+**Why the design looks the way it does.** On distant CCTV, two faces of the *same* person score only
+~0.35–0.55 cosine, and impostors sit not far below — the distributions overlap and the absolute scale
+shifts with every camera/lens/lighting. So there is **no fixed threshold that ships well**: set it high
+and well-captured people stay "Unknown" forever; set it low and different people merge. The system
+escapes that bind with three coordinated ideas rather than a better number:
 
-**Gallery consolidation (offline cleanup).** Duplicates that still slip through are collapsed after
-the fact by `dedup_service.consolidate_visitors` (wires `merge_identities`): Visitor identities whose
-**face-gallery centroids** match ≥ `CONSOLIDATE_FACE_THRESHOLD` (0.55) are folded into the oldest id.
-It runs *in-process* via `POST /admin/consolidate` (dry-run by default) — a standalone script can't
-open the embedded Qdrant while the Brain holds it.
+**1 · Multi-template gallery + best-of-set matching.** Each identity accumulates *several* face
+templates (one per good tracklet), capped at `GALLERY_MAX_VIEWS` (12), newest kept. A probe is scored
+against an identity by the **maximum cosine over its templates** — far more tolerant of pose/lighting
+swings than one averaged centroid. (`embedding_repo.search_face` returns per-vector hits; the resolver
+takes the max per identity.)
+
+**2 · A self-calibrating threshold (`calibration_service.py`).** The online match floor is **not**
+hand-set — it floats to `mean(s2) + K·std(s2)`, where `s2` is the *second-best distinct identity's*
+cosine on every query. Since at most one gallery identity is the true match, that stream of `s2` values
+is a clean, decision-independent sample of the **impostor** distribution. Placing the bar a couple of
+standard deviations above it means "match only if clearly more similar than a typical stranger" — which
+adapts automatically to whatever similarity scale the deployed cameras produce, with **no site-specific
+tuning and no camera data required up front**. Until `CALIB_WARMUP` (150) impostor samples accrue it
+uses the cold-start defaults; thereafter the live value (clamped to `[FACE_MATCH_MIN, FACE_MATCH_MAX]`
+= `[0.38, 0.62]`) is used. `merge_threshold()` uses a larger `K` so clustering is stricter than the
+online guess.
+
+**3 · Recall-first online, then deferred clustering as the source of truth.** The single online
+decision is allowed to be imperfect, because a background job continuously re-clusters and corrects it.
+
+The **online** decision (`resolve`), per detection:
+
+1. **Confidence gate.** Below `DETECTION_CONF_THRESHOLD` (0.50) → Unknown, no id.
+2. **No face → Unknown.** A faceless sighting is a *non-capture* — Unknown, no id (deduped upstream on
+   the per-track `detection_id`). "Unknown" now means "not captured well enough to identify," which is
+   exactly the operator's mental model.
+3. **Best-of-set face search.** Rank distinct identities by max template cosine; `s1`/`s2` = top-1/top-2.
+   Feed `s2` to the calibrator.
+4. **Confident re-match → ASSIGN.** If `s1 ≥ match_threshold()` **and** `(s1 − s2) ≥ FACE_MATCH_MARGIN`
+   (0.05) → re-use that identity (a returning person keeps one id), learn the fresh view (unless it's a
+   near-duplicate, `LEARN_SIMILARITY_CEILING` 0.92), and confirm it.
+5. **No confident match → ENROLL a new Visitor now.** A well-captured face with no match is a new
+   person — enrolled immediately (`VIS-YYYY-NNNN`, first template stored). It's a **confirmed Visitor**
+   the moment a body was captured too ("clear face + body ⇒ Visitor"); a face with no body stays
+   provisional (shown as Unknown) until re-identified.
+
+The **deferred** correction (`dedup_service.consolidate_visitors`, run every `CONSOLIDATE_EVERY_MINUTES`
+= 2 by the `workers/consolidation.py` loop, `CONSOLIDATE_APPLY` = True): a **best-of-set** clustering
+pass over all Visitor templates — each template queries the face index; an edge to another Visitor at
+≥ `merge_threshold()` unions them (keep-oldest). Connected components are folded via `merge_identities`.
+This is what makes "no duplicate visitors" true: any fragment an online miss created is merged back
+within a cycle, so the gallery converges to **one identity per person in steady state**. It runs
+in-process (it shares the Brain's embedded Qdrant, which a standalone script can't open) and can also
+be triggered by hand via `POST /admin/consolidate`.
 
 A person moves through three states:
 
-- **Unknown** — a visitor row with no `confirmed_at` (a brand-new face, or face-only so far). Swept
-  away nightly.
-- **Visitor (confirmed)** — has **both** a face and a body embedding on file. Re-identifiable by face
-  on any future day.
+- **Unknown** — either a faceless non-capture (no id at all), or a provisional visitor (a face but no
+  body yet, `confirmed_at` NULL). Provisional rows are swept nightly if never confirmed.
+- **Visitor (confirmed)** — a proper capture (clear face + body). Re-identifiable by face on any future
+  day; kept as one id by best-of-set matching + deferred clustering.
 - **Employee** — enrolled from a photo, or promoted from a visitor. Always "confirmed."
+
+**Debugging surfaces (built for this).** Every decision prints one line —
+`resolve: s1=… s2=… thr=… margin=… cands=…` then `→ ASSIGN id=…` or `New face → VISITOR …`. Live
+calibration state is at `GET /admin/calibration` (impostor sample count, warmed-up flag, live match &
+merge thresholds), and the consolidation loop logs a `calibration: {…}` line every cycle. If people
+fragment or over-merge, read those together: they tell you the exact score and the exact live threshold
+it was compared against.
 
 **Duplicate suppression.** Part 1 emits one payload per crop per frame; a Redis `SET NX EX 30s` key
 logs the first and suppresses the rest (keyed on identity+camera, or on `detection_id` for unknowns).
@@ -391,7 +436,10 @@ one open session per identity.
 | `GET` | `/logs/facility` | admin | Facility-wide CSV export. |
 | `POST` | `/admin/reset` | admin | Wipe people/events/sessions/vectors (keeps cameras). |
 | `POST` | `/admin/clear-unknowns` | admin | Manual version of the nightly unknown sweep. |
-| `POST` | `/admin/consolidate` | admin | Merge duplicate Visitors (matching face centroids). `?apply=true` to execute; dry-run otherwise. |
+| `POST` | `/admin/consolidate` | admin | Manually run the deferred best-of-set Visitor clustering. `?apply=true` to execute; dry-run otherwise. (Also runs automatically every 2 min.) |
+| `POST` | `/identities/merge` | admin | Manually fold selected duplicate ids into a primary (human-decided, no similarity gate). |
+| `POST` | `/identities/delete` | admin | Permanently delete selected identities (events, sessions, vectors, row). |
+| `GET` | `/admin/calibration` | — | Live self-calibration state — impostor sample count, warmed-up flag, live match & merge thresholds. Read-only debug. |
 | `GET` | `/health` | — | DB + Redis + Qdrant liveness. |
 
 ### Part 2 file reference
@@ -403,10 +451,11 @@ one open session per identity.
 | `api/schemas.py` | Pydantic request/response models — including the two contract shapes. |
 | `api/auth.py` | HTTP Basic auth dependency for admin endpoints. |
 | `api/routers/*.py` | events, person, employees, live, search, identities, logs, admin. |
-| `services/ingestion_service.py` | Orchestrates `POST /events`: camera → resolve → track → dedup → learn → log → broadcast. |
-| `services/identity_resolver.py` | The classification brain — face-first resolution, constrained body re-link, confirmed-visitor model. |
+| `services/ingestion_service.py` | Orchestrates `POST /events`: camera → resolve → track → dedup → log → broadcast. (Template learning now lives in the resolver.) |
+| `services/identity_resolver.py` | The classification brain — recall-first best-of-set face matching at the self-calibrated threshold, confirm-on-capture, always-enroll templates. |
+| `services/calibration_service.py` | Self-tuning thresholds: running impostor (2nd-best) similarity stats → live `match_threshold()` / `merge_threshold()`. No hand-tuning, adapts per site. |
 | `services/session_tracker.py` | Opens/continues/closes presence sessions; exit-camera logic. |
-| `services/dedup_service.py` | Redis NX-EX duplicate window; also the admin `merge_identities`. |
+| `services/dedup_service.py` | Redis NX-EX duplicate window; the admin `merge_identities`/`purge_identity`; and `consolidate_visitors` — the best-of-set deferred face clustering. |
 | `services/presence_cache.py` | Redis "where is X now" — touch/get/evict, TTL from config. |
 | `services/live_broadcaster.py` | In-process async pub/sub fan-out to `WS /live` subscribers. |
 | `services/log_service.py` | Joined event feed, per-identity session log, facility CSV. |
@@ -419,6 +468,7 @@ one open session per identity.
 | `db/connection.py` | Async engine + session context managers. |
 | `db/vector_store.py` | Qdrant wrapper — ensure/upsert/search/delete; embedded or server mode. |
 | `workers/midnight_flush.py` | Scheduler: midnight flush + clear-unknowns, archive (30 min), retention (delete old events). |
+| `workers/consolidation.py` | In-process loop (every 2 min) running the deferred best-of-set clustering at the self-calibrated merge threshold; folds duplicate Visitors. The source of truth for identity. |
 | `scripts/seed.py` | Idempotent camera seed from the shared registry (no people by default). |
 | `scripts/prune_events.py` | Postgres-only event retention for native mode (scheduler is off there). |
 | `alembic/` | Migrations — initial 6-table schema + the visitor-confirmation columns. |
@@ -538,16 +588,26 @@ unknowns are cleared nightly.
   `.env` is now realigned. When tuning accuracy, confirm which value is actually *loaded*
   (`python -c "import config; print(config.FACE_SIMILARITY_THRESHOLD)"`), not just what `config.py`
   says.
-- **Face-first, not face-only.** Identity is created by face; body ReID never *invents* an identity.
-  The one exception is the **constrained body re-link** (same camera + ≤90 s + cosine ≥ 0.82), which
-  only re-joins a lingering person to an identity already seen right there moments ago. The Brain's
-  `services/feature_matcher.py` (the original generic body-fallback matcher) is still unused — the
-  resolver calls `embedding_repo.search_face/​search_body` directly. `anonymize_identity`
-  (right-to-be-forgotten) remains a V2 stub that raises `NotImplementedError`.
+- **Identity is face-only now.** Body ReID never creates *or* joins an identity (uniforms merge
+  strangers); the body vector is stored only as the snapshot picture. The old constrained body re-link
+  and `services/feature_matcher.py` are retired/unused. `anonymize_identity` (right-to-be-forgotten)
+  remains a V2 stub that raises `NotImplementedError`.
+- **There's no fixed match threshold — it self-calibrates.** Don't go looking for "the face threshold"
+  to tune; the online floor is computed at runtime from the impostor-similarity stream
+  (`calibration_service`). To see the *live* value, hit `GET /admin/calibration` or read the
+  `resolve: … thr=…` log lines — not `config.py`. The cold-start defaults only apply before
+  `CALIB_WARMUP` (150) samples accrue.
+- **Duplicates are expected briefly, then auto-merged.** Recall-first matching can split one person
+  into two Visitors on an online miss; the deferred clustering worker (every 2 min) folds them back.
+  So judge "duplicates" over a few minutes, not instantaneously. If they *persist*, the merge threshold
+  is too high (check `/admin/calibration`) or clustering isn't applying (`CONSOLIDATE_APPLY`).
 - **Anti-fragmentation is four layers.** OC-SORT tracker (stable IDs) → best-shot tracklet resolution
-  (highest-quality face) → constrained body re-link (prevent duplicates at creation) → offline
-  `/admin/consolidate` (clean up any that slipped). If "one person → many Unknowns" reappears, that's
-  the order to debug it in.
+  (highest-quality face) → recall-first best-of-set online matching (re-use the id when plausibly the
+  same) → deferred best-of-set clustering every 2 min (fold any that still split). If "one person →
+  many ids" reappears, debug in that order, reading the `resolve:` + `calibration:` logs together.
+- **A worst-case escape hatch.** Auto-merge (`CONSOLIDATE_APPLY=True`) can in principle fold two
+  different people together. If a remote tester ever sees that, set `CONSOLIDATE_APPLY=0` (falls back to
+  log-only) and merge/split by hand via the dashboard.
 - **"Detection" vs "identity" confidence.** Two different numbers. Detection confidence = the
   detector's "is this a person?" (gates whether we even try to identify). Identity confidence = the
   cosine similarity "is this Asha?" Don't conflate them when reading logs or tuning.
@@ -568,7 +628,10 @@ unknowns are cleared nightly.
 | RT-DETR | The transformer person *detector* (finds boxes). SAM 2 masks them (optional). |
 | gallery | Part 1's *local* people database (`gallery.json`) — the standalone-mode counterpart to the Brain's Qdrant. |
 | identify vs detect | A camera role. `identify` runs the full recognition pipeline; `detect` only finds people. |
-| confirmed visitor | A visitor with both a face and a body embedding on file — re-identifiable across days. |
+| confirmed visitor | A visitor captured with a clear face + body — a proper capture, re-identifiable across days. |
+| best-of-set matching | Scoring a probe against an identity by the MAX cosine over its several stored templates (not one averaged centroid) — tolerates pose/lighting variation on low-res faces. |
+| self-calibrated threshold | The face-match floor, computed at runtime as `mean(s2) + K·std(s2)` over the impostor-similarity stream, so it adapts per deployment with no hand-tuning. See `calibration_service.py`. |
+| deferred clustering | The background job (every 2 min) that re-clusters Visitor face templates and folds duplicates into one id — the source of truth for identity. |
 | presence session | A Postgres record of one entry→exit; Redis holds the live "who's inside now" view. |
 | `/dev/shm/sentinel` | Shared-memory folder where the pipeline writes annotated tile JPEGs for the UI bridge. |
 

@@ -15,7 +15,7 @@ from sqlalchemy import text
 from api.auth import require_admin
 from db import vector_store
 from db.connection import get_session
-from services import dedup_service, presence_cache
+from services import calibration_service, dedup_service, presence_cache
 
 logger = logging.getLogger("admin")
 
@@ -111,3 +111,14 @@ async def consolidate_endpoint(apply: bool = False, _: str = Depends(require_adm
                     f"DRY RUN — found {total} duplicate(s) in {len(merges)} cluster(s). "
                     f"POST again with ?apply=true to merge."),
     }
+
+
+@router.get("/calibration")
+async def calibration_endpoint() -> dict:
+    """Live self-calibration state (read-only, no auth — aggregate stats only, no
+    PII). Use this to debug matching: `impostor_samples` must reach CALIB_WARMUP
+    before `warmed_up` flips true; until then the cold-start defaults are used.
+    `match_threshold` is the live online assign floor; `merge_threshold` is the
+    (stricter) deferred-clustering floor. If people fragment, watch these vs the
+    `resolve: s1=… thr=…` log lines."""
+    return {"status": "ok", **calibration_service.stats()}

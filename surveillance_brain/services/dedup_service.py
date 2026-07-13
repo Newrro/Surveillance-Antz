@@ -170,31 +170,31 @@ async def consolidate_visitors(
     face_threshold: Optional[float] = None,
     apply: bool = False,
 ) -> List[MergePlan]:
-    """Find VISITOR identities that are really the SAME person (their face-gallery
-    centroids match at/above `face_threshold`) and fold each cluster into its
-    oldest id. This is the offline cleanup for duplicates that slipped past the
-    live guards — it uses face only (never body/clothing) and a threshold well
-    above the live floor, so it's conservative.
+    """Deferred face clustering — the SOURCE OF TRUTH for identity. Finds VISITOR
+    ids that are really the same person and folds each cluster into its oldest id.
 
-    Returns the list of MergePlans. With apply=False it's a DRY RUN (plans only,
-    nothing mutated). With apply=True it calls merge_identities for each pair; the
-    CALLER owns the transaction (commit after)."""
-    thr = config.CONSOLIDATE_FACE_THRESHOLD if face_threshold is None else face_threshold
+    Uses BEST-OF-SET matching (not centroid-to-centroid): for each identity's stored
+    face templates we query the face index and connect it to any OTHER visitor whose
+    template it matches at/above `face_threshold`. Best-of-set tolerates the wide
+    intra-person variation of low-res faces far better than a single centroid — it's
+    the change that lets fragments of one person actually re-join. Face only (never
+    body/clothing). `face_threshold` defaults to the self-calibrated, conservative
+    merge threshold (well above the impostor ceiling), so auto-merge stays precise.
+
+    apply=False → DRY RUN (plans only). apply=True → calls merge_identities per pair;
+    the CALLER owns the transaction (commit after)."""
+    from services import calibration_service
+    thr = calibration_service.merge_threshold() if face_threshold is None else face_threshold
 
     visitors = await identity_repo.list_visitor_identities(session)
-    # Build a face centroid per visitor (skip body-only visitors: no face to judge).
-    centroids: Dict[int, List[float]] = {}
-    labels: Dict[int, str] = {}
-    for v in visitors:
-        c = _normed_centroid(await embedding_repo.fetch_face_vectors(v.id))
-        if c is not None:
-            centroids[v.id] = c
-            labels[v.id] = v.display_label
+    labels: Dict[int, str] = {v.id: v.display_label for v in visitors}
+    visitor_ids = set(labels)
+    if len(visitor_ids) < 2:
+        return []
 
-    ids = sorted(centroids)                      # ascending id → oldest is the primary
-    # Union-Find over pairs whose centroids match. O(n^2) cosine; galleries are
-    # small (dozens–hundreds of visitors), so this is fine as a periodic sweep.
-    parent = {i: i for i in ids}
+    # Union-Find over the threshold graph. An edge (a,b) exists when a face template
+    # of `a` retrieves a template of `b` at cosine ≥ thr (best-of-set, via the index).
+    parent = {i: i for i in visitor_ids}
 
     def find(x: int) -> int:
         while parent[x] != x:
@@ -202,20 +202,26 @@ async def consolidate_visitors(
             x = parent[x]
         return x
 
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)    # keep the oldest (lowest id) as root
+
     best_sim: Dict[Tuple[int, int], float] = {}
-    for a_idx in range(len(ids)):
-        for b_idx in range(a_idx + 1, len(ids)):
-            a, b = ids[a_idx], ids[b_idx]
-            sim = _cosine(centroids[a], centroids[b])
-            if sim >= thr:
-                ra, rb = find(a), find(b)
-                if ra != rb:
-                    parent[max(ra, rb)] = min(ra, rb)   # keep the oldest as root
-                best_sim[(min(a, b), max(a, b))] = sim
+    for vid in visitor_ids:
+        templates = await embedding_repo.fetch_face_vectors(vid)
+        for tpl in templates:
+            for hid, sim in await embedding_repo.search_face(tpl, limit=6):
+                if hid == vid or hid not in visitor_ids or sim < thr:
+                    continue
+                union(vid, hid)
+                key = (min(vid, hid), max(vid, hid))
+                if sim > best_sim.get(key, 0.0):
+                    best_sim[key] = sim
 
     # Group by root; emit a plan for every cluster of size > 1.
     groups: Dict[int, List[int]] = {}
-    for i in ids:
+    for i in visitor_ids:
         groups.setdefault(find(i), []).append(i)
 
     plans: List[MergePlan] = []
@@ -227,7 +233,7 @@ async def consolidate_visitors(
         plans.append(MergePlan(
             primary=root, primary_label=labels[root],
             duplicates=dups, labels=[labels[d] for d in dups],
-            similarity=round(min(s for s in sims if s > 0) if any(sims) else 0.0, 4),
+            similarity=round(max(sims) if sims else 0.0, 4),
         ))
 
     if apply:
@@ -235,6 +241,6 @@ async def consolidate_visitors(
             for dup in plan.duplicates:
                 await merge_identities(session, primary_id=plan.primary, duplicate_id=dup)
         if plans:
-            logger.info("Consolidated %d duplicate visitor(s) into %d identities",
-                        sum(len(p.duplicates) for p in plans), len(plans))
+            logger.info("Consolidated %d duplicate visitor(s) into %d identities (thr=%.3f)",
+                        sum(len(p.duplicates) for p in plans), len(plans), thr)
     return plans

@@ -1,19 +1,22 @@
 """
-workers/consolidation.py — periodic in-process gallery consolidation (Phase 2).
+workers/consolidation.py — periodic in-process deferred face clustering.
 
-Folds VISITOR identities that are really the same person (matching face-gallery
-centroids) into their oldest id, on a timer. This MUST run in-process: it shares
-the Brain's embedded-Qdrant client, which a separate process can't open while the
-Brain holds it (unlike prune_events, which is Postgres-only and safe standalone).
+This is the SOURCE OF TRUTH for identity in the 2026 design. Online matching is
+recall-first and may briefly create a duplicate Visitor when a returning face
+misses; this worker folds those duplicates back by best-of-set face clustering
+(dedup_service.consolidate_visitors) into the oldest id, on a short timer — so the
+gallery converges to one-identity-per-person within a cycle.
 
-Independent of the midnight-flush scheduler (which run.sh disables), so it works
-in native mode too. Gated by config.CONSOLIDATE_ENABLE.
+MUST run in-process: it shares the Brain's embedded-Qdrant client, which a separate
+process can't open while the Brain holds it (unlike prune_events, Postgres-only).
+Independent of the midnight-flush scheduler (which run.sh disables). Gated by
+config.CONSOLIDATE_ENABLE.
 
-SAFETY: defaults to LOG-ONLY (CONSOLIDATE_APPLY=False) — each cycle logs the merge
-plan without touching data, because auto-merging a borderline face match can fold
-two different people together. When apply IS enabled it uses the stricter
-CONSOLIDATE_AUTO_FACE_THRESHOLD (not the looser manual-button threshold). Humans
-apply merges via Settings → "Merge duplicate visitors" after reviewing the plan.
+THRESHOLD: self-calibrated (calibration_service.merge_threshold) — mean impostor
+similarity + K·std, clamped — so merges stay well above the impostor ceiling and
+adapt to the deployed cameras with no hand-tuning. Applies by default
+(CONSOLIDATE_APPLY=True); set it to 0 to fall back to log-only review. Humans can
+still merge/split manually via Settings → "Merge duplicate visitors".
 
 Started/stopped by api.main's lifespan.
 """
@@ -35,12 +38,15 @@ async def run_once() -> int:
     """One consolidation pass. Returns the number of duplicate ids folded (or, in
     log-only mode, the number that WOULD be folded). Never raises to the caller's
     loop — logs and returns 0 on error."""
+    from services import calibration_service
     apply = bool(config.CONSOLIDATE_APPLY)
-    thr = config.CONSOLIDATE_AUTO_FACE_THRESHOLD if apply else config.CONSOLIDATE_FACE_THRESHOLD
+    # face_threshold=None → consolidate_visitors uses the self-calibrated merge
+    # threshold (mean impostor + K·std), which adapts to the deployed cameras.
+    logger.info("calibration: %s", calibration_service.stats())
     try:
         async with get_session() as session:
             plans = await dedup_service.consolidate_visitors(
-                session, face_threshold=thr, apply=apply
+                session, face_threshold=None, apply=apply
             )
             if apply:
                 await session.commit()
@@ -50,7 +56,7 @@ async def run_once() -> int:
 
     total = sum(len(p.duplicates) for p in plans)
     if not plans:
-        logger.info("consolidation: no duplicates (thr=%.2f, apply=%s)", thr, apply)
+        logger.info("consolidation: no duplicates (apply=%s)", apply)
         return 0
     for p in plans:
         logger.info(
@@ -64,10 +70,8 @@ async def run_once() -> int:
 async def _loop() -> None:
     period = max(60.0, config.CONSOLIDATE_EVERY_MINUTES * 60.0)
     logger.info(
-        "consolidation loop every %.0f min (apply=%s, thr=%.2f)",
+        "consolidation loop every %.0f min (apply=%s, self-calibrated merge threshold)",
         period / 60.0, config.CONSOLIDATE_APPLY,
-        config.CONSOLIDATE_AUTO_FACE_THRESHOLD if config.CONSOLIDATE_APPLY
-        else config.CONSOLIDATE_FACE_THRESHOLD,
     )
     while True:
         await asyncio.sleep(period)

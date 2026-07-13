@@ -1,17 +1,37 @@
 """
 services/identity_resolver.py
 =============================
-The brain of the classification logic.
+The brain of the classification logic — 2026 self-calibrating, recall-first design.
 
-Given (detection_conf, face_embedding, body_embedding), decides:
-    - UNKNOWN  (detection_conf below threshold) — fast exit, no vector search
-    - EMPLOYEE (vector match against an existing employee identity)
-    - VISITOR  (vector match against an existing visitor identity)
-    - VISITOR  (no vector match — brand-new visitor auto-enrolled)
+Given (detection_conf, face_embedding), decide one of:
+    - UNKNOWN  (no id)  — detection gated out, OR no face captured. "Unknown" is
+                          reserved for people the system could NOT capture properly
+                          (no clear face). These are ephemeral (deduped on the
+                          per-track detection_id upstream); they never enroll.
+    - EMPLOYEE          — the face matched an enrolled employee.
+    - VISITOR           — the face matched an existing visitor (re-used id), OR it's
+                          a new, well-captured face → enrolled as a Visitor NOW.
 
-`detection_conf` is a 0.0–1.0 probability from Part 1 (NOT a percentage).
+DESIGN (why this replaces the old "confirm only on a 0.62 re-match" model)
+    Distant-CCTV faces of the SAME person score only ~0.35-0.55 cosine, below any
+    safe fixed threshold — so the old model left well-captured people stuck as
+    "Unknown" forever. Fixes:
 
-Returns a ResolutionResult consumed by ingestion_service.
+    1. RECALL-FIRST online matching at a SELF-CALIBRATED threshold that floats just
+       above the observed nearest-impostor similarity (calibration_service), so a
+       returning face actually re-matches its own gallery without hand-tuning.
+    2. Multi-template gallery + best-of-set matching (search_face already returns
+       per-vector hits; we take the max per identity), which tolerates the wide
+       intra-person variation of low-res faces far better than one centroid.
+    3. CONFIRM-ON-CAPTURE: a good face (+ body) is a Visitor immediately — being
+       captured well IS the bar, not being lucky enough to re-match at 0.62.
+    4. Duplicates from an online miss are folded back by DEFERRED CLUSTERING
+       (dedup_service.consolidate_visitors), the source of truth for identity, so
+       the gallery converges to one-identity-per-person in steady state.
+
+`detection_conf` is a 0.0-1.0 probability from Part 1 (NOT a percentage).
+`body_embedding` is accepted for signature compatibility but NEVER used to create
+or join an identity (clothing/uniforms cause false merges) — identity is face-only.
 """
 
 from __future__ import annotations
@@ -26,6 +46,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import config
 from db.models import Classification, IdentityType, MatchedBy
 from repositories import embedding_repo, identity_repo
+from services import calibration_service
 
 logger = logging.getLogger(__name__)
 
@@ -54,30 +75,31 @@ async def resolve(
     camera_id: Optional[int] = None,
     detected_at: Optional[datetime] = None,
 ) -> ResolutionResult:
-    """
-    Open-set 1:N FACE identification (IDENTITY_REDESIGN.md Phase A). Identity is
-    face-only and precision-first; body_embedding is ignored.
+    """Open-set 1:N FACE identification, recall-first + self-calibrating.
 
-    1. Gate: low detection_conf OR no face → UNKNOWN (no id).
-    2. Rank distinct gallery identities by cosine; s1/s2 = top-1/top-2.
-    3. ASSIGN (+confirm) iff s1 ≥ FACE_ASSIGN_THRESHOLD and (s1−s2) ≥ FACE_MARGIN.
-    4. NEW provisional visitor iff s1 < FACE_NEW_THRESHOLD (hidden until re-matched).
-    5. Otherwise ABSTAIN → UNKNOWN (ambiguous — never guess, never merge).
+    1. GATE: low detection_conf OR no face → UNKNOWN (no id — a non-capture).
+    2. Best-of-set search; s1/s2 = top-1/top-2 cosine to DISTINCT identities.
+       Feed s2 (a clean impostor sample) to the calibrator.
+    3. ASSIGN to id1 iff s1 ≥ match_threshold() AND (s1−s2) ≥ margin → re-use id,
+       learn the fresh view, confirm. (Returning person keeps ONE id.)
+    4. Otherwise ENROLL a new Visitor NOW from this good capture (confirmed if a
+       body was captured too). Duplicates are folded by deferred clustering.
     """
     # ---- 1. GATE ----------------------------------------------------- #
     if detection_conf < config.DETECTION_CONF_THRESHOLD:
+        logger.info("resolve: GATED conf=%.2f < %.2f → Unknown (no id)",
+                    detection_conf, config.DETECTION_CONF_THRESHOLD)
         return ResolutionResult(classification=Classification.UNKNOWN, identity_id=None)
 
     has_face_now = face_embedding is not None and len(face_embedding) > 0
-    # IDENTITY IS FACE-ONLY (IDENTITY_REDESIGN.md). Body/clothing NEVER creates or
-    # joins an identity — uniforms make it actively harmful. A faceless sighting is
-    # Unknown, full stop. body_embedding is accepted for signature compatibility but
-    # ignored for identity.
     if not has_face_now:
+        # No clear face → we could not capture this person properly → Unknown, no
+        # identity. (Body/clothing never creates or joins an identity.)
+        logger.info("resolve: NO-FACE (body_only=%s) → Unknown (no id)",
+                    body_embedding is not None)
         return ResolutionResult(classification=Classification.UNKNOWN, identity_id=None)
 
-    # ---- 2. OPEN-SET 1:N against the face gallery -------------------- #
-    # Rank DISTINCT identities by best cosine; s1/s2 = top-1/top-2.
+    # ---- 2. OPEN-SET best-of-set search ------------------------------ #
     face_hits = await embedding_repo.search_face(face_embedding, limit=10)
     best_by_id: dict[int, float] = {}
     for iid, sim in face_hits:
@@ -87,44 +109,48 @@ async def resolve(
     id1, s1 = (ranked[0] if ranked else (None, 0.0))
     s2 = ranked[1][1] if len(ranked) > 1 else 0.0
 
-    # ---- 3. CONFIDENT re-match → ASSIGN (+ confirm) ------------------ #
-    # High score AND a clear margin over the runner-up. The margin is what rejects
-    # look-alikes and kills over-merge magnets.
-    if id1 is not None and s1 >= config.FACE_ASSIGN_THRESHOLD and (s1 - s2) >= config.FACE_MARGIN:
+    # The 2nd-best distinct identity is (almost always) a different person → a clean
+    # impostor sample. This is what lets the threshold self-tune per deployment.
+    if len(ranked) > 1:
+        calibration_service.observe_impostor(s2)
+
+    thr = calibration_service.match_threshold()
+    # One structured line per decision — the primary debugging surface. Shows the
+    # best/second-best identity cosines, the LIVE self-calibrated threshold, and the
+    # margin, so "why did this match / why a new id?" is answerable straight from logs.
+    logger.info("resolve: s1=%.3f(id=%s) s2=%.3f thr=%.3f margin=%.3f cands=%d",
+                s1, id1, s2, thr, config.FACE_MATCH_MARGIN, len(ranked))
+
+    # ---- 3. CONFIDENT re-match → ASSIGN (re-use id) ------------------ #
+    if id1 is not None and s1 >= thr and (s1 - s2) >= config.FACE_MATCH_MARGIN:
         identity = await identity_repo.fetch_identity_by_id(session, id1)
         if identity is not None:
-            await _confirm_and_learn(session, identity, face_embedding, s1)
+            await _assign_and_learn(session, identity, face_embedding, s1)
             classification, label = await _classify(session, identity)
+            logger.info("resolve: → ASSIGN id=%d (%s) cls=%s by=face sim=%.3f",
+                        identity.id, identity.display_label, classification.value, s1)
             return ResolutionResult(
                 classification=classification, identity_id=identity.id,
                 matched_by=MatchedBy.FACE, similarity=s1, label=label,
             )
-        logger.warning("Face match id=%d gone — treating as new", id1)
+        logger.warning("resolve: face match id=%d gone from DB — enrolling as new", id1)
 
-    # ---- 4. CLEARLY NEW → provisional visitor (hidden until re-ID) --- #
-    # Below the new-person floor to EVERYONE → a face we've never seen. Enroll a
-    # PROVISIONAL visitor (confirmed_at NULL → shows as Unknown) that becomes a real
-    # Visitor only when re-identified confidently on a later tracklet (step 3).
-    if s1 < config.FACE_NEW_THRESHOLD:
-        return await _create_provisional_visitor(session, face_embedding)
-
-    # ---- 5. ABSTAIN → Unknown --------------------------------------- #
-    # Ambiguous: matches something in the fog, or top-1/top-2 too close. We do NOT
-    # assign (would risk a wrong name) and do NOT mint (would risk a duplicate).
-    # Precision-first: leave it Unknown.
-    return ResolutionResult(
-        classification=Classification.UNKNOWN, identity_id=None,
-        matched_by=MatchedBy.NONE, similarity=s1,
-    )
+    # ---- 4. NO confident match → ENROLL a new Visitor NOW ------------ #
+    # A well-captured face with no existing match is a NEW person. We do NOT leave
+    # them Unknown (the old bug) — being captured clearly IS the bar for a Visitor.
+    return await _create_visitor(session, face_embedding, body_embedding, top_sim=s1)
 
 
-async def _create_provisional_visitor(
-    session: AsyncSession, face_embedding: Sequence[float]
+async def _create_visitor(
+    session: AsyncSession,
+    face_embedding: Sequence[float],
+    body_embedding: Optional[Sequence[float]],
+    top_sim: float,
 ) -> ResolutionResult:
-    """Enroll a brand-new face as a PROVISIONAL visitor. confirmed_at stays NULL, so
-    _classify reports it as Unknown (hidden from the report) until it is
-    re-identified confidently on a later tracklet — then it's promoted to a real
-    Visitor. Body is NEVER stored: identity is face-only."""
+    """Enroll a brand-new face as a VISITOR immediately. Stores the first face
+    template and confirms the visitor when a body was captured too ("clear face +
+    body ⇒ Visitor"). If a later tracklet of the SAME person misses the online
+    match and enrolls again, deferred clustering folds the duplicate back."""
     year = datetime.utcnow().year
     seq = await identity_repo.next_visitor_seq(session, year)
     label = f"VIS-{year}-{seq:04d}"
@@ -136,43 +162,49 @@ async def _create_provisional_visitor(
     await embedding_repo.store_embeddings(
         new_identity.id, face_embedding=face_embedding, source="auto_first_seen",
     )
-    await identity_repo.set_visitor_flags(session, new_identity.id, True, False)
-    logger.info("New face → PROVISIONAL %s (id=%d) — hidden until re-identified",
-                label, new_identity.id)
+    has_body = body_embedding is not None and len(body_embedding) > 0
+    await identity_repo.set_visitor_flags(session, new_identity.id, True, has_body)
+
+    # Confirm-on-capture: a clear face (we are past the gate) plus a body picture is
+    # a proper capture → a real Visitor from the first sighting. A face with no body
+    # is a weaker capture → stays provisional (Unknown) until re-identified.
+    confirmed = has_body
+    if confirmed:
+        await identity_repo.confirm_visitor(session, new_identity.id)
+    classification = Classification.VISITOR if confirmed else Classification.UNKNOWN
+    logger.info("New face → %s %s (id=%d, top_sim=%.3f)",
+                "VISITOR" if confirmed else "provisional (Unknown)",
+                label, new_identity.id, top_sim)
     return ResolutionResult(
-        classification=Classification.UNKNOWN, identity_id=new_identity.id,
+        classification=classification, identity_id=new_identity.id,
         matched_by=MatchedBy.NONE, similarity=None, label=label,
     )
 
 
 async def _classify(session: AsyncSession, identity):
-    """Event label for a matched identity: Employee, Visitor (confirmed = seen and
-    re-identified by face), or Unknown (a provisional visitor not yet re-matched)."""
+    """Event label for a matched identity: Employee, Visitor (confirmed), or Unknown
+    (a provisional visitor — captured a face but no body yet — not yet confirmed)."""
     if identity.identity_type == IdentityType.EMPLOYEE:
         return Classification.EMPLOYEE, identity.display_label
     confirmed = await identity_repo.is_confirmed_visitor(session, identity.id)
     return (Classification.VISITOR if confirmed else Classification.UNKNOWN), identity.display_label
 
 
-async def _confirm_and_learn(
+async def _assign_and_learn(
     session: AsyncSession, identity, face_embedding: Sequence[float], sim: float
 ) -> None:
-    """On a CONFIDENT face re-match: (1) promote a provisional visitor to CONFIRMED —
-    being re-identified is exactly the bar for a trustworthy, re-identifiable Visitor;
-    (2) progressively learn — add this face as a new gallery view when it's not a
-    near-duplicate, so future angles still match. Employees are already confirmed."""
+    """On a confident re-match: (1) learn — add this face as a fresh gallery view
+    when it isn't a near-duplicate, so future angles keep matching (this is what
+    keeps a returning person on ONE id); (2) confirm a provisional visitor, since
+    being re-identified is proof of a re-identifiable person. Employees are already
+    confirmed and carry no visitor row."""
+    if sim < config.LEARN_SIMILARITY_CEILING:      # skip near-duplicate views
+        await embedding_repo.store_embeddings(identity.id, face_embedding=face_embedding, source="relearn")
+
     if identity.identity_type == IdentityType.EMPLOYEE:
         return
-    flags = await identity_repo.get_visitor_flags(session, identity.id)
-    if flags is None:
-        return
-    _has_face, _has_body, confirmed = flags
-
-    if sim < config.LEARN_SIMILARITY_CEILING:      # add a fresh view (skip near-dupes)
-        await embedding_repo.store_embeddings(identity.id, face_embedding=face_embedding, source="relearn")
-        await identity_repo.set_visitor_flags(session, identity.id, True, False)
-
-    if not confirmed:
+    await identity_repo.set_visitor_flags(session, identity.id, True, False)
+    if not await identity_repo.is_confirmed_visitor(session, identity.id):
         if await identity_repo.confirm_visitor(session, identity.id):
             logger.info("CONFIRMED Visitor %s (id=%d): re-identified by face (sim=%.3f)",
                         identity.display_label, identity.id, sim)

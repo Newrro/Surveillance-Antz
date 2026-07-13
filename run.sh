@@ -56,11 +56,18 @@ export PREVIEW_QUALITY="${PREVIEW_QUALITY:-85}"  # grid JPEG quality (was 70)
 
 # ── Identity as a lagged background service ───────────────────────────────────
 # The grid shows LIVE detection boxes (foreground, high-priority GPU stream); the
-# heavy face/body/SAM2 identity runs in the background (low-priority stream) and
-# is allowed to lag a few seconds — labels/DB fill in shortly after a box appears.
-export IDENTITY_MIN_HITS="${IDENTITY_MIN_HITS:-3}"        # resolve a track only once it's stable
-export IDENTITY_MAX_RATE="${IDENTITY_MAX_RATE:-4}"        # max heavy resolves/sec (yields GPU to grid)
-export IDENTITY_LATENCY_BUDGET="${IDENTITY_LATENCY_BUDGET:-4.0}"  # acceptable label lag (seconds)
+# heavy face/body/SAM2 identity runs in the background (low-priority stream). It is
+# still allowed to lag, but the cadence below is tuned to SAMPLE MANY FRAMES while a
+# person is in view (a 3s appearance = ~15 detector frames) and to capture the photo
+# EARLY — so the snapshot is a sharp, well-framed shot, not a late "already walked
+# off" frame. Turn these down if the [perf] log shows the detector (grid) starving.
+export IDENTITY_MIN_HITS="${IDENTITY_MIN_HITS:-1}"        # start identity almost immediately (was 3 → ~1s late)
+export TRACK_MIN_HITS="${TRACK_MIN_HITS:-1}"              # OcSort confirms a track fast (was 3)
+export IDENTITY_MAX_RATE="${IDENTITY_MAX_RATE:-14}"       # heavy resolves/sec across ALL cams (was 4 → the bottleneck)
+export RESOLVE_INTERVAL="${RESOLVE_INTERVAL:-0.25}"       # re-probe an unresolved track this often (was 1.0 → few frames)
+export IDENTITY_MAX_PROBES="${IDENTITY_MAX_PROBES:-8}"    # frames pooled (upper bound; was 3)
+export IDENTITY_MIN_EMIT_PROBES="${IDENTITY_MIN_EMIT_PROBES:-3}"  # show a first label after this many face frames
+export IDENTITY_LATENCY_BUDGET="${IDENTITY_LATENCY_BUDGET:-1.5}"  # re-probe an emitted track this often (was 4.0)
 
 # ── Storage retention (bound storage/img growth on a 24/7 system) ────────────
 export RETENTION_DAYS="${RETENTION_DAYS:-7}"   # delete snapshots older than this

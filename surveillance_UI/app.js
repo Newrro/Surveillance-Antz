@@ -709,54 +709,71 @@ function clearPersonLogFilters() {
 function closePersonLog() { document.getElementById('plog-modal').classList.remove('open'); }
 function closePersonLogIfBackdrop(e) { if (e.target.id === 'plog-modal') closePersonLog(); }
 
-/* Enlarged photo popup — opened from the avatar in the person-details modal. */
-/* Try each body-crop URL's sibling <stem><suffix> in turn; show the FIRST that
-   loads. The face (<stem>_face.jpg) and full scene (<stem>_full.jpg) share the
-   body crop's stem, but were captured on some sighting — not necessarily the
-   newest one shown — so we scan the person's whole history instead of guessing
-   from one photo. */
-function showFirstSibling(imgEl, figEl, bodyUrls, suffix) {
-  const cands = [...new Set(bodyUrls.filter(Boolean)
-    .map(u => u.replace(/\.jpg(\?.*)?$/i, suffix)))];
+/* Load <url> into <imgEl> only if it actually exists; otherwise hide <figEl>.
+   Used for the face/scene siblings, which don't exist for a faceless sighting. */
+function _probeInto(imgEl, figEl, url) {
   figEl.style.display = 'none';
-  let i = 0;
-  const tryNext = () => {
-    if (i >= cands.length) return;             // none found anywhere → stays hidden
-    const u = cands[i++];
-    const probe = new Image();
-    probe.onload = () => { imgEl.src = u; figEl.style.display = ''; };
-    probe.onerror = tryNext;
-    probe.src = u;
-  };
-  tryNext();
+  if (!url) return;
+  const probe = new Image();
+  probe.onload = () => { imgEl.src = url; figEl.style.display = ''; };
+  probe.onerror = () => { figEl.style.display = 'none'; };
+  probe.src = url;
 }
 
-/* Enlarged photo popup. Pass a specific sighting's snapshot to feature that
-   moment's body crop; otherwise the person's representative photo is used. The
-   FACE is found by scanning the person's sightings for a saved face crop. */
+/* Enlarged photo popup.
+   CRITICAL invariant: the Face, Full body and Full scene shown are ALWAYS the
+   same sighting — one filename stem, one frame, one person. Part 1 now writes the
+   triple <stem>.jpg / <stem>_face.jpg / <stem>_full.jpg atomically from the same
+   frame, so deriving the face/scene from the SHOWN body's stem can never mix two
+   people. We never substitute a face from a different sighting (that was the old
+   "face of A on the body of B" bug). When no specific sighting is clicked we pick
+   the most recent sighting that actually HAS a face and show its whole triple. */
+function _showTriple(bodyUrl) {
+  const bodyFig = document.getElementById('photo-body-fig');
+  const bodyImg = document.getElementById('photo-body-img');
+  if (!bodyUrl) {
+    bodyFig.style.display = 'none';
+    _probeInto(document.getElementById('photo-face-img'), document.getElementById('photo-face-fig'), '');
+    _probeInto(document.getElementById('photo-full-img'), document.getElementById('photo-full-fig'), '');
+    return;
+  }
+  const stem = bodyUrl.replace(/\.jpg(\?.*)?$/i, '');
+  bodyImg.src = bodyUrl; bodyFig.style.display = '';
+  _probeInto(document.getElementById('photo-face-img'),
+             document.getElementById('photo-face-fig'), stem + '_face.jpg');
+  _probeInto(document.getElementById('photo-full-img'),
+             document.getElementById('photo-full-fig'), stem + '_full.jpg');
+}
+
 function openPersonPhoto(snapshotOverride) {
   const p = PEOPLE[plogPersonId];
   if (!p) return;
-  const bodyUrl = snapshotOverride || p.photo || '';
-  const bodyFig = document.getElementById('photo-body-fig');
-  const bodyImg = document.getElementById('photo-body-img');
-  if (bodyUrl) { bodyImg.src = bodyUrl; bodyFig.style.display = ''; }
-  else { bodyFig.style.display = 'none'; }
-
-  // Prefer this sighting's crops, then any across the person's history.
-  const bodies = [];
-  if (snapshotOverride) bodies.push(snapshotOverride);
-  bodies.push(...p.history.map(h => h.snapshot).filter(Boolean).slice().reverse());
-  if (p.photo) bodies.push(p.photo);
-  showFirstSibling(document.getElementById('photo-face-img'),
-                   document.getElementById('photo-face-fig'), bodies, '_face.jpg');
-  showFirstSibling(document.getElementById('photo-full-img'),
-                   document.getElementById('photo-full-fig'), bodies, '_full.jpg');
-
   document.getElementById('photo-name').textContent = personName(p);
   document.getElementById('photo-sub').textContent =
     p.employeeId ? `${p.userId} · ${p.employeeId}` : p.userId;
   document.getElementById('photo-modal').classList.add('open');
+
+  // A clicked sighting is honored EXACTLY (even if it has no face) — never mixed.
+  if (snapshotOverride) { _showTriple(snapshotOverride); return; }
+
+  // No specific sighting: show the most recent one that HAS a saved face, so the
+  // face and body still belong to the same frame. Fall back to the newest body
+  // (face hidden) when the person has no face on file at all.
+  const bodies = [...new Set([
+    ...p.history.map(h => h.snapshot).filter(Boolean).slice().reverse(),
+    p.photo,
+  ].filter(Boolean))];
+  if (!bodies.length) { _showTriple(''); return; }
+  let i = 0;
+  const pick = () => {
+    if (i >= bodies.length) { _showTriple(bodies[0]); return; }  // none has a face
+    const bodyUrl = bodies[i++];
+    const probe = new Image();
+    probe.onload = () => _showTriple(bodyUrl);       // this sighting has a face
+    probe.onerror = pick;                            // try an older sighting
+    probe.src = bodyUrl.replace(/\.jpg(\?.*)?$/i, '_face.jpg');
+  };
+  pick();
 }
 function closePersonPhoto() { document.getElementById('photo-modal').classList.remove('open'); }
 function closePersonPhotoIfBackdrop(e) { if (e.target.id === 'photo-modal') closePersonPhoto(); }

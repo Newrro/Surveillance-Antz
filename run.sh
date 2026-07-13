@@ -31,12 +31,14 @@ BRAIN_DIR="$ROOT/surveillance_brain"
 BRAIN_PY="$BRAIN_DIR/.venv/bin/uvicorn"
 BRAIN_PYEXE="$BRAIN_DIR/.venv/bin/python"
 
-# Pipeline options (override via env). Default: emit to Brain WITH SAM2 segment.
-# --segment blanks the background before OSNet body ReID so the body vector
-# describes the PERSON, not the shared scene — this is what keeps the SAME person
-# matching across cameras. It costs GPU; if boxes lag too much on the 6GB card,
-# drop it with PIPELINE_ARGS="--emit" (accuracy trade — see notes below).
-PIPELINE_ARGS="${PIPELINE_ARGS:---emit --segment}"
+# Pipeline options (override via env). Default: emit to Brain, NO SAM2 segment.
+# SAM2 (--segment) only background-blanked the body crop for BODY ReID. Identity is
+# now FACE-ONLY (body embeddings aren't even stored), so SAM2 does heavy GPU work
+# for a feature that no longer affects identity — and on a 4GB card it saturates
+# VRAM, stalling detection to 3-5 s/batch, which in turn makes the RTSP capture loop
+# time out and the camera feeds drop/tear. It is OFF by default for that reason.
+# Re-enable with PIPELINE_ARGS="--emit --segment" ONLY on a bigger GPU.
+PIPELINE_ARGS="${PIPELINE_ARGS:---emit}"
 CAMERAS="${CAMERAS:-}"          # empty = all cameras in cameras.json
 
 # ── GPU decode (NVDEC) — offload 1440p HEVC decode from CPU to the GPU ────────
@@ -55,19 +57,20 @@ export PREVIEW_FPS="${PREVIEW_FPS:-12}"
 export PREVIEW_QUALITY="${PREVIEW_QUALITY:-85}"  # grid JPEG quality (was 70)
 
 # ── Identity as a lagged background service ───────────────────────────────────
-# The grid shows LIVE detection boxes (foreground, high-priority GPU stream); the
-# heavy face/body/SAM2 identity runs in the background (low-priority stream). It is
-# still allowed to lag, but the cadence below is tuned to SAMPLE MANY FRAMES while a
-# person is in view (a 3s appearance = ~15 detector frames) and to capture the photo
-# EARLY — so the snapshot is a sharp, well-framed shot, not a late "already walked
-# off" frame. Turn these down if the [perf] log shows the detector (grid) starving.
-export IDENTITY_MIN_HITS="${IDENTITY_MIN_HITS:-1}"        # start identity almost immediately (was 3 → ~1s late)
-export TRACK_MIN_HITS="${TRACK_MIN_HITS:-1}"              # OcSort confirms a track fast (was 3)
-export IDENTITY_MAX_RATE="${IDENTITY_MAX_RATE:-14}"       # heavy resolves/sec across ALL cams (was 4 → the bottleneck)
-export RESOLVE_INTERVAL="${RESOLVE_INTERVAL:-0.25}"       # re-probe an unresolved track this often (was 1.0 → few frames)
-export IDENTITY_MAX_PROBES="${IDENTITY_MAX_PROBES:-8}"    # frames pooled (upper bound; was 3)
+# The grid (live boxes) runs on a high-priority GPU stream; the heavy face identity
+# runs in the background on a low-priority stream. On a 4GB card the two DO contend,
+# so the cadence below is tuned for a BALANCE: identity fast enough to catch people,
+# but capped so it can't starve detection (which, if starved past a few seconds,
+# makes the RTSP capture loop time out and the camera feeds drop/tear). If the
+# [perf] log shows detect climbing past ~1s/batch or cameras reconnecting, LOWER
+# IDENTITY_MAX_RATE first. On a bigger GPU you can raise these back up.
+export IDENTITY_MIN_HITS="${IDENTITY_MIN_HITS:-2}"        # start identity once a track is briefly stable
+export TRACK_MIN_HITS="${TRACK_MIN_HITS:-2}"              # OcSort confirms a track in ~0.4s
+export IDENTITY_MAX_RATE="${IDENTITY_MAX_RATE:-6}"        # heavy resolves/sec across ALL cams (was 14 → over-subscribed the 4GB GPU)
+export RESOLVE_INTERVAL="${RESOLVE_INTERVAL:-0.4}"        # re-probe an unresolved track this often (was 0.25 → too hot)
+export IDENTITY_MAX_PROBES="${IDENTITY_MAX_PROBES:-6}"    # frames pooled (upper bound; was 8)
 export IDENTITY_MIN_EMIT_PROBES="${IDENTITY_MIN_EMIT_PROBES:-3}"  # show a first label after this many face frames
-export IDENTITY_LATENCY_BUDGET="${IDENTITY_LATENCY_BUDGET:-1.5}"  # re-probe an emitted track this often (was 4.0)
+export IDENTITY_LATENCY_BUDGET="${IDENTITY_LATENCY_BUDGET:-2.5}"  # re-probe an emitted track this often (was 1.5 → too hot)
 
 # ── Storage retention (bound storage/img growth on a 24/7 system) ────────────
 export RETENTION_DAYS="${RETENTION_DAYS:-7}"   # delete snapshots older than this

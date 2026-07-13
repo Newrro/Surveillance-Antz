@@ -671,54 +671,71 @@ function clearPersonLogFilters() {
 function closePersonLog() { document.getElementById('plog-modal').classList.remove('open'); }
 function closePersonLogIfBackdrop(e) { if (e.target.id === 'plog-modal') closePersonLog(); }
 
-/* Enlarged photo popup — opened from the avatar in the person-details modal. */
-/* Try each body-crop URL's sibling <stem><suffix> in turn; show the FIRST that
-   loads. The face (<stem>_face.jpg) and full scene (<stem>_full.jpg) share the
-   body crop's stem, but were captured on some sighting — not necessarily the
-   newest one shown — so we scan the person's whole history instead of guessing
-   from one photo. */
-function showFirstSibling(imgEl, figEl, bodyUrls, suffix) {
-  const cands = [...new Set(bodyUrls.filter(Boolean)
-    .map(u => u.replace(/\.jpg(\?.*)?$/i, suffix)))];
+/* Load <url> into <imgEl> only if it actually exists; otherwise hide <figEl>.
+   Used for the face/scene siblings, which don't exist for a faceless sighting. */
+function _probeInto(imgEl, figEl, url) {
   figEl.style.display = 'none';
-  let i = 0;
-  const tryNext = () => {
-    if (i >= cands.length) return;             // none found anywhere → stays hidden
-    const u = cands[i++];
-    const probe = new Image();
-    probe.onload = () => { imgEl.src = u; figEl.style.display = ''; };
-    probe.onerror = tryNext;
-    probe.src = u;
-  };
-  tryNext();
+  if (!url) return;
+  const probe = new Image();
+  probe.onload = () => { imgEl.src = url; figEl.style.display = ''; };
+  probe.onerror = () => { figEl.style.display = 'none'; };
+  probe.src = url;
 }
 
-/* Enlarged photo popup. Pass a specific sighting's snapshot to feature that
-   moment's body crop; otherwise the person's representative photo is used. The
-   FACE is found by scanning the person's sightings for a saved face crop. */
+/* Enlarged photo popup.
+   CRITICAL invariant: the Face, Full body and Full scene shown are ALWAYS the
+   same sighting — one filename stem, one frame, one person. Part 1 now writes the
+   triple <stem>.jpg / <stem>_face.jpg / <stem>_full.jpg atomically from the same
+   frame, so deriving the face/scene from the SHOWN body's stem can never mix two
+   people. We never substitute a face from a different sighting (that was the old
+   "face of A on the body of B" bug). When no specific sighting is clicked we pick
+   the most recent sighting that actually HAS a face and show its whole triple. */
+function _showTriple(bodyUrl) {
+  const bodyFig = document.getElementById('photo-body-fig');
+  const bodyImg = document.getElementById('photo-body-img');
+  if (!bodyUrl) {
+    bodyFig.style.display = 'none';
+    _probeInto(document.getElementById('photo-face-img'), document.getElementById('photo-face-fig'), '');
+    _probeInto(document.getElementById('photo-full-img'), document.getElementById('photo-full-fig'), '');
+    return;
+  }
+  const stem = bodyUrl.replace(/\.jpg(\?.*)?$/i, '');
+  bodyImg.src = bodyUrl; bodyFig.style.display = '';
+  _probeInto(document.getElementById('photo-face-img'),
+             document.getElementById('photo-face-fig'), stem + '_face.jpg');
+  _probeInto(document.getElementById('photo-full-img'),
+             document.getElementById('photo-full-fig'), stem + '_full.jpg');
+}
+
 function openPersonPhoto(snapshotOverride) {
   const p = PEOPLE[plogPersonId];
   if (!p) return;
-  const bodyUrl = snapshotOverride || p.photo || '';
-  const bodyFig = document.getElementById('photo-body-fig');
-  const bodyImg = document.getElementById('photo-body-img');
-  if (bodyUrl) { bodyImg.src = bodyUrl; bodyFig.style.display = ''; }
-  else { bodyFig.style.display = 'none'; }
-
-  // Prefer this sighting's crops, then any across the person's history.
-  const bodies = [];
-  if (snapshotOverride) bodies.push(snapshotOverride);
-  bodies.push(...p.history.map(h => h.snapshot).filter(Boolean).slice().reverse());
-  if (p.photo) bodies.push(p.photo);
-  showFirstSibling(document.getElementById('photo-face-img'),
-                   document.getElementById('photo-face-fig'), bodies, '_face.jpg');
-  showFirstSibling(document.getElementById('photo-full-img'),
-                   document.getElementById('photo-full-fig'), bodies, '_full.jpg');
-
   document.getElementById('photo-name').textContent = personName(p);
   document.getElementById('photo-sub').textContent =
     p.employeeId ? `${p.userId} · ${p.employeeId}` : p.userId;
   document.getElementById('photo-modal').classList.add('open');
+
+  // A clicked sighting is honored EXACTLY (even if it has no face) — never mixed.
+  if (snapshotOverride) { _showTriple(snapshotOverride); return; }
+
+  // No specific sighting: show the most recent one that HAS a saved face, so the
+  // face and body still belong to the same frame. Fall back to the newest body
+  // (face hidden) when the person has no face on file at all.
+  const bodies = [...new Set([
+    ...p.history.map(h => h.snapshot).filter(Boolean).slice().reverse(),
+    p.photo,
+  ].filter(Boolean))];
+  if (!bodies.length) { _showTriple(''); return; }
+  let i = 0;
+  const pick = () => {
+    if (i >= bodies.length) { _showTriple(bodies[0]); return; }  // none has a face
+    const bodyUrl = bodies[i++];
+    const probe = new Image();
+    probe.onload = () => _showTriple(bodyUrl);       // this sighting has a face
+    probe.onerror = pick;                            // try an older sighting
+    probe.src = bodyUrl.replace(/\.jpg(\?.*)?$/i, '_face.jpg');
+  };
+  pick();
 }
 function closePersonPhoto() { document.getElementById('photo-modal').classList.remove('open'); }
 function closePersonPhotoIfBackdrop(e) { if (e.target.id === 'photo-modal') closePersonPhoto(); }
@@ -1301,18 +1318,31 @@ function personCard(p) {
             : p.category === 'Visitor'  ? 'Visitor'
             : 'Unidentified';
   // In merge mode a card is a SELECTION toggle (not a link). Only real identities
-  // (with an identity_id) can be merged; ephemeral ones are disabled.
+  // (with an identity_id) can be merged; a card with none has no database row to
+  // fold — that happens when no clear face was ever captured, so we say so instead
+  // of silently grey-ing it out.
   const selectable = mergeMode && p.identityId != null;
   const selected = mergeMode && mergeSel.has(p.userId);
+  const isPrimary = mergeMode && selected && mergePrimary === p.userId;
   const cls = 'person-card'
     + (selected ? ' merge-selected' : '')
+    + (isPrimary ? ' merge-primary' : '')
     + (mergeMode && !selectable ? ' merge-disabled' : '')
     + (mergeMode ? ' merge-mode' : '');
+  const disabledTitle = (mergeMode && !selectable)
+    ? ' title="No identity on file (no clear face was captured) — there is nothing to merge for this card"' : '';
   const onclick = !mergeMode ? `onclick="openPersonLog('${p.userId}')"`
                 : selectable ? `onclick="toggleMergeSelect('${p.userId}')"` : '';
   const check = mergeMode ? `<div class="merge-check">${selected ? '<i class="ti ti-check"></i>' : ''}</div>` : '';
+  // When selected, let the user pick which card is the KEEPER (primary). The others
+  // fold into it. Defaults to a sensible keeper if none is picked (see doMerge).
+  const keepBtn = (mergeMode && selected)
+    ? `<button class="merge-keep-btn" onclick="event.stopPropagation(); setMergePrimary('${p.userId}')">
+         ${isPrimary ? '<i class="ti ti-star-filled"></i> Primary — keep this one'
+                     : '<i class="ti ti-star"></i> Keep this one'}</button>`
+    : '';
   return `
-    <div class="${cls}" ${onclick}>
+    <div class="${cls}" ${onclick}${disabledTitle}>
       ${check}
       <div class="person-card-head">
         <div class="avatar" style="${photoCss(p)}">${p.initials}</div>
@@ -1324,14 +1354,19 @@ function personCard(p) {
       <div class="kv"><span class="k">User ID</span><span class="v">${p.userId}</span></div>
       <div class="kv"><span class="k">Gender</span><span class="v">${p.gender}</span></div>
       <div class="kv"><span class="k">Entries</span><span class="v">${p.history.length}</span></div>
+      ${keepBtn}
     </div>`;
 }
 
 /* ---------- Manual merge (Report view) ----------
-   Select 2+ people that are really the same person and fold them into one id.
-   The surviving id ("primary") is an Employee if one is selected, else the
-   oldest (lowest identity_id). No similarity gate — the human decides. */
+   Select any people that are really the same person and fold them into one id.
+   You pick which card to KEEP (primary) with "Keep this one"; everyone else folds
+   into it. If you don't pick, we keep an Employee if one is selected, else the
+   card with the most sightings. No similarity gate — the human decides. Merge
+   needs at least two cards (a keeper + at least one to fold in); there is NO
+   upper limit — select as many duplicates as you like. */
 let mergeMode = false;
+let mergePrimary = null;                                  // userId of the card to KEEP
 const mergeSel = new Set();
 
 function _updateMergeUI() {
@@ -1342,27 +1377,36 @@ function _updateMergeUI() {
   const dBtn = document.getElementById('delete-do-btn');
   mBtn.style.display = on ? '' : 'none';
   dBtn.style.display = on ? '' : 'none';
-  mBtn.disabled = n < 2;                                  // merge needs 2+
+  mBtn.disabled = n < 2;                                  // merge folds ≥1 card into a keeper → needs 2 total
   dBtn.disabled = n < 1;                                  // delete needs 1+
   mBtn.innerHTML = `<i class="ti ti-git-merge"></i> Merge selected${n ? ` (${n})` : ''}`;
   dBtn.innerHTML = `<i class="ti ti-trash"></i> Delete selected${n ? ` (${n})` : ''}`;
   const sub = document.getElementById('report-sub');
   sub.textContent = on
-    ? 'Select mode — tick cards, then Merge (2+ same person) or Delete. Click Cancel to exit.'
+    ? 'Select mode — tick any cards that are the same person, mark one “Keep this one”, then Merge. Or tick cards and Delete. Cancel to exit.'
     : 'Grouped by category · click anyone to open their full log';
 }
-function startMergeMode() { mergeMode = true; mergeSel.clear(); renderReport(); _updateMergeUI(); }
-function cancelMergeMode() { mergeMode = false; mergeSel.clear(); renderReport(); _updateMergeUI(); }
+function startMergeMode() { mergeMode = true; mergeSel.clear(); mergePrimary = null; renderReport(); _updateMergeUI(); }
+function cancelMergeMode() { mergeMode = false; mergeSel.clear(); mergePrimary = null; renderReport(); _updateMergeUI(); }
 function toggleMergeSelect(userId) {
   if (mergeSel.has(userId)) mergeSel.delete(userId); else mergeSel.add(userId);
+  if (mergePrimary != null && !mergeSel.has(mergePrimary)) mergePrimary = null;  // keeper deselected → clear
+  renderReport(); _updateMergeUI();
+}
+function setMergePrimary(userId) {
+  if (!mergeSel.has(userId)) mergeSel.add(userId);        // marking a keeper also selects it
+  mergePrimary = (mergePrimary === userId) ? null : userId;  // toggle off if clicked again
   renderReport(); _updateMergeUI();
 }
 async function doMerge() {
   const chosen = [...mergeSel].map(uid => PEOPLE[uid]).filter(p => p && p.identityId != null);
-  if (chosen.length < 2) { alert('Select at least two people to merge.'); return; }
-  // Primary = an employee if selected, else the oldest (lowest) identity_id.
+  if (chosen.length < 2) { alert('Select at least two cards to merge (one to keep + at least one to fold in).'); return; }
+  // Primary = the card the user marked "Keep this one"; else an employee if one is
+  // selected; else the card with the most sightings (most data to keep).
+  const picked = mergePrimary != null ? chosen.find(p => p.userId === mergePrimary) : null;
   const emp = chosen.filter(p => p.category === 'Employee').sort((a, b) => a.identityId - b.identityId)[0];
-  const primary = emp || chosen.slice().sort((a, b) => a.identityId - b.identityId)[0];
+  const byData = chosen.slice().sort((a, b) => (b.history.length - a.history.length) || (a.identityId - b.identityId))[0];
+  const primary = picked || emp || byData;
   const dups = chosen.filter(p => p !== primary);
   const names = dups.map(p => personName(p)).join(', ');
   if (!confirm(`Merge ${dups.length} card(s) into ${personName(primary)} (${primary.userId})?\n\n`
@@ -1373,7 +1417,7 @@ async function doMerge() {
     if (!BRAIN_ON) throw new Error('Brain not connected');
     const r = await Brain.mergeIdentities({ user: AUTH.username, pass: AUTH.password },
       primary.identityId, dups.map(p => p.identityId));
-    mergeMode = false; mergeSel.clear();
+    mergeMode = false; mergeSel.clear(); mergePrimary = null;
     await connectBrain();
     renderGrid(); renderReport(); renderRecords();
     if (currentView === 'log') renderLog();
@@ -1396,7 +1440,7 @@ async function doDelete() {
     if (!BRAIN_ON) throw new Error('Brain not connected');
     const r = await Brain.deleteIdentities({ user: AUTH.username, pass: AUTH.password },
       chosen.map(p => p.identityId));
-    mergeMode = false; mergeSel.clear();
+    mergeMode = false; mergeSel.clear(); mergePrimary = null;
     await connectBrain();
     renderGrid(); renderReport(); renderRecords();
     if (currentView === 'log') renderLog();

@@ -31,7 +31,7 @@ class Track:
                  "label", "color", "resolved", "last_resolve", "emitted",
                  "snap_path", "face_path",
                  "best_face_emb", "best_body_emb", "best_face_q", "emit_face_q", "probes",
-                 "face_emb_sum", "face_w_sum", "emit_face_w")
+                 "face_emb_sum", "face_w_sum", "emit_face_w", "best_shot_q")
 
     def __init__(self, tid, box):
         self.id = tid
@@ -59,6 +59,7 @@ class Track:
         self.best_face_q = 0.0      # quality of best_face_emb (drives the saved face thumbnail)
         self.emit_face_q = 0.0      # (legacy) quality of the face we last emitted
         self.probes = 0             # number of heavy identity attempts on this track
+        self.best_shot_q = 0.0      # sharpness×size of the best body-only snapshot (faceless tracks)
 
 
 class MotionTracker:

@@ -106,7 +106,8 @@ IDENTITY_LATENCY_BUDGET = float(os.environ.get("IDENTITY_LATENCY_BUDGET", "4.0")
 # probe it a few times, keep the HIGHEST-quality face (AdaFace feature-norm), and
 # resolve from that best shot. A person's best face re-matches ONE gallery entry
 # far more reliably → the same person stops splitting into many Visitors.
-IDENTITY_MAX_PROBES = int(os.environ.get("IDENTITY_MAX_PROBES", "3"))      # frames sampled before first emit
+IDENTITY_MAX_PROBES = int(os.environ.get("IDENTITY_MAX_PROBES", "8"))      # frames pooled (upper bound / body-only fallback)
+IDENTITY_MIN_EMIT_PROBES = int(os.environ.get("IDENTITY_MIN_EMIT_PROBES", "3"))  # emit a first label after this many face probes
 IDENTITY_REEMIT_FRAC = float(os.environ.get("IDENTITY_REEMIT_FRAC", "0.15"))  # re-emit if a face is this much better
 
 # ── Face quality gate (IDENTITY_REDESIGN.md Phase A) ───────────────────────
@@ -268,6 +269,24 @@ def crop_person(frame_bgr, box_xyxy, mask=None):
         person[mask] = frame_bgr[mask]
         return person[y1:y2, x1:x2].copy()
     return frame_bgr[y1:y2, x1:x2].copy()
+
+
+def _crop_sharpness(crop_bgr):
+    """Cheap 'good shot' score for a body crop: variance-of-Laplacian (in-focus
+    detail) scaled by the crop's short side. Higher = sharper AND bigger. Lets us
+    keep the SHARPEST frame as the snapshot instead of whatever frame identity
+    happened to probe first — so a person who walks past doesn't get a motion-
+    blurred picture just because the first probe caught them mid-stride."""
+    if crop_bgr is None or crop_bgr.size == 0:
+        return 0.0
+    h, w = crop_bgr.shape[:2]
+    g = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+    m = max(h, w)
+    if m > 256:                              # keep the Laplacian cheap on big crops
+        sc = 256.0 / m
+        g = cv2.resize(g, (max(1, int(w * sc)), max(1, int(h * sc))), interpolation=cv2.INTER_AREA)
+    lap = cv2.Laplacian(g, cv2.CV_64F).var()
+    return float(lap) * float(min(h, w))
 
 
 def _pooled_face(emb_sum, w_sum):
@@ -445,6 +464,8 @@ def main():
             return False                     # no usable features yet — retry later
 
         face_q = identifier.last_face_quality  # AdaFace-norm quality of THIS probe's face
+        face_ok = face_emb is not None and face_q >= FACE_MIN_QUALITY
+        face_crop = identifier.last_face_crop
         stamp_ms = int(time.time() * 1000)
         with state_lock:
             t.probes += 1
@@ -453,28 +474,46 @@ def main():
             # than one best shot — a stable vector that re-matches one gallery entry.
             # QUALITY GATE: only faces above the floor feed identity. A low-quality
             # face is ignored entirely (not pooled) — precision over coverage.
-            if face_emb is not None and face_q >= FACE_MIN_QUALITY:
+            if face_ok:
                 w = max(1e-3, float(face_q))
                 fv = np.asarray(face_emb, dtype=np.float32) * w
                 t.face_emb_sum = fv if t.face_emb_sum is None else t.face_emb_sum + fv
                 t.face_w_sum += w
-                if face_q > t.best_face_q:               # best single shot → snapshot + paired body
-                    t.best_face_emb, t.best_body_emb, t.best_face_q = face_emb, body_emb, face_q
             elif t.best_body_emb is None and body_emb is not None:
                 t.best_body_emb = body_emb              # keep a body even before any face
-            # Snapshots: one body crop per track; refresh the face thumb on a better shot.
-            if t.snap_path is None:
-                t.snap_path = save_snapshot(uid, crop, stamp_ms, t.id)
-                save_frame_snapshot(uid, frame, box, stamp_ms, t.id)   # full scene for verification
-            if face_emb is not None and face_q >= t.best_face_q and identifier.last_face_crop is not None:
-                t.face_path = save_face_snapshot(uid, identifier.last_face_crop, stamp_ms, t.id)
-            # Decide whether to (re-)emit. Wait for a few probes so the FIRST emit
-            # pools several faces (a poor single face enrolls a bad gallery entry the
-            # person then fails to re-match). After that, re-emit only once the pool
-            # has grown meaningfully (more/better face evidence → sharper centroid).
+            # ── Consistent snapshot TRIPLE (body + face + full scene) ──────────
+            # ALL THREE are saved from the SAME frame and share ONE filename stem, so
+            # the face, body and scene a human sees are always the same person at the
+            # same instant (this is what fixes "face of A on the body of B"). We
+            # (re)capture the whole triple whenever this probe's face beats the best
+            # so far — the displayed shot tracks the CLEAREST view of the person, and
+            # the face thumbnail can never drift onto a different frame than the body.
+            new_best_face = face_ok and face_q > t.best_face_q and face_crop is not None
+            if new_best_face:
+                t.best_face_emb, t.best_body_emb, t.best_face_q = face_emb, body_emb, face_q
+                t.snap_path = save_snapshot(uid, crop, stamp_ms, t.id)          # body
+                t.face_path = save_face_snapshot(uid, face_crop, stamp_ms, t.id)  # paired face
+                save_frame_snapshot(uid, frame, box, stamp_ms, t.id)           # paired scene
+            elif t.best_face_q <= 0.0:
+                # No usable face on this track yet — keep the SHARPEST body + scene so
+                # an Unknown still gets a clean picture, upgraded as sharper/bigger
+                # frames arrive (not frozen on a blurry first probe). Replaced wholesale
+                # by the first real face triple above, which shares a stem with its
+                # face — so a body's derived _face.jpg never belongs to another frame.
+                body_q = _crop_sharpness(crop)
+                if body_q > t.best_shot_q:
+                    t.best_shot_q = body_q
+                    t.snap_path = save_snapshot(uid, crop, stamp_ms, t.id)
+                    save_frame_snapshot(uid, frame, box, stamp_ms, t.id)
+                    t.face_path = None
+            # Decide whether to (re-)emit. Emit a FIRST label as soon as we've pooled
+            # a few good faces (snappy — a poor single face enrolls a bad gallery entry
+            # the person then fails to re-match, so we want a few, not one), then keep
+            # pooling and re-emit a sharper centroid once the pool grows meaningfully.
             budget_done = t.probes >= IDENTITY_MAX_PROBES
             have_face = t.face_w_sum > 0.0
-            ready = have_face and (budget_done or t.emitted)
+            first_ready = have_face and t.probes >= IDENTITY_MIN_EMIT_PROBES
+            ready = first_ready or t.emitted
             ready = ready or (budget_done and not have_face)   # body-only fallback → Unknown
             if not ready:
                 return True                          # keep probing; worker retries this track

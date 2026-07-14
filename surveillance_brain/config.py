@@ -137,12 +137,6 @@ class Settings(BaseSettings):
     # without merging two strangers in similar clothing.
     BODY_MERGE_THRESHOLD: float = 0.82
     BODY_MERGE_WINDOW_SECONDS: int = 90
-    # Manual-review floor for SUGGESTED unknown-case links (below the auto
-    # re-link bar but plausible): pairs scoring in [REVIEW, MERGE) are shown on
-    # the review screen with evidence thumbnails — a human approves or dismisses.
-    BODY_REVIEW_THRESHOLD: float = 0.65
-    # Suggested links look this far back for co-located cases.
-    BODY_REVIEW_WINDOW_MINUTES: int = 240
 
     # Track-sticky identity: Part 1's detection_id is STABLE per tracker track
     # (camera-scoped). Once a track has been resolved to an identity, later
@@ -294,8 +288,6 @@ FACE_MERGE_MAX: Final[float] = _settings.FACE_MERGE_MAX
 BODY_SIMILARITY_THRESHOLD: Final[float] = _settings.BODY_SIMILARITY_THRESHOLD
 BODY_MERGE_THRESHOLD: Final[float] = _settings.BODY_MERGE_THRESHOLD
 BODY_MERGE_WINDOW_SECONDS: Final[int] = _settings.BODY_MERGE_WINDOW_SECONDS
-BODY_REVIEW_THRESHOLD: Final[float] = _settings.BODY_REVIEW_THRESHOLD
-BODY_REVIEW_WINDOW_MINUTES: Final[int] = _settings.BODY_REVIEW_WINDOW_MINUTES
 TRACK_STICKY_TTL_SECONDS: Final[int] = _settings.TRACK_STICKY_TTL_SECONDS
 GALLERY_MAX_VIEWS: Final[int] = _settings.GALLERY_MAX_VIEWS
 CONSOLIDATE_FACE_THRESHOLD: Final[float] = _settings.CONSOLIDATE_FACE_THRESHOLD

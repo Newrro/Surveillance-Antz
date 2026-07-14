@@ -135,24 +135,20 @@ async def resolve(
 
     has_face_now = face_embedding is not None and len(face_embedding) > 0
     if not has_face_now:
-        # No clear face this time — but NOT necessarily a stranger, and NEVER a
-        # throw-away row (2026-07 rework). In order:
+        # No clear face this time — but NOT necessarily a stranger. In order:
         #   a. the SAME track was already identified → keep that identity (a
-        #      person we named must never also produce stray Unknown rows);
-        #   b. constrained body RE-LINK — same camera, short window, high cosine
-        #      (reconnects a fragmented track to its case/visitor; auditable via
-        #      matched_by='body' + similarity on the event row, reversible via
-        #      the reassign/split report actions);
-        #   c. genuinely new/uncapturable → a PERSISTENT Unknown case: every
-        #      faceless human gets ONE mergeable record, not id-less scatter.
+        #      person we named must never also produce id-less Unknown rows);
+        #   b. constrained body RE-LINK — same camera, short window, high cosine;
+        #   c. genuinely uncapturable → Unknown, no identity.
         sticky = await _resolve_sticky_track(session, detection_id)
         if sticky is not None:
             return sticky
         relinked = await _relink_by_body(session, body_embedding, camera_id, detected_at)
         if relinked is not None:
             return relinked
-        return await _get_or_create_unknown_case(
-            session, detection_id, body_embedding, detected_at)
+        logger.info("resolve: NO-FACE (body_only=%s) → Unknown (no id)",
+                    body_embedding is not None)
+        return ResolutionResult(classification=Classification.UNKNOWN, identity_id=None)
 
     # ---- 2. OPEN-SET best-of-set search ------------------------------ #
     face_hits = await embedding_repo.search_face(face_embedding, limit=10)
@@ -208,15 +204,10 @@ async def resolve(
     # ---- 4a. Same track already has an id → REUSE it (learn the view) - #
     # A track re-emitting with a better pooled face must NEVER mint a second id:
     # it is by construction the same physical person the tracker followed.
-    # EXCEPTION: a track whose cached identity is an UNKNOWN CASE (it observed
-    # faceless first) must NOT stick — this payload HAS a good face, so the
-    # person deserves a real Visitor identity; the ingestion layer then folds
-    # the whole case onto it (attach_case_to_identity). Sticking would trap
-    # face-bearing people as Unknown forever.
     cached_id = await get_track_identity(detection_id)
     if cached_id is not None:
         identity = await identity_repo.fetch_identity_by_id(session, cached_id)
-        if identity is not None and identity.identity_type != IdentityType.UNKNOWN:
+        if identity is not None:
             await _assign_and_learn(session, identity, face_embedding, s1,
                                     body_embedding=body_embedding)
             classification, label = await _classify(session, identity)
@@ -236,10 +227,8 @@ async def resolve(
     # apart in identical clothes). Attribute the sighting instead of minting a
     # duplicate. The face view is NOT learned — a body link is not face proof,
     # and learning it could poison the gallery if the link is ever wrong.
-    # Unknown cases are EXCLUDED here for the same reason as 4a: with a good
-    # face in hand, mint the Visitor — the case folds onto it right after.
     relink = await _relink_by_body(session, body_embedding, camera_id, detected_at,
-                                   context="mint-avert", skip_unknown_cases=True)
+                                   context="mint-avert")
     if relink is not None:
         return relink
 
@@ -275,7 +264,6 @@ async def _relink_by_body(
     camera_id: Optional[int],
     detected_at: Optional[datetime],
     context: str = "no-face",
-    skip_unknown_cases: bool = False,
 ) -> Optional[ResolutionResult]:
     """Constrained body RE-LINK for a no-face sighting: reuse an existing identity
     iff its body vector matches at/above BODY_MERGE_THRESHOLD AND that identity was
@@ -310,8 +298,6 @@ async def _relink_by_body(
         return None
     identity = await identity_repo.fetch_identity_by_id(session, best_id)
     if identity is None:
-        return None
-    if skip_unknown_cases and identity.identity_type == IdentityType.UNKNOWN:
         return None
     classification, label = await _classify(session, identity)
     logger.info("resolve: %s → BODY-RELINK id=%d (%s) cls=%s sim=%.3f (same cam ≤%ds)",
@@ -369,82 +355,11 @@ async def _create_visitor(
 
 async def _classify(session: AsyncSession, identity):
     """Event label for a matched identity: Employee, Visitor (confirmed), or Unknown
-    (an Unknown case, or a provisional visitor not yet confirmed)."""
+    (a provisional visitor — captured a face but no body yet — not yet confirmed)."""
     if identity.identity_type == IdentityType.EMPLOYEE:
         return Classification.EMPLOYEE, identity.display_label
-    if identity.identity_type == IdentityType.UNKNOWN:
-        return Classification.UNKNOWN, identity.display_label
     confirmed = await identity_repo.is_confirmed_visitor(session, identity.id)
     return (Classification.VISITOR if confirmed else Classification.UNKNOWN), identity.display_label
-
-
-async def _get_or_create_unknown_case(
-    session: AsyncSession,
-    track_uuid: Optional[str],
-    body_embedding: Optional[Sequence[float]],
-    detected_at: Optional[datetime],
-) -> ResolutionResult:
-    """Anchor a faceless sighting to a PERSISTENT Unknown case (UNK-YYYY-NNNN).
-
-    One case per physical person: the same track always reuses its case (unique
-    on track_uuid); fragmented tracks re-join via the constrained body re-link
-    upstream. The case's body vector is stored so later faceless tracklets can
-    find it — body is used ONLY inside the same-camera/short-window re-link,
-    never to identify someone as a Visitor/Employee (clothing lies)."""
-    if track_uuid:
-        existing = await identity_repo.fetch_unknown_case_by_track(session, track_uuid)
-        if existing is not None:
-            identity = await identity_repo.fetch_identity_by_id(session, existing.identity_id)
-            if identity is not None:
-                return ResolutionResult(
-                    classification=Classification.UNKNOWN, identity_id=identity.id,
-                    matched_by=MatchedBy.NONE, similarity=None, label=identity.display_label,
-                )
-    year = (detected_at or datetime.utcnow()).year
-    seq = await identity_repo.next_unknown_seq(session, year)
-    label = f"UNK-{year}-{seq:04d}"
-    identity = await identity_repo.create_identity(session, IdentityType.UNKNOWN, label)
-    await identity_repo.insert_unknown_case(
-        session, identity_id=identity.id, unknown_seq=seq, year=year,
-        track_uuid=track_uuid, first_seen_at=detected_at or datetime.utcnow(),
-    )
-    if body_embedding is not None and len(body_embedding) > 0:
-        await embedding_repo.store_embeddings(
-            identity.id, body_embedding=body_embedding, source="unknown_case")
-    logger.info("resolve: NO-FACE → new UNKNOWN CASE %s (id=%d, track=%s)",
-                label, identity.id, track_uuid)
-    return ResolutionResult(
-        classification=Classification.UNKNOWN, identity_id=identity.id,
-        matched_by=MatchedBy.NONE, similarity=None, label=label,
-    )
-
-
-async def attach_case_to_identity(
-    session: AsyncSession,
-    track_uuid: Optional[str],
-    resolved_identity_id: int,
-    actor: str = "system",
-) -> Optional[int]:
-    """When a track that opened an Unknown case later resolves to a REAL identity
-    (face finally captured), fold the WHOLE case — all its sightings and body
-    vectors — onto that identity. Returns the folded case id, or None.
-
-    The fold runs through merge_identities, so it is audited and re-points every
-    event; nothing is deleted except the now-empty case row."""
-    if not track_uuid:
-        return None
-    case = await identity_repo.fetch_unknown_case_by_track(session, track_uuid)
-    if case is None or case.identity_id == resolved_identity_id:
-        return None
-    from services import dedup_service  # local import — avoids a module cycle
-    case_id = case.identity_id
-    await dedup_service.merge_identities(
-        session, primary_id=resolved_identity_id, duplicate_id=case_id,
-        actor=actor, action="case-attach",
-    )
-    logger.info("Unknown case id=%d folded into identity id=%d (face resolved for track %s)",
-                case_id, resolved_identity_id, track_uuid)
-    return case_id
 
 
 async def _assign_and_learn(

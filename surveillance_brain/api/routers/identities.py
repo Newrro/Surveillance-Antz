@@ -20,11 +20,8 @@ from api.schemas import (
     MergeRequest,
     NameRequest,
     PromoteRequest,
-    UnmergeRequest,
 )
 from db.connection import get_db, get_session
-from fastapi import Query
-from repositories import audit_repo, identity_repo
 from services import conversion_service, dedup_service
 
 logger = logging.getLogger(__name__)
@@ -116,88 +113,28 @@ async def demote(
     dependencies=[Depends(require_admin)],
     summary="Manually merge duplicate identities into one (folds duplicates → primary)",
 )
-async def merge(body: MergeRequest, actor: str = Depends(require_admin)) -> dict:
+async def merge(body: MergeRequest, _: str = Depends(require_admin)) -> dict:
     """Fold every id in `duplicate_ids` INTO `primary_id`: their sightings +
-    sessions are re-pointed to the primary, face/body templates MOVE to the
-    primary (human-confirmed merge), and the duplicate identity rows are
-    deleted. Every fold writes an audit row whose id can undo it (/unmerge).
+    sessions are re-pointed to the primary and the duplicate identities (and their
+    vectors) are deleted. The primary keeps its id, label, name and history.
 
-    All type combinations work — Unknown↔Unknown, Unknown↔Visitor,
-    Unknown↔Employee, Visitor↔Visitor, Visitor↔Employee, Employee↔Employee —
-    with one guard: an employee can only be merged AS the primary, so employee
-    details always survive."""
+    Used by the dashboard's manual 'select + merge' — the human decides these are
+    the same person, so there's no similarity gate (unlike the auto-consolidator)."""
     dups = [d for d in dict.fromkeys(body.duplicate_ids) if d != body.primary_id]
     if not dups:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail="need at least one duplicate id distinct from primary_id")
     merged: list[int] = []
-    audit_ids: list[int] = []
     async with get_session() as session:
         for dup in dups:
             try:
-                audit_id = await dedup_service.merge_identities(
-                    session, primary_id=body.primary_id, duplicate_id=dup, actor=actor)
+                await dedup_service.merge_identities(session, primary_id=body.primary_id, duplicate_id=dup)
                 merged.append(dup)
-                audit_ids.append(audit_id)
             except ValueError as e:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         await session.commit()
-    logger.info("Manual merge: folded %s into %d (%s)", merged, body.primary_id, actor)
-    return {"status": "ok", "primary_id": body.primary_id, "merged": merged,
-            "count": len(merged), "audit_ids": audit_ids}
-
-
-@router.post(
-    "/unmerge",
-    status_code=status.HTTP_200_OK,
-    summary="Undo a previous merge by its audit id (best effort)",
-)
-async def unmerge(body: UnmergeRequest, actor: str = Depends(require_admin)) -> dict:
-    """Re-creates the folded identity (new numeric id, old label/type/name) and
-    re-points the events that the merge moved. Vectors folded into the primary's
-    capped gallery cannot be split back out — documented limitation."""
-    async with get_session() as session:
-        try:
-            result = await dedup_service.unmerge(session, body.audit_id, actor=actor)
-        except ValueError as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-        await session.commit()
-    return {"status": "ok", **result}
-
-
-@router.get(
-    "/search",
-    status_code=status.HTTP_200_OK,
-    summary="Ranked identity search for merge/reassign pickers (label, name, case id)",
-)
-async def search_identities(
-    q: str = Query(..., min_length=1, max_length=128),
-    limit: int = Query(20, ge=1, le=50),
-    _: str = Depends(require_admin),
-) -> list[dict]:
-    """Matches EMP-/VIS-/UNK- labels and employee/visitor names (ILIKE)."""
-    async with get_session() as session:
-        return await identity_repo.search_identities(session, q, limit=limit)
-
-
-@router.get(
-    "/audit",
-    status_code=status.HTTP_200_OK,
-    summary="Recent audit trail (merge/hide/reassign/import/erase)",
-)
-async def audit_trail(
-    action: str | None = Query(None, max_length=48),
-    subject_id: str | None = Query(None, max_length=96),
-    limit: int = Query(100, ge=1, le=500),
-    _: str = Depends(require_admin),
-) -> list[dict]:
-    async with get_session() as session:
-        rows = await audit_repo.list_recent(session, action=action,
-                                            subject_id=subject_id, limit=limit)
-        return [{"id": r.id, "at": r.at.isoformat() if r.at else None,
-                 "actor": r.actor, "action": r.action,
-                 "subject_type": r.subject_type, "subject_id": r.subject_id,
-                 "details": audit_repo.details_of(r)} for r in rows]
+    logger.info("Manual merge: folded %s into %d", merged, body.primary_id)
+    return {"status": "ok", "primary_id": body.primary_id, "merged": merged, "count": len(merged)}
 
 
 @router.post(
@@ -206,10 +143,9 @@ async def audit_trail(
     dependencies=[Depends(require_admin)],
     summary="Permanently delete identities (sightings, sessions, vectors, row)",
 )
-async def delete_identities(body: DeleteIdentitiesRequest, actor: str = Depends(require_admin)) -> dict:
+async def delete_identities(body: DeleteIdentitiesRequest, _: str = Depends(require_admin)) -> dict:
     """Hard-delete each id: its detection_events, presence_sessions, embeddings and
-    the identity row. Explicit and audited — the report UI's normal 'delete' is
-    the per-sighting soft hide (/events/hide), NOT this. Irreversible."""
+    the identity row. Used by the dashboard's 'select + delete'. Irreversible."""
     ids = list(dict.fromkeys(body.identity_ids))
     deleted: list[int] = []
     async with get_session() as session:
@@ -219,13 +155,8 @@ async def delete_identities(body: DeleteIdentitiesRequest, actor: str = Depends(
                 deleted.append(iid)
             except ValueError:
                 continue                     # already gone — skip, keep deleting the rest
-        if deleted:
-            await audit_repo.record(session, actor=actor, action="erase",
-                                    subject_type="identity",
-                                    subject_id=",".join(map(str, deleted)),
-                                    details={"count": len(deleted)})
         await session.commit()
-    logger.info("Manual delete: purged %s (%s)", deleted, actor)
+    logger.info("Manual delete: purged %s", deleted)
     return {"status": "ok", "deleted": deleted, "count": len(deleted)}
 
 

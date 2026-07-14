@@ -45,14 +45,6 @@ async def ingest(
     detection_id: Optional[str] = None,
     snapshot_path: Optional[str] = None,
     clip_path: Optional[str] = None,
-    track_uuid: Optional[str] = None,
-    bbox: Optional[Sequence[float]] = None,
-    frame_w: Optional[int] = None,
-    frame_h: Optional[int] = None,
-    face_path: Optional[str] = None,
-    body_path: Optional[str] = None,
-    full_frame_path: Optional[str] = None,
-    full_frame_annotated_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Ingest one detection.  `camera_id` is the string camera_uid from Part 1.
@@ -92,21 +84,8 @@ async def ingest(
     )
     # Track-sticky: remember which identity this tracker track resolved to, so a
     # later payload of the SAME track (re-emit / no-face fallback) keeps this id
-    # instead of minting a duplicate or a stray Unknown case.
+    # instead of minting a duplicate or an id-less Unknown.
     await identity_resolver.remember_track_identity(detection_id, resolution.identity_id)
-
-    # ---- 1b. Fold the track's Unknown case once a face resolves ------- #
-    # If this track logged faceless sightings first (they anchored to an Unknown
-    # case) and NOW resolved to a real Visitor/Employee, attach the whole case —
-    # every earlier sighting moves onto the person, audited and reversible.
-    if (resolution.identity_id is not None
-            and resolution.classification != Classification.UNKNOWN):
-        try:
-            await identity_resolver.attach_case_to_identity(
-                session, track_uuid or detection_id, resolution.identity_id)
-        except Exception as exc:  # noqa: BLE001 — attaching must not kill ingest
-            logger.warning("unknown-case attach failed for track %s: %s",
-                           track_uuid or detection_id, exc)
 
     # ---- 2. Presence tracking (known identities only) ---------------- #
     await session_tracker.on_detection(
@@ -116,12 +95,10 @@ async def ingest(
         detected_at=detected_at,
     )
 
-    # ---- 3. Duplicate guard (broadcast throttle ONLY) ----------------- #
-    # Every sighting that carries evidence is INSERTED — the ledger is the
-    # immutable evidence log (2026-07 rework). The dedup window now only
-    # throttles the LIVE broadcast + presence spam for payloads with no new
-    # media (legacy per-frame emitters).
-    has_media = bool(face_path or body_path or full_frame_path or snapshot_path)
+    # ---- 3. Duplicate guard ------------------------------------------ #
+    # Known identities dedup on (identity, camera). Unknowns have no identity_id,
+    # so they dedup on the STABLE per-track detection_id — otherwise one lingering
+    # unrecognised person spams a new Unknown row/card on every re-emit.
     duplicate = False
     if resolution.identity_id is not None:
         duplicate = await dedup_service.is_duplicate(resolution.identity_id, camera.id)
@@ -141,11 +118,9 @@ async def ingest(
     if resolution.identity_id is not None:
         name = await identity_repo.get_name_for_identity(session, resolution.identity_id)
 
-    # ---- 4. Ledger write ---------------------------------------------- #
-    # A payload with media is ALWAYS inserted (one immutable evidence set per
-    # sighting); media-less repeats stay subject to the dedup window.
+    # ---- 4. Ledger write (skipped for duplicates) -------------------- #
     event_db_id: Optional[int] = None
-    if has_media or not duplicate:
+    if not duplicate:
         row = await event_repo.insert_detection_event(
             session,
             detection_id=detection_id,
@@ -156,16 +131,8 @@ async def ingest(
             detection_conf=detection_conf,
             matched_by=resolution.matched_by,
             similarity=resolution.similarity,
-            snapshot_path=snapshot_path or body_path,
+            snapshot_path=snapshot_path,
             clip_path=clip_path,
-            track_uuid=track_uuid or detection_id,
-            bbox=bbox,
-            frame_w=frame_w,
-            frame_h=frame_h,
-            face_path=face_path,
-            body_path=body_path,
-            full_frame_path=full_frame_path,
-            full_frame_annotated_path=full_frame_annotated_path,
         )
         event_db_id = row.id
 
@@ -183,21 +150,10 @@ async def ingest(
         detection_conf=detection_conf,
         matched_by=resolution.matched_by,
         similarity=resolution.similarity,
-        snapshot_path=snapshot_path or body_path,
+        snapshot_path=snapshot_path,
         clip_path=clip_path,
         duplicate=duplicate,
     )
-    # One immutable evidence set — explicit paths, echoed verbatim.
-    event.update({
-        "track_uuid": track_uuid or detection_id,
-        "face": face_path,
-        "body": body_path,
-        "full_frame": full_frame_path,
-        "full_frame_annotated": full_frame_annotated_path,
-        "bbox": list(bbox) if bbox else None,
-        "frame_w": frame_w,
-        "frame_h": frame_h,
-    })
 
     # ---- 5. Live broadcast (skipped for duplicates) ------------------ #
     if not duplicate:

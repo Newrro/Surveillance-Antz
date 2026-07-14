@@ -19,19 +19,9 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import require_admin
-from api.schemas import (
-    DeleteEventsRequest,
-    DetectionEventIn,
-    EventOut,
-    EventsResponse,
-    HideEventsRequest,
-    ReassignEventsRequest,
-    SplitCaseRequest,
-    UnhideEventsRequest,
-)
+from api.schemas import DeleteEventsRequest, DetectionEventIn, EventOut, EventsResponse
 from db.connection import get_db, get_session
-from db.models import Classification, DetectionEvent, IdentityType
-from repositories import audit_repo, event_repo, identity_repo
+from db.models import Classification, DetectionEvent
 from services import ingestion_service, log_service
 
 logger = logging.getLogger(__name__)
@@ -85,14 +75,6 @@ async def ingest_event(
             detection_id=payload.detection_id,
             snapshot_path=payload.snapshot_path,
             clip_path=payload.clip_path,
-            track_uuid=payload.track_uuid,
-            bbox=payload.bbox,
-            frame_w=payload.frame_w,
-            frame_h=payload.frame_h,
-            face_path=payload.face_path,
-            body_path=payload.body_path,
-            full_frame_path=payload.full_frame_path,
-            full_frame_annotated_path=payload.full_frame_annotated_path,
         )
         await session.commit()
         return EventOut(**event)
@@ -138,111 +120,20 @@ async def list_events(
 
 
 @router.post(
-    "/hide",
-    status_code=status.HTTP_200_OK,
-    summary="Soft-delete sightings (hidden from every feed, kept for audit)",
-)
-async def hide_events(body: HideEventsRequest, actor: str = Depends(require_admin)) -> dict:
-    """The DEFAULT report delete: hides one bad sighting with a mandatory
-    reason. Nothing is erased — the person's history and files survive, and
-    the action is auditable and reversible (/events/unhide)."""
-    ids = list(dict.fromkeys(body.event_ids))
-    async with get_session() as session:
-        hidden = await event_repo.hide_events(session, ids, reason=body.reason, actor=actor)
-        await audit_repo.record(session, actor=actor, action="hide",
-                                subject_type="events", subject_id=",".join(map(str, ids)),
-                                details={"reason": body.reason, "count": hidden})
-        await session.commit()
-    logger.info("Hid %d sighting(s) (%s): %s", hidden, actor, ids)
-    return {"status": "ok", "hidden": hidden}
-
-
-@router.post(
-    "/unhide",
-    status_code=status.HTTP_200_OK,
-    summary="Reverse a previous hide",
-)
-async def unhide_events(body: UnhideEventsRequest, actor: str = Depends(require_admin)) -> dict:
-    ids = list(dict.fromkeys(body.event_ids))
-    async with get_session() as session:
-        restored = await event_repo.unhide_events(session, ids)
-        await audit_repo.record(session, actor=actor, action="unhide",
-                                subject_type="events", subject_id=",".join(map(str, ids)),
-                                details={"count": restored})
-        await session.commit()
-    return {"status": "ok", "restored": restored}
-
-
-@router.post(
-    "/reassign",
-    status_code=status.HTTP_200_OK,
-    summary="Move sightings onto another person (fix a wrong association)",
-)
-async def reassign_events(body: ReassignEventsRequest, actor: str = Depends(require_admin)) -> dict:
-    """Re-points the chosen sightings at `target_identity_id`. Neither person's
-    other history is touched; audited and reversible by reassigning back."""
-    ids = list(dict.fromkeys(body.event_ids))
-    async with get_session() as session:
-        target = await identity_repo.fetch_identity_by_id(session, body.target_identity_id)
-        if target is None:
-            raise HTTPException(status_code=404,
-                                detail=f"target identity {body.target_identity_id} not found")
-        cls = Classification(target.identity_type.value) \
-            if target.identity_type != IdentityType.UNKNOWN else Classification.UNKNOWN
-        moved = await event_repo.reassign_events(session, ids, target.id, classification=cls)
-        await audit_repo.record(session, actor=actor, action="reassign",
-                                subject_type="events", subject_id=",".join(map(str, ids)),
-                                details={"target_identity_id": target.id,
-                                         "target_label": target.display_label, "count": moved})
-        await session.commit()
-    logger.info("Reassigned %d sighting(s) → %s (%s)", moved, target.display_label, actor)
-    return {"status": "ok", "moved": moved, "target_label": target.display_label}
-
-
-@router.post(
-    "/split-case",
-    status_code=status.HTTP_200_OK,
-    summary="Detach sightings into a brand-new Unknown case (mark as incorrectly associated)",
-)
-async def split_case(body: SplitCaseRequest, actor: str = Depends(require_admin)) -> dict:
-    """For 'this sighting is NOT that person, and I don't know who it is':
-    moves the sightings onto a fresh Unknown case instead of deleting them."""
-    ids = list(dict.fromkeys(body.event_ids))
-    async with get_session() as session:
-        year = datetime.utcnow().year
-        seq = await identity_repo.next_unknown_seq(session, year)
-        label = f"UNK-{year}-{seq:04d}"
-        case_identity = await identity_repo.create_identity(session, IdentityType.UNKNOWN, label)
-        await identity_repo.insert_unknown_case(session, identity_id=case_identity.id,
-                                                unknown_seq=seq, year=year, track_uuid=None)
-        moved = await event_repo.reassign_events(session, ids, case_identity.id,
-                                                 classification=Classification.UNKNOWN)
-        await audit_repo.record(session, actor=actor, action="split-case",
-                                subject_type="events", subject_id=",".join(map(str, ids)),
-                                details={"new_case_id": case_identity.id, "label": label,
-                                         "count": moved})
-        await session.commit()
-    logger.info("Split %d sighting(s) into new case %s (%s)", moved, label, actor)
-    return {"status": "ok", "moved": moved, "case_id": case_identity.id, "label": label}
-
-
-@router.post(
     "/delete",
     status_code=status.HTTP_200_OK,
-    summary="PERMANENTLY erase sightings (explicit, audited — not the default delete)",
+    dependencies=[Depends(require_admin)],
+    summary="Delete individual sightings (detection_events) by id",
 )
-async def delete_events(body: DeleteEventsRequest, actor: str = Depends(require_admin)) -> dict:
-    """Hard delete, kept for storage hygiene / GDPR-style erasure. The report
-    UI's normal delete uses /events/hide; this endpoint is explicit and audited."""
-    ids = list(dict.fromkeys(body.event_ids))
+async def delete_events(body: DeleteEventsRequest, _: str = Depends(require_admin)) -> dict:
+    """Remove specific sightings from a person's history (admin). Does not touch the
+    person's identity or face gallery — just drops the chosen detection rows."""
+    ids = [i for i in dict.fromkeys(body.event_ids)]
     async with get_session() as session:
         result = await session.execute(
             sa_delete(DetectionEvent).where(DetectionEvent.id.in_(ids))
         )
-        await audit_repo.record(session, actor=actor, action="erase",
-                                subject_type="events", subject_id=",".join(map(str, ids)),
-                                details={"count": result.rowcount or 0})
         await session.commit()
     deleted = result.rowcount or 0
-    logger.info("ERASED %d sighting(s) (%s): %s", deleted, actor, ids)
+    logger.info("Deleted %d sighting(s): %s", deleted, ids)
     return {"status": "ok", "deleted": deleted}

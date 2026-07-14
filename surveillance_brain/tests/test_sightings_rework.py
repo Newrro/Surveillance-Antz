@@ -106,7 +106,7 @@ def test_faceless_observation_creates_case_with_evidence(client, admin_auth):
         assert e["frame_w"] == 2560
 
         # the sighting appears in the feed with the same explicit paths
-        feed = client.get("/events?limit=50").json()["events"]
+        feed = client.get(f"/events?limit=50&camera=TESTCAM-{_CAM_NS}").json()["events"]
         mine = [x for x in feed if x.get("track_uuid") == track]
         assert mine, "sighting missing from the feed"
         assert mine[0]["body"] == e["body"]
@@ -391,7 +391,7 @@ def test_legacy_snapshot_only_payload_still_readable(client, admin_auth):
     e = client.post("/events", json=_obs(
         track, body=_vec(0.42), snapshot_path="storage/img/GATE-01/legacy.jpg")).json()
     try:
-        feed = client.get("/events?limit=50").json()["events"]
+        feed = client.get(f"/events?limit=50&camera=TESTCAM-{_CAM_NS}").json()["events"]
         mine = [x for x in feed if x.get("track_uuid") == track]
         assert mine and mine[0]["snapshot"] == "storage/img/GATE-01/legacy.jpg"
         # new explicit fields exist (None is fine) — the shape is uniform

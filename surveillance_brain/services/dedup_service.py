@@ -32,9 +32,8 @@ from sqlalchemy import delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import config
-from datetime import datetime
-from db.models import DetectionEvent, IdentityType, PresenceSession, Visitor
-from repositories import embedding_repo, event_repo, identity_repo
+from db.models import DetectionEvent, IdentityType, PresenceSession
+from repositories import embedding_repo, identity_repo
 from services import presence_cache
 
 logger = logging.getLogger(__name__)
@@ -75,31 +74,19 @@ async def is_duplicate_unknown(detection_id: str, camera_id: int) -> bool:
     return await _claim_window(_unknown_key(detection_id, camera_id))
 
 
-async def merge_identities(
-    session: AsyncSession,
-    primary_id: int,
-    duplicate_id: int,
-    actor: str = "system",
-    action: str = "merge",
-) -> int:
+async def merge_identities(session: AsyncSession, primary_id: int, duplicate_id: int) -> None:
     """
-    Merge `duplicate_id` INTO `primary_id`. Any type combination is allowed
-    (Unknown↔Unknown, Unknown↔Visitor, Unknown↔Employee, Visitor↔Visitor,
-    Visitor↔Employee, Employee↔Employee) with ONE rule: an EMPLOYEE may never
-    be folded INTO a non-employee — employee details (name, department,
-    external id) live on the primary and must survive. Callers merging a
-    visitor with an employee must pick the employee as primary.
+    Merge `duplicate_id` INTO `primary_id`.
 
     - Re-points detection_events + presence_sessions from duplicate → primary.
     - MOVES the duplicate's Qdrant vectors onto the primary (a merge must ADD
       the duplicate's gallery views to the keeper — deleting them thinned the
       gallery on every merge, so the person failed the next re-match and
       immediately minted a fresh duplicate, which read as "merge not working").
-    - Deletes the duplicate identity row (CASCADE drops its extension row —
-      visitors / employees / unknown_cases alike).
-    - Writes an audit_log row with enough context to UNDO (see unmerge()).
+    - Deletes the duplicate identity row (CASCADE drops its extension row).
 
-    Returns the audit id. Caller owns the transaction.
+    Caller owns the transaction.  Intended for the admin path, not the hot
+    ingest path.
     """
     if primary_id == duplicate_id:
         raise ValueError("primary_id and duplicate_id are the same")
@@ -110,15 +97,6 @@ async def merge_identities(
     duplicate = await identity_repo.fetch_identity_by_id(session, duplicate_id)
     if duplicate is None:
         raise ValueError(f"duplicate identity_id={duplicate_id} not found")
-    if (duplicate.identity_type == IdentityType.EMPLOYEE
-            and primary.identity_type != IdentityType.EMPLOYEE):
-        raise ValueError(
-            f"{duplicate.display_label} is an EMPLOYEE — pick the employee as the "
-            f"primary so their details survive the merge")
-
-    # Undo context BEFORE anything moves: which events were the duplicate's.
-    moved_event_ids = await event_repo.event_ids_for_identity(session, duplicate_id)
-    dup_name = await identity_repo.get_name_for_identity(session, duplicate_id)
 
     await session.execute(
         update(DetectionEvent)
@@ -133,16 +111,11 @@ async def merge_identities(
 
     # Move the duplicate's gallery onto the primary, then drop the duplicate's
     # points and row. insert_face/insert_body re-apply the per-identity view cap,
-    # so the merged gallery stays bounded. Face templates move on HUMAN-confirmed
-    # merges and same-person clustering folds — both are same-person assertions.
-    moved_faces = 0
+    # so the merged gallery stays bounded.
     for tpl in await embedding_repo.fetch_face_vectors(duplicate_id):
         await embedding_repo.insert_face(primary_id, tpl, source="merge")
-        moved_faces += 1
-    moved_bodies = 0
     for tpl in await embedding_repo.fetch_body_vectors(duplicate_id):
         await embedding_repo.insert_body(primary_id, tpl, source="merge")
-        moved_bodies += 1
     await embedding_repo.delete_embeddings_for_identity(duplicate_id)
     await session.delete(duplicate)
 
@@ -156,80 +129,9 @@ async def merge_identities(
         if await identity_repo.confirm_visitor(session, primary_id):
             logger.info("CONFIRMED Visitor %s (id=%d) on merge — duplicate fold is re-identification",
                         primary.display_label, primary_id)
-
-    from repositories import audit_repo  # local import — avoid module cycles
-    audit = await audit_repo.record(
-        session, actor=actor, action=action,
-        subject_type="identity", subject_id=primary_id,
-        details={
-            "primary_id": primary_id, "primary_label": primary.display_label,
-            "duplicate_id": duplicate_id, "duplicate_label": duplicate.display_label,
-            "duplicate_type": duplicate.identity_type.value, "duplicate_name": dup_name,
-            "moved_event_ids": moved_event_ids,
-            "moved_faces": moved_faces, "moved_bodies": moved_bodies,
-        },
-    )
     await session.flush()
 
-    logger.info("Merged identity %d into %d (%s by %s, audit=%d)",
-                duplicate_id, primary_id, action, actor, audit.id)
-    return audit.id
-
-
-async def unmerge(session: AsyncSession, audit_id: int, actor: str = "system") -> dict:
-    """Best-effort UNDO of a previous merge: re-creates an identity with the
-    duplicate's old label/type/name and re-points the events that were moved.
-
-    Honest limits (documented, by design): the new identity gets a NEW numeric
-    id, and face/body vectors that were folded into the primary's capped
-    gallery cannot be split back out — the person re-accumulates templates on
-    their next sightings."""
-    from repositories import audit_repo  # local import — avoid module cycles
-    row = await audit_repo.fetch(session, audit_id)
-    if row is None or row.action not in ("merge", "case-attach"):
-        raise ValueError(f"audit id {audit_id} is not a reversible merge")
-    d = audit_repo.details_of(row)
-    dup_label = d.get("duplicate_label")
-    dup_type = d.get("duplicate_type", "visitor")
-    moved_ids = d.get("moved_event_ids") or []
-    if not dup_label:
-        raise ValueError(f"audit id {audit_id} lacks undo context")
-
-    # Re-create the duplicate under a fresh label if the old one is taken
-    # (labels are unique; the sequence may have moved on).
-    label = dup_label
-    if await identity_repo.fetch_identity_by_label(session, label) is not None:
-        label = f"{dup_label}-R{audit_id}"
-    revived = await identity_repo.create_identity(session, IdentityType(dup_type), label)
-    if dup_type == IdentityType.VISITOR.value:
-        year = datetime.utcnow().year
-        seq = await identity_repo.next_visitor_seq(session, year)
-        await identity_repo.insert_visitor(session, identity_id=revived.id,
-                                           visitor_seq=seq, year=year,
-                                           first_seen_at=datetime.utcnow())
-    elif dup_type == IdentityType.UNKNOWN.value:
-        year = datetime.utcnow().year
-        seq = await identity_repo.next_unknown_seq(session, year)
-        await identity_repo.insert_unknown_case(session, identity_id=revived.id,
-                                                unknown_seq=seq, year=year, track_uuid=None)
-    if d.get("duplicate_name") and dup_type == IdentityType.VISITOR.value:
-        vis = await session.get(Visitor, revived.id)
-        if vis is not None:
-            vis.name = d["duplicate_name"]
-
-    restored = 0
-    if moved_ids:
-        restored = await event_repo.reassign_events(session, moved_ids, revived.id)
-
-    await audit_repo.record(
-        session, actor=actor, action="unmerge",
-        subject_type="identity", subject_id=revived.id,
-        details={"reversed_audit_id": audit_id, "restored_events": restored,
-                 "new_label": label},
-    )
-    logger.info("Unmerged audit=%d → revived %s (id=%d), %d event(s) restored",
-                audit_id, label, revived.id, restored)
-    return {"identity_id": revived.id, "label": label, "restored_events": restored}
+    logger.info("Merged identity %d into %d", duplicate_id, primary_id)
 
 
 async def purge_identity(session: AsyncSession, identity_id: int) -> None:

@@ -12,8 +12,6 @@ Greedy IoU association, no external deps. Good enough for a handful of people pe
 camera at a few fps.
 """
 
-import time
-
 
 def _iou(a, b):
     ax1, ay1, ax2, ay2 = a[:4]
@@ -33,8 +31,7 @@ class Track:
                  "label", "color", "resolved", "last_resolve", "emitted",
                  "snap_path", "face_path",
                  "best_face_emb", "best_body_emb", "best_face_q", "emit_face_q", "probes",
-                 "face_emb_sum", "face_w_sum", "emit_face_w", "best_shot_q",
-                 "sighted", "sight_stem", "created_ts", "clip_path")
+                 "face_emb_sum", "face_w_sum", "emit_face_w", "best_shot_q")
 
     def __init__(self, tid, box):
         self.id = tid
@@ -48,15 +45,6 @@ class Track:
         self.emitted = False       # at least one /events POST sent for this track
         self.snap_path = None      # body-crop snapshot saved once per track (dedupe)
         self.face_path = None      # face-crop snapshot saved once per track
-        # ── immediate-sighting state (2026-07 rework) ──
-        # Every STABLE track logs one observation the moment it stabilises —
-        # before (and independent of) identity resolution. `sighted` flips when
-        # that first evidence set has been queued; `sight_stem` is its file stem
-        # (each later emit writes a NEW stem — evidence sets are immutable).
-        self.sighted = False
-        self.sight_stem = None
-        self.created_ts = time.time()
-        self.clip_path = None       # short clip recorded around the first sighting
         # ── quality-weighted temporal face pooling (Part 2, Phase 3b) ──
         # A single "best shot" is still one noisy frame, so the SAME person's face
         # can enroll as several gallery entries that don't re-match (measured: one

@@ -58,7 +58,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # does NOT decode RTSP itself (no duplicate decode / GPU use), and the dashboard
 # shows the actual detector output. If the pipeline isn't running, tiles show a
 # "connecting" placeholder.
-SHM_DIR = os.environ.get("SENTINEL_SHM", "/dev/shm/sentinel")
+_SHM_DEFAULT = "/dev/shm/sentinel" if os.path.isdir("/dev/shm") else os.path.join(
+    __import__("tempfile").gettempdir(), "sentinel")
+SHM_DIR = os.environ.get("SENTINEL_SHM", _SHM_DEFAULT)
 SHM_READ_FPS = float(os.environ.get("SHM_READ_FPS", "10"))
 
 import shutil as _shutil
@@ -219,6 +221,7 @@ CONTENT_TYPES = {
     ".ico":  "image/x-icon",
     ".svg":  "image/svg+xml",
     ".jpg":  "image/jpeg",
+    ".mp4":  "video/mp4",
     ".jpeg": "image/jpeg",
 }
 
@@ -242,6 +245,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_snapshot(unquote(path[len("/snapshot/"):]))
         if path.startswith("/storage/"):
             return self._send_media(path)          # real person-crop snapshots
+        if path.startswith("/tracks/"):
+            return self._send_tracks(unquote(path[len("/tracks/"):]))
+        if path == "/diag":
+            return self._send_diag()
         return self._send_static(path)
 
     # --- /storage/... (person-crop snapshots written by Part 1) --------------
@@ -275,6 +282,40 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(payload)
+
+    # --- /tracks/<id> — REAL active-track metadata from the pipeline ------
+    # Written by the pipeline's preview loop ({cam}.tracks.json in SHM):
+    # normalized box coords + current label per live track. The dashboard's
+    # person list / click actions use ONLY these actual boxes — the UI never
+    # fabricates a detection box.
+    def _send_tracks(self, cam_id):
+        fp = os.path.join(SHM_DIR, f"{cam_id}.tracks.json")
+        try:
+            with open(fp, "rb") as f:
+                body = f.read()
+        except OSError:
+            body = b'{"ts": 0, "tracks": []}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    # --- /diag — pipeline runtime metrics (metrics.json in SHM) ----------
+    def _send_diag(self):
+        fp = os.path.join(SHM_DIR, "metrics.json")
+        try:
+            with open(fp, "rb") as f:
+                body = f.read()
+        except OSError:
+            body = b'{"error": "pipeline metrics not available"}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
 
     # --- /stream/<id> ---------------------------------------------------
     def _send_stream(self, cam_id):

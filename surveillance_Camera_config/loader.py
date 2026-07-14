@@ -57,6 +57,18 @@ class Camera:
     stream_url: Optional[str]           # None when no connection is configured for it
     role: str = DEFAULT_ROLE            # "detect" or "identify"
     match_threshold: Optional[float] = None  # per-camera override of feature_id MATCH_THRESHOLD
+    # Detection geometry config (all normalized 0..1 coordinates):
+    #   roi      — [x1,y1,x2,y2] include-rect; detections whose box CENTER falls
+    #              outside are ignored (None → whole frame).
+    #   exclude  — list of [x1,y1,x2,y2] rects; a detection centered inside any
+    #              is ignored (foliage, roads, neighbour property…).
+    # Shape-gate overrides (None → detector env defaults apply):
+    #   min_height_frac — person box must be ≥ this fraction of frame height.
+    #   min_aspect      — height/width must be ≥ this (upright-ness).
+    roi: Optional[list] = None
+    exclude: Optional[list] = None
+    min_height_frac: Optional[float] = None
+    min_aspect: Optional[float] = None
     source_type: str = "rtsp"           # "rtsp" | "url" | "pano_view"
     # pano_view geometry (only used when source_type == "pano_view")
     pano_group: Optional[str] = None    # parent 360 camera_uid (shared PanoStream)
@@ -193,6 +205,10 @@ def load_cameras(active_only: bool = True, streamable_only: bool = False) -> lis
             role=_role(entry.get("role", DEFAULT_ROLE)),
             match_threshold=entry.get("match_threshold"),
             source_type=source_type,
+            roi=entry.get("roi"),
+            exclude=entry.get("exclude"),
+            min_height_frac=entry.get("min_height_frac"),
+            min_aspect=entry.get("min_aspect"),
         )
         if streamable_only and not cam.streamable:
             continue

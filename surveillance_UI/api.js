@@ -184,8 +184,22 @@ const Brain = (() => {
     const loc = locationFor(evt, camNameById);
     // De-dupe identical (date,time,location) rows so repeated pings don't pile up.
     if (!p.history.some(h => h.date === st.date && h.time === st.time && h.location === loc)) {
-      p.history.push({ date: st.date, time: st.time, location: loc,
-                       snapshot: evt.snapshot || null, event_id: evt.event_id ?? null });
+      // ONE immutable evidence set per sighting — EXPLICIT paths from the API.
+      // Never derive a companion file from another file's name.
+      p.history.push({
+        date: st.date, time: st.time, location: loc,
+        event_id: evt.event_id ?? null,
+        track_uuid: evt.track_uuid || evt.detection_id || null,
+        confidence: evt.confidence ?? null,
+        similarity: evt.similarity ?? null,
+        matched_by: evt.matched_by || null,
+        face: evt.face || null,
+        body: evt.body || null,
+        full_frame: evt.full_frame || null,
+        full_frame_annotated: evt.full_frame_annotated || null,
+        clip: evt.clip || null,
+        snapshot: evt.snapshot || evt.body || null,   // legacy thumbnail alias
+      });
       p.history.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
     }
     return { key, person: p, loc, when: st };
@@ -398,14 +412,69 @@ const Brain = (() => {
     return res.json();
   }
 
-  // Give a person a friendly name, keeping their id + VIS/EMP label.
-  async function setName(identityId, name) {
-    const res = await fetch(BASE + `/identities/${identityId}/name`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
+  // Shared authenticated JSON call for admin operations.
+  async function adminCall(path, auth, body, method = 'POST') {
+    const headers = { 'Content-Type': 'application/json' };
+    if (auth) headers.Authorization = 'Basic ' + btoa(`${auth.user}:${auth.pass}`);
+    const res = await fetch(BASE + path, {
+      method, headers, body: body === undefined ? undefined : JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(`POST /identities/${identityId}/name -> HTTP ${res.status}`);
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try { detail = (await res.json()).detail || detail; } catch (e) {}
+      const err = new Error(detail); err.status = res.status; throw err;
+    }
+    return res.json();
+  }
+
+  // Give a person a friendly name, keeping their id + VIS/EMP label. Admin auth.
+  async function setName(identityId, name, auth) {
+    return adminCall(`/identities/${identityId}/name`, auth, { name });
+  }
+
+  /* ---------- report operations (all admin-authenticated) ---------- */
+  // Ranked identity search for the merge-into / reassign pickers.
+  async function searchIdentities(auth, q, limit = 20) {
+    const headers = {};
+    if (auth) headers.Authorization = 'Basic ' + btoa(`${auth.user}:${auth.pass}`);
+    const res = await fetch(BASE + `/identities/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+      { headers });
+    if (!res.ok) { const e = new Error(`HTTP ${res.status}`); e.status = res.status; throw e; }
+    return res.json();
+  }
+
+  // Soft-delete sightings (kept in DB for audit; hidden from every feed).
+  async function hideSightings(auth, eventIds, reason) {
+    return adminCall('/events/hide', auth, { event_ids: eventIds, reason });
+  }
+
+  // Move sightings onto another person (fix a wrong match).
+  async function reassignSightings(auth, eventIds, targetIdentityId) {
+    return adminCall('/events/reassign', auth,
+      { event_ids: eventIds, target_identity_id: targetIdentityId });
+  }
+
+  // Detach sightings into a brand-new Unknown case.
+  async function splitCase(auth, eventIds) {
+    return adminCall('/events/split-case', auth, { event_ids: eventIds });
+  }
+
+  // Reverse a previous merge by its audit id.
+  async function unmerge(auth, auditId) {
+    return adminCall('/identities/unmerge', auth, { audit_id: auditId });
+  }
+
+  // Bulk employee import (CSV/XLSX/ZIP as base64). dryRun → preview only.
+  async function importEmployees(auth, filename, contentB64, dryRun = true) {
+    return adminCall('/employees/import', auth,
+      { filename, content_b64: contentB64, dry_run: dryRun });
+  }
+
+  async function importStatus(auth, jobId) {
+    const headers = {};
+    if (auth) headers.Authorization = 'Basic ' + btoa(`${auth.user}:${auth.pass}`);
+    const res = await fetch(BASE + `/employees/import/${jobId}`, { headers });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
   }
 
@@ -413,6 +482,7 @@ const Brain = (() => {
     get base() { return state.base; },
     get connected() { return state.connected; },
     health, hydrate, connectLive, applyLiveEvent, enrollEmployee, findLive, resetDatabase, setName, promoteToEmployee, clearUnknowns, consolidate, mergeIdentities, deleteIdentities, enrollEmployeePhoto, attendance, deleteSighting,
+    searchIdentities, hideSightings, reassignSightings, splitCase, unmerge, importEmployees, importStatus,
     // exposed for reuse/testing
     _map: { splitTime, locationFor, personKey, upsertPerson },
   };

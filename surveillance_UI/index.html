@@ -233,6 +233,31 @@
         </div>
 
         <div class="settings-section">
+          <h2>Bulk employee import</h2>
+          <p class="desc">Upload an XLSX/CSV roster, or a ZIP with the roster plus photos named by
+            employee id (e.g. <code>E1042_1.jpg</code>). Columns: <b>external_id</b> (required, the
+            idempotency key — re-imports update, never duplicate), <b>name</b> (required),
+            department, email, photo. You always get a preview before anything is written.</p>
+          <div class="form-inline">
+            <div class="field"><label>Roster / bundle</label>
+              <input type="file" id="import-file" accept=".csv,.xlsx,.zip"></div>
+            <button class="btn" id="import-preview-btn" onclick="importPreview()"><i class="ti ti-eye"></i> Preview</button>
+            <button class="btn btn-primary" id="import-apply-btn" onclick="importApply()" style="display:none"><i class="ti ti-database-import"></i> Import</button>
+          </div>
+          <div id="import-result" class="desc" style="margin-top:10px;max-height:260px;overflow:auto"></div>
+        </div>
+
+        <div class="settings-section">
+          <h2>Unknown-case link review</h2>
+          <p class="desc">Suggested links between Unknown cases seen on the <b>same camera</b> within a
+            short window, whose body similarity is plausible but below the automatic bar. Each suggestion
+            shows the score, time gap and both parties' evidence — nothing is merged without your approval,
+            and every approval is audited and undoable.</p>
+          <button class="btn" onclick="loadSuggestedLinks()"><i class="ti ti-refresh"></i> Load suggestions</button>
+          <div id="review-links" class="desc" style="margin-top:10px;max-height:280px;overflow:auto"></div>
+        </div>
+
+        <div class="settings-section">
           <h2>Daily reset</h2>
           <p class="desc">Clear all Unknowns (people not yet confirmed as Visitors). Confirmed Visitors and Employees are kept, so returning people are still recognised. Runs automatically every midnight.</p>
           <button class="btn" id="clear-unknowns-btn" onclick="clearUnknowns()"><i class="ti ti-eraser"></i> Clear all unknowns</button>
@@ -294,6 +319,14 @@
       <button class="btn plog-rename" id="plog-rename" onclick="renameCurrentPerson()" title="Give this person a name">
         <i class="ti ti-pencil"></i> Rename
       </button>
+      <button class="btn" onclick="mergeCurrentPersonInto()"
+              title="Merge this record into another person (search by id or name — all combinations work)">
+        <i class="ti ti-git-merge"></i> Merge into…
+      </button>
+      <button class="btn" onclick="eraseCurrentPersonPermanently()"
+              title="PERMANENT erase (audited). The normal per-sighting delete is the hide button on each row.">
+        <i class="ti ti-trash-x"></i> Erase
+      </button>
       <span class="plog-promote" id="plog-promote"></span>
       <button class="sidebar-close" onclick="closePersonLog()"><i class="ti ti-x"></i></button>
     </div>
@@ -351,26 +384,23 @@
   </div>
 </div>
 
-<!-- ===================== Person photo popup ===================== -->
+<!-- ===================== Sighting evidence carousel =====================
+     ONE sighting = ONE immutable evidence set (same event_id for everything
+     shown). Arrows / keyboard ←→ change the WHOLE set together. Images are
+     shown uncropped (contain) and click-through to the original file. -->
 <div class="modal-backdrop" id="photo-modal" onclick="closePersonPhotoIfBackdrop(event)">
   <div class="photo-pop">
     <button class="sidebar-close" onclick="closePersonPhoto()"><i class="ti ti-x"></i></button>
-    <div class="photo-imgs">
-      <figure class="photo-fig" id="photo-face-fig">
-        <img class="photo-img" id="photo-face-img" alt="face">
-        <figcaption>Face</figcaption>
-      </figure>
-      <figure class="photo-fig" id="photo-body-fig">
-        <img class="photo-img" id="photo-body-img" alt="full body">
-        <figcaption>Full body</figcaption>
-      </figure>
-      <figure class="photo-fig" id="photo-full-fig">
-        <img class="photo-img" id="photo-full-img" alt="full scene">
-        <figcaption>Full scene</figcaption>
-      </figure>
+    <div class="carousel-wrap">
+      <button class="carousel-arrow" id="carousel-prev" title="Previous sighting (←)"
+              onclick="stepSightCarousel(-1)"><i class="ti ti-chevron-left"></i></button>
+      <div class="photo-imgs" id="photo-imgs"></div>
+      <button class="carousel-arrow" id="carousel-next" title="Next sighting (→)"
+              onclick="stepSightCarousel(1)"><i class="ti ti-chevron-right"></i></button>
     </div>
     <div class="photo-name" id="photo-name">—</div>
     <div class="photo-sub" id="photo-sub">—</div>
+    <div class="carousel-actions" id="carousel-actions"></div>
   </div>
 </div>
 

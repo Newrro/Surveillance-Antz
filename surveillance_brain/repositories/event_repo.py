@@ -55,10 +55,27 @@ async def insert_detection_event(
     similarity: Optional[float] = None,
     snapshot_path: Optional[str] = None,
     clip_path: Optional[str] = None,
+    track_uuid: Optional[str] = None,
+    bbox: Optional[Sequence[float]] = None,      # (x1, y1, x2, y2) pixels
+    frame_w: Optional[int] = None,
+    frame_h: Optional[int] = None,
+    face_path: Optional[str] = None,
+    body_path: Optional[str] = None,
+    full_frame_path: Optional[str] = None,
+    full_frame_annotated_path: Optional[str] = None,
 ) -> DetectionEvent:
-    """Insert a single detection event row."""
+    """Insert a single detection event row (a SIGHTING — identity optional).
+    The media paths form ONE immutable evidence set from the same captured
+    moment; they are stored verbatim and never rewritten."""
+    bx = list(bbox) if bbox and len(bbox) >= 4 else [None, None, None, None]
     obj = DetectionEvent(
         detection_id=detection_id,
+        track_uuid=track_uuid,
+        bbox_x1=bx[0], bbox_y1=bx[1], bbox_x2=bx[2], bbox_y2=bx[3],
+        frame_w=frame_w, frame_h=frame_h,
+        face_path=face_path, body_path=body_path,
+        full_frame_path=full_frame_path,
+        full_frame_annotated_path=full_frame_annotated_path,
         identity_id=identity_id,
         classification=classification,
         camera_id=camera_id,
@@ -132,3 +149,64 @@ async def bulk_insert_detection_events(
     session.add_all(events)
     await session.flush()
     return len(events)
+
+
+# ---------------------------------------------------------------------------
+# Sighting operations (soft-delete / reassign) — used by report actions
+# ---------------------------------------------------------------------------
+async def hide_events(
+    session: AsyncSession,
+    event_ids: list[int],
+    reason: str,
+    actor: str = "admin",
+) -> int:
+    """Soft-delete sightings: they stay in the DB (audit) but leave every feed."""
+    from sqlalchemy import update
+    result = await session.execute(
+        update(DetectionEvent)
+        .where(DetectionEvent.id.in_(event_ids), DetectionEvent.hidden_at.is_(None))
+        .values(hidden_at=datetime.utcnow(), hidden_reason=reason, hidden_by=actor)
+    )
+    return result.rowcount or 0
+
+
+async def unhide_events(session: AsyncSession, event_ids: list[int]) -> int:
+    from sqlalchemy import update
+    result = await session.execute(
+        update(DetectionEvent)
+        .where(DetectionEvent.id.in_(event_ids))
+        .values(hidden_at=None, hidden_reason=None, hidden_by=None)
+    )
+    return result.rowcount or 0
+
+
+async def reassign_events(
+    session: AsyncSession,
+    event_ids: list[int],
+    new_identity_id: Optional[int],
+    classification=None,
+) -> int:
+    """Move sightings to another person (or an Unknown case). Fixes a wrong match
+    without touching the rest of either person's history."""
+    from sqlalchemy import update
+    values: dict = {"identity_id": new_identity_id}
+    if classification is not None:
+        values["classification"] = classification
+    result = await session.execute(
+        update(DetectionEvent).where(DetectionEvent.id.in_(event_ids)).values(**values)
+    )
+    return result.rowcount or 0
+
+
+async def fetch_events_by_ids(session: AsyncSession, event_ids: list[int]) -> list[DetectionEvent]:
+    result = await session.execute(
+        select(DetectionEvent).where(DetectionEvent.id.in_(event_ids))
+    )
+    return list(result.scalars().all())
+
+
+async def event_ids_for_identity(session: AsyncSession, identity_id: int) -> list[int]:
+    result = await session.execute(
+        select(DetectionEvent.id).where(DetectionEvent.identity_id == identity_id)
+    )
+    return [r[0] for r in result.all()]

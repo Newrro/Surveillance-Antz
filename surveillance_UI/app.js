@@ -87,7 +87,11 @@ function pollFeeds() {
       .finally(() => { img.dataset.loading = '0'; });
   });
 }
-setInterval(pollFeeds, 350);
+// 110 ms ≈ 9 fps effective (each poll waits for the previous via the in-flight
+// guard). The pipeline writes 12 fps previews to SHM; at the old 350 ms the grid
+// showed ~3 fps of them — the "laggy video" was the POLL RATE, not the pipeline.
+// Pure localhost HTTP + browser JPEG decode: zero GPU cost.
+setInterval(pollFeeds, 110);
 
 /* ---------- Person photo helpers ----------
    The Brain gives each person a snapshot crop (api.js sets p.photo). Paint it as
@@ -114,19 +118,52 @@ function setAvatar(el, p) {
 }
 
 /* ---------- Auth ---------- */
-/* The single valid operator. Real deployments should verify against the Brain,
-   not a client-side constant — this gates the prototype only. */
-const AUTH = { username: 'admin', password: 'password123' };
+/* NO client-side credentials. The login form's user/pass are VERIFIED AGAINST
+   THE BRAIN (GET /identities/search with Basic auth — 401 = wrong password) and
+   kept ONLY in sessionStorage for this tab's admin calls. Every merge / hide /
+   reassign / import call sends them as HTTP Basic auth; the Brain records the
+   username in its audit log. */
+function getAuth() {
+  try {
+    const raw = sessionStorage.getItem('sentinel.auth');
+    if (!raw) return null;
+    const a = JSON.parse(raw);
+    return (a && a.user) ? a : null;
+  } catch (_) { return null; }
+}
+
+function setAuth(user, pass) {
+  sessionStorage.setItem('sentinel.auth', JSON.stringify({ user, pass }));
+}
+
+function clearAuth() { sessionStorage.removeItem('sentinel.auth'); }
+
+/* Verify credentials against the Brain (any cheap admin-gated endpoint). */
+async function verifyAuth(user, pass) {
+  const res = await fetch(`${Brain.base}/identities/search?q=_&limit=1`, {
+    headers: { Authorization: 'Basic ' + btoa(`${user}:${pass}`) },
+  });
+  return res.status !== 401;
+}
 
 async function login() {
   const u = document.getElementById('login-user').value.trim();
   const p = document.getElementById('login-pass').value;
   const err = document.getElementById('login-error');
-  if (u !== AUTH.username || p !== AUTH.password) {
+  let ok = false;
+  try {
+    ok = await verifyAuth(u, p);
+  } catch (_) {
+    // Brain unreachable: allow the dashboard open in read-only spirit — admin
+    // actions will still fail server-side without valid credentials.
+    ok = true;
+  }
+  if (!ok) {
     if (err) err.classList.remove('hidden');
     document.getElementById('login-pass').value = '';
     return;
   }
+  setAuth(u, p);
   if (err) err.classList.add('hidden');
 
   document.getElementById('view-login').classList.add('hidden');
@@ -155,10 +192,36 @@ function playNavAnimation() {
 }
 
 function logout() {
+  clearAuth();
   document.getElementById('app-shell').classList.add('hidden');
   document.getElementById('view-login').classList.remove('hidden');
   const s = document.getElementById('global-search');
   if (s) s.value = '';
+}
+
+/* Admin credentials for API calls ({user, pass}) — from the session, or a
+   one-time prompt if this tab hasn't stored any. Throws when cancelled. */
+function requireAuth() {
+  let a = getAuth();
+  if (a) return a;
+  const user = window.prompt('Admin username:');
+  if (user === null) throw new Error('cancelled');
+  const pass = window.prompt('Admin password:');
+  if (pass === null) throw new Error('cancelled');
+  setAuth(user.trim(), pass);
+  return getAuth();
+}
+
+/* Wrap an admin API call: on 401, drop the stored session credentials so the
+   next attempt re-prompts (expired/changed password). */
+async function withAuth(fn) {
+  const a = requireAuth();
+  try {
+    return await fn(a);
+  } catch (e) {
+    if (e && e.status === 401) { clearAuth(); alert('Admin credentials rejected — try again.'); }
+    throw e;
+  }
 }
 
 function initialsFromUsername(u) {
@@ -665,38 +728,140 @@ function renderPersonLog() {
       <td>${h.location}</td>
       <td>
         <div class="plog-row-actions">
-          <div class="plog-cap" title="Click to enlarge · ${h.location}" style="cursor:pointer"
-               onclick="openPersonPhoto('${h.snapshot || ''}')">
+          <div class="plog-cap" title="Open this sighting's evidence · ${h.location}" style="cursor:pointer"
+               onclick="openSightCarousel(${h.event_id != null ? h.event_id : 'null'})">
             <div class="avatar" style="width:30px;height:30px;font-size:11px;${h.snapshot ? photoCssUrl(h.snapshot) : photoCss(p)}">${p.initials}</div>
             <i class="ti ti-camera"></i>
           </div>
-          ${h.event_id != null ? `<button class="plog-del-btn" title="Delete this sighting"
-                onclick="deleteSightingRow(${h.event_id})"><i class="ti ti-trash"></i></button>` : ''}
+          ${h.event_id != null ? `<button class="plog-del-btn" title="Hide this sighting (soft delete, audited)"
+                onclick="hideSightingRow(${h.event_id})"><i class="ti ti-eye-off"></i></button>` : ''}
         </div>
       </td>
     </tr>`).join('')
     : `<tr><td colspan="3" style="color:var(--text-muted)">No sightings on this day for these filters.</td></tr>`;
 }
 
-/* Delete one sighting (detection_event) from a person's log, then refresh. */
-async function deleteSightingRow(eventId) {
-  if (!confirm('Delete this sighting from the log? (the person is kept)')) return;
+/* Refresh everything after a sighting-level change (hide/reassign/split). */
+async function _refreshAfterSightingChange() {
+  await connectBrain();
+  const p = PEOPLE[plogPersonId];
+  if (p) {
+    renderPlogSide();
+    renderPlogChart(p, isoDate(plogYear, plogMonth, plogDay));
+    renderPersonLog();
+    if (document.getElementById('photo-modal').classList.contains('open')) {
+      carouselSights = _sightsOf(p);
+      carouselIdx = Math.min(carouselIdx, Math.max(0, carouselSights.length - 1));
+      if (carouselSights.length) renderSightCarousel(); else closePersonPhoto();
+    }
+  } else {
+    closePersonPhoto(); closePersonLog();
+  }
+  renderReport(); renderRecords();
+  if (currentView === 'log') renderLog();
+}
+
+/* DEFAULT sighting delete = SOFT HIDE with a reason. The sighting stays in the
+   database (audited, reversible server-side); it just leaves every feed. The
+   person's other history is untouched. */
+async function hideSightingRow(eventId) {
+  const reason = window.prompt('Hide this sighting — reason (required):', 'bad capture');
+  if (reason === null || !reason.trim()) return;
   try {
     if (!BRAIN_ON) throw new Error('Brain not connected');
-    await Brain.deleteSighting({ user: AUTH.username, pass: AUTH.password }, [eventId]);
-    await connectBrain();                       // re-hydrate so the row is gone
-    const p = PEOPLE[plogPersonId];
-    if (p) {
-      renderPlogSide();
-      renderPlogChart(p, isoDate(plogYear, plogMonth, plogDay));
-      renderPersonLog();
-    } else {
-      closePersonLog();                         // that was their last sighting
-    }
-    renderReport(); renderRecords();
-    if (currentView === 'log') renderLog();
+    await withAuth(a => Brain.hideSightings(a, [eventId], reason.trim()));
+    await _refreshAfterSightingChange();
   } catch (e) {
-    alert('Delete sighting failed: ' + e.message);
+    if (e.message !== 'cancelled') alert('Hide sighting failed: ' + e.message);
+  }
+}
+
+/* legacy name kept for old buttons — routes to the soft hide */
+async function deleteSightingRow(eventId) { return hideSightingRow(eventId); }
+
+/* Shared identity picker: search by EMP/VIS/UNK id or name, choose from the
+   ranked results. Returns {identity_id, label, name} or null. */
+async function pickIdentity(promptText) {
+  const q = window.prompt(promptText || 'Search person (EMP-/VIS-/UNK- id or name):');
+  if (q === null || !q.trim()) return null;
+  let results;
+  try {
+    results = await withAuth(a => Brain.searchIdentities(a, q.trim(), 10));
+  } catch (e) {
+    if (e.message !== 'cancelled') alert('Search failed: ' + e.message);
+    return null;
+  }
+  if (!results.length) { alert(`No match for "${q.trim()}"`); return null; }
+  const lines = results.map((r, i) =>
+    `${i + 1}. ${r.label}${r.name ? ` — ${r.name}` : ''} (${r.type})`).join('\n');
+  const pick = window.prompt(`Pick a number:\n${lines}`, '1');
+  if (pick === null) return null;
+  const idx = parseInt(pick, 10) - 1;
+  if (!(idx >= 0 && idx < results.length)) return null;
+  return results[idx];
+}
+
+/* Move ONE sighting onto another person (fix a wrong association). */
+async function reassignSightingRow(eventId) {
+  const target = await pickIdentity('Reassign this sighting to (search id or name):');
+  if (!target) return;
+  if (!confirm(`Move this sighting to ${target.label}${target.name ? ` (${target.name})` : ''}?`)) return;
+  try {
+    await withAuth(a => Brain.reassignSightings(a, [eventId], target.identity_id));
+    await _refreshAfterSightingChange();
+  } catch (e) {
+    if (e.message !== 'cancelled') alert('Reassign failed: ' + e.message);
+  }
+}
+
+/* "Not this person, and I don't know who it is" → detach into a NEW Unknown case. */
+async function splitSightingRow(eventId) {
+  if (!confirm('Mark this sighting as NOT this person? It moves to a new Unknown case (nothing is deleted).')) return;
+  try {
+    await withAuth(a => Brain.splitCase(a, [eventId]));
+    await _refreshAfterSightingChange();
+  } catch (e) {
+    if (e.message !== 'cancelled') alert('Split failed: ' + e.message);
+  }
+}
+
+/* Merge THIS person into another record — all combinations (Unknown↔Visitor↔
+   Employee). The search picker chooses the PRIMARY (surviving) record. */
+async function mergeCurrentPersonInto() {
+  const p = PEOPLE[plogPersonId];
+  if (!p || p.identityId == null) { alert('This record has no identity to merge.'); return; }
+  const target = await pickIdentity(`Merge ${personName(p)} INTO (the surviving record):`);
+  if (!target) return;
+  if (target.identity_id === p.identityId) { alert('Cannot merge a person into themselves.'); return; }
+  if (!confirm(`Merge ${personName(p)} into ${target.label}${target.name ? ` (${target.name})` : ''}?\n\n`
+             + `All sightings move onto ${target.label}; face templates transfer; this record is removed. `
+             + `The merge is audited and can be undone from the audit trail.`)) return;
+  try {
+    await withAuth(a => Brain.mergeIdentities(a, target.identity_id, [p.identityId]));
+    closePersonPhoto(); closePersonLog();
+    await connectBrain();
+    renderReport(); renderRecords(); renderLog(); renderGrid();
+  } catch (e) {
+    if (e.message !== 'cancelled') alert('Merge failed: ' + e.message);
+  }
+}
+
+/* PERMANENT erase — explicit, audited, NOT the default delete (that's the
+   per-sighting soft hide). Kept for storage hygiene / privacy erasure. */
+async function eraseCurrentPersonPermanently() {
+  const p = PEOPLE[plogPersonId];
+  if (!p || p.identityId == null) return;
+  const typed = window.prompt(
+    `PERMANENTLY erase ${personName(p)} (${p.userId}) — every sighting, session and template.\n`
+    + `This cannot be undone. Type ERASE to confirm:`);
+  if (typed !== 'ERASE') return;
+  try {
+    await withAuth(a => Brain.deleteIdentities(a, [p.identityId]));
+    closePersonPhoto(); closePersonLog();
+    await connectBrain();
+    renderReport(); renderRecords(); renderLog(); renderGrid();
+  } catch (e) {
+    if (e.message !== 'cancelled') alert('Erase failed: ' + e.message);
   }
 }
 
@@ -709,72 +874,102 @@ function clearPersonLogFilters() {
 function closePersonLog() { document.getElementById('plog-modal').classList.remove('open'); }
 function closePersonLogIfBackdrop(e) { if (e.target.id === 'plog-modal') closePersonLog(); }
 
-/* Load <url> into <imgEl> only if it actually exists; otherwise hide <figEl>.
-   Used for the face/scene siblings, which don't exist for a faceless sighting. */
-function _probeInto(imgEl, figEl, url) {
-  figEl.style.display = 'none';
-  if (!url) return;
-  const probe = new Image();
-  probe.onload = () => { imgEl.src = url; figEl.style.display = ''; };
-  probe.onerror = () => { figEl.style.display = 'none'; };
-  probe.src = url;
+/* ---------- Sighting carousel ----------
+   ONE sighting = ONE immutable evidence set. Every image/clip shown together
+   belongs to the SAME sighting (same event_id) — the paths come EXPLICITLY
+   from the API (face / body / full_frame / full_frame_annotated / clip).
+   Nothing is derived from another file's name, nothing is cropped, sliced or
+   reconstructed (object-fit: contain everywhere), and a sighting with no face
+   says so instead of borrowing one from another sighting. Arrows / ←→ move to
+   the previous/next COMPLETE evidence set — never a single image. */
+let carouselSights = [];       // chronological evidence sets of the open person
+let carouselIdx = 0;
+
+function _sightsOf(p) {
+  return p.history.slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
 }
 
-/* Enlarged photo popup.
-   CRITICAL invariant: the Face, Full body and Full scene shown are ALWAYS the
-   same sighting — one filename stem, one frame, one person. Part 1 now writes the
-   triple <stem>.jpg / <stem>_face.jpg / <stem>_full.jpg atomically from the same
-   frame, so deriving the face/scene from the SHOWN body's stem can never mix two
-   people. We never substitute a face from a different sighting (that was the old
-   "face of A on the body of B" bug). When no specific sighting is clicked we pick
-   the most recent sighting that actually HAS a face and show its whole triple. */
-function _showTriple(bodyUrl) {
-  const bodyFig = document.getElementById('photo-body-fig');
-  const bodyImg = document.getElementById('photo-body-img');
-  if (!bodyUrl) {
-    bodyFig.style.display = 'none';
-    _probeInto(document.getElementById('photo-face-img'), document.getElementById('photo-face-fig'), '');
-    _probeInto(document.getElementById('photo-full-img'), document.getElementById('photo-full-fig'), '');
-    return;
-  }
-  const stem = bodyUrl.replace(/\.jpg(\?.*)?$/i, '');
-  bodyImg.src = bodyUrl; bodyFig.style.display = '';
-  _probeInto(document.getElementById('photo-face-img'),
-             document.getElementById('photo-face-fig'), stem + '_face.jpg');
-  _probeInto(document.getElementById('photo-full-img'),
-             document.getElementById('photo-full-fig'), stem + '_full.jpg');
-}
-
-function openPersonPhoto(snapshotOverride) {
+function openSightCarousel(startEventId) {
   const p = PEOPLE[plogPersonId];
   if (!p) return;
+  carouselSights = _sightsOf(p);
+  if (!carouselSights.length) return;
+  carouselIdx = carouselSights.length - 1;          // default: newest sighting
+  if (startEventId != null) {
+    const i = carouselSights.findIndex(h => h.event_id === startEventId);
+    if (i >= 0) carouselIdx = i;
+  }
   document.getElementById('photo-name').textContent = personName(p);
-  document.getElementById('photo-sub').textContent =
-    p.employeeId ? `${p.userId} · ${p.employeeId}` : p.userId;
   document.getElementById('photo-modal').classList.add('open');
-
-  // A clicked sighting is honored EXACTLY (even if it has no face) — never mixed.
-  if (snapshotOverride) { _showTriple(snapshotOverride); return; }
-
-  // No specific sighting: show the most recent one that HAS a saved face, so the
-  // face and body still belong to the same frame. Fall back to the newest body
-  // (face hidden) when the person has no face on file at all.
-  const bodies = [...new Set([
-    ...p.history.map(h => h.snapshot).filter(Boolean).slice().reverse(),
-    p.photo,
-  ].filter(Boolean))];
-  if (!bodies.length) { _showTriple(''); return; }
-  let i = 0;
-  const pick = () => {
-    if (i >= bodies.length) { _showTriple(bodies[0]); return; }  // none has a face
-    const bodyUrl = bodies[i++];
-    const probe = new Image();
-    probe.onload = () => _showTriple(bodyUrl);       // this sighting has a face
-    probe.onerror = pick;                            // try an older sighting
-    probe.src = bodyUrl.replace(/\.jpg(\?.*)?$/i, '_face.jpg');
-  };
-  pick();
+  renderSightCarousel();
 }
+
+/* Legacy entry point (avatar click) — opens the carousel at the newest sighting. */
+function openPersonPhoto() { openSightCarousel(null); }
+
+function stepSightCarousel(delta) {
+  if (!carouselSights.length) return;
+  carouselIdx = Math.min(carouselSights.length - 1, Math.max(0, carouselIdx + delta));
+  renderSightCarousel();
+}
+
+function _evFig(caption, url, alt) {
+  // Whole image, uncropped (contain). Click opens the ORIGINAL file unchanged.
+  if (!url) return '';
+  const abs = url.startsWith('/') ? url : '/' + url;
+  return `<figure class="photo-fig">
+      <img class="photo-img ev-img" src="${abs}" alt="${alt}" loading="lazy"
+           onclick="window.open('${abs}', '_blank')">
+      <figcaption>${caption}</figcaption>
+    </figure>`;
+}
+
+function renderSightCarousel() {
+  const p = PEOPLE[plogPersonId];
+  const h = carouselSights[carouselIdx];
+  if (!p || !h) return;
+  const n = carouselSights.length;
+
+  document.getElementById('photo-sub').innerHTML =
+    `<b>Sighting ${carouselIdx + 1} of ${n}</b> · ${h.date} ${to12h(h.time)} · ${h.location}` +
+    (h.confidence != null ? ` · conf ${(h.confidence * 100).toFixed(0)}%` : '') +
+    (h.track_uuid ? ` · <span class="mono">${h.track_uuid}</span>` : '');
+
+  const figs = [
+    h.face ? _evFig('Face', h.face, 'face')
+           : `<figure class="photo-fig"><div class="ev-noface">No face captured<br>for this sighting</div>
+              <figcaption>Face</figcaption></figure>`,
+    _evFig('Body', h.body || h.snapshot, 'body'),
+    _evFig('Original frame', h.full_frame, 'original full frame'),
+    _evFig('Annotated', h.full_frame_annotated, 'annotated frame'),
+  ].join('');
+  const clip = h.clip
+    ? `<video class="ev-clip" src="/${h.clip}" controls muted playsinline preload="metadata"></video>`
+    : '';
+
+  document.getElementById('photo-imgs').innerHTML = figs + clip;
+  const prev = document.getElementById('carousel-prev');
+  const next = document.getElementById('carousel-next');
+  if (prev) prev.disabled = carouselIdx === 0;
+  if (next) next.disabled = carouselIdx === n - 1;
+
+  const acts = document.getElementById('carousel-actions');
+  if (acts) acts.innerHTML = h.event_id != null ? `
+    <button class="btn" onclick="hideSightingRow(${h.event_id})"><i class="ti ti-eye-off"></i> Hide sighting</button>
+    <button class="btn" onclick="reassignSightingRow(${h.event_id})"><i class="ti ti-user-share"></i> Reassign to…</button>
+    <button class="btn" onclick="splitSightingRow(${h.event_id})"><i class="ti ti-user-question"></i> Not this person</button>`
+    : '';
+}
+
+/* Keyboard ←/→ steps the WHOLE evidence set together while the carousel is open. */
+document.addEventListener('keydown', (e) => {
+  const modal = document.getElementById('photo-modal');
+  if (!modal || !modal.classList.contains('open')) return;
+  if (e.key === 'ArrowLeft') { stepSightCarousel(-1); e.preventDefault(); }
+  else if (e.key === 'ArrowRight') { stepSightCarousel(1); e.preventDefault(); }
+  else if (e.key === 'Escape') closePersonPhoto();
+});
+
 function closePersonPhoto() { document.getElementById('photo-modal').classList.remove('open'); }
 function closePersonPhotoIfBackdrop(e) { if (e.target.id === 'photo-modal') closePersonPhoto(); }
 
@@ -788,7 +983,7 @@ async function renameCurrentPerson() {
   const name = entered.trim();
   if (BRAIN_ON && p.identityId != null) {
     try {
-      await Brain.setName(p.identityId, name);
+      await Brain.setName(p.identityId, name, getAuth());
     } catch (e) {
       alert('Rename failed: ' + e.message);
       return;
@@ -848,7 +1043,7 @@ async function promoteCurrentPerson() {
   try {
     const r = await Brain.promoteToEmployee(
       p.identityId, { name, department },
-      { user: AUTH.username, pass: AUTH.password });
+      requireAuth());
     p.category = 'Employee';
     p.name = name;
     p.department = department;
@@ -870,7 +1065,7 @@ async function clearUnknowns() {
   if (btn) { btn.disabled = true; btn.textContent = 'Clearing…'; }
   try {
     if (!BRAIN_ON) throw new Error('Brain not connected');
-    const r = await Brain.clearUnknowns({ user: AUTH.username, pass: AUTH.password });
+    const r = await Brain.clearUnknowns(requireAuth());
     await connectBrain();
     renderGrid(); renderReport(); renderRecords();
     if (currentView === 'log') renderLog();
@@ -903,7 +1098,7 @@ async function consolidatePreview() {
   if (btn) { btn.disabled = true; btn.textContent = 'Scanning…'; }
   try {
     if (!BRAIN_ON) throw new Error('Brain not connected');
-    _renderConsolidatePlan(await Brain.consolidate({ user: AUTH.username, pass: AUTH.password }, false));
+    _renderConsolidatePlan(await Brain.consolidate(requireAuth(), false));
   } catch (e) {
     document.getElementById('consolidate-result').textContent = 'Preview failed: ' + e.message;
   } finally {
@@ -916,7 +1111,7 @@ async function consolidateApply() {
   if (btn) { btn.disabled = true; btn.textContent = 'Merging…'; }
   try {
     if (!BRAIN_ON) throw new Error('Brain not connected');
-    const r = await Brain.consolidate({ user: AUTH.username, pass: AUTH.password }, true);
+    const r = await Brain.consolidate(requireAuth(), true);
     await connectBrain();
     renderGrid(); renderReport(); renderRecords();
     if (currentView === 'log') renderLog();
@@ -963,7 +1158,7 @@ async function doEnrollEmployee() {
     if (!BRAIN_ON) throw new Error('Brain not connected');
     const images = await Promise.all(enrollFiles.map(_readAsDataURL));
     const r = await Brain.enrollEmployeePhoto({ name, department: dept, email, images,
-      auth: { user: AUTH.username, pass: AUTH.password } });
+      auth: requireAuth() });
     status.textContent = `Enrolled ${r.name} (${r.label}) from ${r.photos_used || 1} photo(s).`;
     await connectBrain(); renderRecords(); renderReport();
     setTimeout(closeEnroll, 1400);
@@ -982,7 +1177,7 @@ async function deleteDatabase() {
   if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
   try {
     if (!BRAIN_ON) throw new Error('Brain not connected');
-    await Brain.resetDatabase({ user: AUTH.username, pass: AUTH.password });
+    await Brain.resetDatabase(requireAuth());
     await connectBrain();                 // re-hydrate the now-empty DB
     renderGrid(); renderReport(); renderRecords();
     if (currentView === 'log') renderLog();
@@ -1088,9 +1283,8 @@ function atRenderFeed(wp, p, opts = {}) {
   const time  = wp ? to12h(wp.time) : '';
   const camTag = camId ? camId.toUpperCase().replace(/^CAM-/, 'CAM ').replace(/-/g, ' ') : 'NO SIGNAL';
 
-  // Randomised box placement per camera so each acquisition reads as a fresh lock-on.
-  const top  = (16 + Math.random() * 30).toFixed(1);
-  const left = (18 + Math.random() * 46).toFixed(1);
+  // REAL pipeline boxes only: the overlay is fed from /tracks/<cam> (the
+  // tracker's actual output). No box is ever fabricated client-side.
   const tagName = p.category === 'Employee' ? p.name : p.category;
 
   frame.innerHTML = `
@@ -1099,10 +1293,7 @@ function atRenderFeed(wp, p, opts = {}) {
     <span class="bracket bl"></span><span class="bracket br"></span>
     <div class="at-scanline"></div>
     ${(wp && !scanning)
-      ? `<div class="detbox-live at-detbox category-${p.category}" style="top:${top}%;left:${left}%;width:14%;height:38%">
-           <span class="tag">${tagName} · TRACKING</span>
-           <span class="at-crosshair"></span>
-         </div>`
+      ? ''
       : `<div class="at-searching"><i class="ti ti-viewfinder"></i> ${wp ? 'scanning last-seen camera…' : 'locating target…'}</div>`}
     <span class="feed-label">${label}</span>
     <span class="feed-time">${time}</span>
@@ -1111,6 +1302,10 @@ function atRenderFeed(wp, p, opts = {}) {
             onclick="event.stopPropagation(); toggleFeedFullscreen(document.getElementById('at-feed'))">
       <i class="ti ti-maximize"></i>
     </button>`;
+
+  // Live tracking overlay from REAL tracker data while locked on.
+  if (wp && !scanning && camId) startRealTrackBoxes(camId, p.category, `${tagName} · TRACKING`);
+  else stopRealTrackBoxes();
 }
 
 function atAddTrail(wp, isLast) {
@@ -1497,7 +1692,7 @@ async function mergePeople() {
   if (go) { go.disabled = true; go.textContent = 'Merging…'; }
   try {
     if (!BRAIN_ON) throw new Error('Brain not connected');
-    const r = await Brain.mergeIdentities({ user: AUTH.username, pass: AUTH.password },
+    const r = await Brain.mergeIdentities(requireAuth(),
       primary.identityId, dups.map(p => p.identityId));
     await connectBrain();
     exitMergeMode();
@@ -1517,7 +1712,7 @@ async function deletePerson(userId) {
   if (!confirm(`Delete record for ${personName(p)} (${userId})? This removes their log and any live detections. This can't be undone.`)) return;
   try {
     if (!BRAIN_ON) throw new Error('Brain not connected');
-    await Brain.deleteIdentities({ user: AUTH.username, pass: AUTH.password }, [p.identityId]);
+    await Brain.deleteIdentities(requireAuth(), [p.identityId]);
     mergeSelection.delete(userId);
     await connectBrain();
     renderReport(); renderRecords(); renderLog(); renderGrid();
@@ -1653,3 +1848,152 @@ function removeDepartment(i) {
     if (!e.relatedTarget) { x = -999; y = -999; apply(); }
   });
 })();
+
+/* ---------- Bulk employee import (Settings) ---------- */
+let _importJob = null;   // {filename, contentB64} of the last previewed file
+
+function _fileToB64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',', 2)[1] || '');
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+function _renderImportSummary(s, applied) {
+  const el = document.getElementById('import-result');
+  if (!el) return;
+  const rows = (s.rows || []).map(r => {
+    const state = r.errors && r.errors.length
+      ? `<span style="color:var(--danger)">${r.errors.join('; ')}</span>`
+      : (applied ? `${r.outcome || 'ok'}${r.photos_added ? ` +${r.photos_added} photo(s)` : ''}` : 'valid');
+    return `<tr><td class="mono">${r.row}</td><td class="mono">${r.external_id || '—'}</td>
+            <td>${r.name || '—'}</td><td>${r.department || ''}</td><td>${r.photos || 0}</td><td>${state}</td></tr>`;
+  }).join('');
+  el.innerHTML = `
+    <b>${applied ? 'Imported' : 'Preview'}:</b> ${s.total_rows} row(s) · ${s.valid_rows} valid ·
+    ${s.error_rows} with errors${applied ? ` · created ${s.created} · updated ${s.updated} · photos ${s.photos_added}` : ''}
+    <table class="import-table"><thead><tr>
+      <th>row</th><th>external_id</th><th>name</th><th>dept</th><th>photos</th><th>status</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+async function importPreview() {
+  const input = document.getElementById('import-file');
+  const file = input && input.files && input.files[0];
+  if (!file) { alert('Choose a .csv, .xlsx or .zip file first.'); return; }
+  try {
+    const b64 = await _fileToB64(file);
+    const s = await withAuth(a => Brain.importEmployees(a, file.name, b64, true));
+    _importJob = { filename: file.name, contentB64: b64 };
+    _renderImportSummary(s, false);
+    const applyBtn = document.getElementById('import-apply-btn');
+    if (applyBtn) applyBtn.style.display = s.valid_rows > 0 ? '' : 'none';
+  } catch (e) {
+    if (e.message !== 'cancelled') alert('Preview failed: ' + e.message);
+  }
+}
+
+async function importApply() {
+  if (!_importJob) { alert('Preview the file first.'); return; }
+  if (!confirm('Apply this import? Existing external_ids are UPDATED, new ones are created.')) return;
+  try {
+    const s = await withAuth(a =>
+      Brain.importEmployees(a, _importJob.filename, _importJob.contentB64, false));
+    _renderImportSummary(s, true);
+    const applyBtn = document.getElementById('import-apply-btn');
+    if (applyBtn) applyBtn.style.display = 'none';
+    await connectBrain();
+    renderRecords(); renderReport();
+  } catch (e) {
+    if (e.message !== 'cancelled') alert('Import failed: ' + e.message);
+  }
+}
+
+/* ---------- Real live track boxes (Auto-Track view) ----------
+   The pipeline publishes each camera's REAL tracker output (normalized boxes +
+   labels) at /tracks/<cam>. The Auto-Track overlay renders exactly those —
+   the fabricated random box is gone. */
+let _atTracksTimer = null;
+
+async function _renderRealTrackBoxes(camId, personCategory, tagName) {
+  const frame = document.getElementById('at-feed');
+  if (!frame || !camId) return;
+  let data = null;
+  try {
+    const res = await fetch(`/tracks/${encodeURIComponent(camId)}?t=${Date.now()}`, { cache: 'no-store' });
+    if (res.ok) data = await res.json();
+  } catch (_) { /* pipeline down — no boxes */ }
+  frame.querySelectorAll('.detbox-live').forEach(el => el.remove());
+  if (!data || !data.tracks || Date.now() / 1000 - (data.ts || 0) > 5) return;
+  for (const t of data.tracks) {
+    const [x1, y1, x2, y2] = t.box;
+    const el = document.createElement('div');
+    el.className = `detbox-live at-detbox category-${personCategory}`;
+    el.style.cssText = `top:${(y1 * 100).toFixed(1)}%;left:${(x1 * 100).toFixed(1)}%;`
+      + `width:${((x2 - x1) * 100).toFixed(1)}%;height:${((y2 - y1) * 100).toFixed(1)}%`;
+    el.innerHTML = `<span class="tag">${t.label || tagName || 'person'}</span>`;
+    frame.appendChild(el);
+  }
+}
+
+function startRealTrackBoxes(camId, personCategory, tagName) {
+  stopRealTrackBoxes();
+  if (!camId) return;
+  _atTracksTimer = setInterval(() => _renderRealTrackBoxes(camId, personCategory, tagName), 500);
+  _renderRealTrackBoxes(camId, personCategory, tagName);
+}
+
+function stopRealTrackBoxes() {
+  if (_atTracksTimer) { clearInterval(_atTracksTimer); _atTracksTimer = null; }
+}
+
+/* ---------- Unknown-case link review (Settings) ----------
+   Suggested body-similarity links between Unknown cases (same camera, recent):
+   score + time gap + camera + both parties' evidence thumbnails. Approving
+   merges the two records (audited, undoable); nothing is ever auto-applied. */
+async function loadSuggestedLinks() {
+  const el = document.getElementById('review-links');
+  if (!el) return;
+  el.innerHTML = '<span style="color:var(--text-muted)">Loading…</span>';
+  let data;
+  try {
+    data = await withAuth(async a => {
+      const res = await fetch(`${Brain.base}/admin/suggested-links`, {
+        headers: { Authorization: 'Basic ' + btoa(`${a.user}:${a.pass}`) } });
+      if (!res.ok) { const e = new Error(`HTTP ${res.status}`); e.status = res.status; throw e; }
+      return res.json();
+    });
+  } catch (e) {
+    if (e.message !== 'cancelled') el.innerHTML = `<span style="color:var(--danger)">Failed: ${e.message}</span>`;
+    return;
+  }
+  if (!data.suggestions || !data.suggestions.length) {
+    el.innerHTML = '<span style="color:var(--text-muted)">No suggested links right now.</span>';
+    return;
+  }
+  const thumb = u => u
+    ? `<img class="review-thumb" src="/${u}" loading="lazy">`
+    : '<span class="review-thumb review-thumb-empty">—</span>';
+  el.innerHTML = data.suggestions.map(s => `
+    <div class="review-row">
+      ${thumb(s.a_body)}<b>${s.a_label}</b> ↔ ${thumb(s.b_body)}<b>${s.b_label}</b>
+      <span class="mono">body ${s.body_similarity}</span>
+      <span>${s.camera || '?'} · ${Math.round(s.time_gap_seconds / 60)} min apart</span>
+      <button class="btn" onclick="approveSuggestedLink(${s.b_id}, ${s.a_id})">
+        <i class="ti ti-git-merge"></i> Same person</button>
+    </div>`).join('');
+}
+
+async function approveSuggestedLink(primaryId, duplicateId) {
+  if (!confirm('Merge these two records? (audited; undo available from the audit trail)')) return;
+  try {
+    await withAuth(a => Brain.mergeIdentities(a, primaryId, [duplicateId]));
+    await connectBrain();
+    renderReport(); renderRecords();
+    loadSuggestedLinks();
+  } catch (e) {
+    if (e.message !== 'cancelled') alert('Merge failed: ' + e.message);
+  }
+}

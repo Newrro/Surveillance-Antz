@@ -137,6 +137,19 @@ class Settings(BaseSettings):
     # without merging two strangers in similar clothing.
     BODY_MERGE_THRESHOLD: float = 0.82
     BODY_MERGE_WINDOW_SECONDS: int = 90
+    # Manual-review floor for SUGGESTED unknown-case links (below the auto
+    # re-link bar but plausible): pairs scoring in [REVIEW, MERGE) are shown on
+    # the review screen with evidence thumbnails — a human approves or dismisses.
+    BODY_REVIEW_THRESHOLD: float = 0.65
+    # Suggested links look this far back for co-located cases.
+    BODY_REVIEW_WINDOW_MINUTES: int = 240
+
+    # Track-sticky identity: Part 1's detection_id is STABLE per tracker track
+    # (camera-scoped). Once a track has been resolved to an identity, later
+    # payloads of the SAME track re-use that identity for this long — a track
+    # that re-emits (better face, or a no-face fallback) must never mint a
+    # second id or log an id-less Unknown for a person we already named.
+    TRACK_STICKY_TTL_SECONDS: int = 900
 
     # Offline gallery consolidation (Phase 2, consolidate_identities script).
     # Two VISITOR identities whose FACE centroids match at/above this cosine are
@@ -175,6 +188,13 @@ class Settings(BaseSettings):
     # stops one person fragmenting into many ids. Above it the view is a near-
     # duplicate we already have, so we skip it (keeps the vector set from bloating).
     LEARN_SIMILARITY_CEILING: float = 0.92
+    # …and the FLOOR: a match may ASSIGN recall-first just above the calibrated
+    # threshold (~0.44), but LEARNING that view into the gallery needs more
+    # confidence — a borderline assign that turns out wrong should mislabel one
+    # event, not graft a wrong face into the gallery and cascade (live-verified
+    # 2026-07-14: a garbage crop assigned at 0.47 was learned and contaminated
+    # the identity's templates).
+    LEARN_SIMILARITY_FLOOR: float = 0.55
 
     # Must match Part 1's model output dimension (face + body share it here).
     EMBEDDING_DIMENSIONS: int = 512
@@ -274,6 +294,9 @@ FACE_MERGE_MAX: Final[float] = _settings.FACE_MERGE_MAX
 BODY_SIMILARITY_THRESHOLD: Final[float] = _settings.BODY_SIMILARITY_THRESHOLD
 BODY_MERGE_THRESHOLD: Final[float] = _settings.BODY_MERGE_THRESHOLD
 BODY_MERGE_WINDOW_SECONDS: Final[int] = _settings.BODY_MERGE_WINDOW_SECONDS
+BODY_REVIEW_THRESHOLD: Final[float] = _settings.BODY_REVIEW_THRESHOLD
+BODY_REVIEW_WINDOW_MINUTES: Final[int] = _settings.BODY_REVIEW_WINDOW_MINUTES
+TRACK_STICKY_TTL_SECONDS: Final[int] = _settings.TRACK_STICKY_TTL_SECONDS
 GALLERY_MAX_VIEWS: Final[int] = _settings.GALLERY_MAX_VIEWS
 CONSOLIDATE_FACE_THRESHOLD: Final[float] = _settings.CONSOLIDATE_FACE_THRESHOLD
 CONSOLIDATE_ENABLE: Final[bool] = _settings.CONSOLIDATE_ENABLE
@@ -281,6 +304,7 @@ CONSOLIDATE_APPLY: Final[bool] = _settings.CONSOLIDATE_APPLY
 CONSOLIDATE_EVERY_MINUTES: Final[int] = _settings.CONSOLIDATE_EVERY_MINUTES
 CONSOLIDATE_AUTO_FACE_THRESHOLD: Final[float] = _settings.CONSOLIDATE_AUTO_FACE_THRESHOLD
 LEARN_SIMILARITY_CEILING: Final[float] = _settings.LEARN_SIMILARITY_CEILING
+LEARN_SIMILARITY_FLOOR: Final[float] = _settings.LEARN_SIMILARITY_FLOOR
 EMBEDDING_DIMENSIONS: Final[int] = _settings.EMBEDDING_DIMENSIONS
 
 STORAGE_ROOT: Final[str] = _settings.STORAGE_ROOT

@@ -25,17 +25,36 @@ class DetectionEventIn(BaseModel):
     """
     Inbound payload from Part 1 (Perception Pipeline).
 
-    Both embeddings are optional individually, but AT LEAST ONE must be
-    present (face is strongly preferred).  `detection_conf` is 0.0–1.0.
+    Embeddings are OPTIONAL — even both absent (2026-07 rework): a stable
+    human track with no usable face is still a real sighting and must be
+    logged (it anchors to a persistent Unknown case). `detection_conf` is
+    0.0–1.0.
+
+    The media paths describe ONE immutable evidence set captured from the
+    same moment: the pipeline wrote each file once (atomic write) and the
+    Brain stores the exact paths — consumers never derive one path from
+    another.
     """
-    detection_id: Optional[str] = Field(None, max_length=64, description="Part 1 per-detection id")
+    detection_id: Optional[str] = Field(None, max_length=96, description="Part 1 per-detection id")
+    track_uuid: Optional[str] = Field(None, max_length=96, description="Run-unique tracker track id")
     camera_id: str = Field(..., description="String camera UID, e.g. 'GATE-01'")
     timestamp: datetime = Field(..., description="ISO8601 UTC detection time from the edge")
     detection_conf: float = Field(..., ge=0.0, le=1.0, description="Detection confidence 0.0–1.0")
     face_embedding: Optional[List[float]] = Field(None, description="512-dim face embedding")
     body_embedding: Optional[List[float]] = Field(None, description="512-dim body ReID embedding")
-    snapshot_path: Optional[str] = Field(None, description="Path/URL to the person snapshot")
-    clip_path: Optional[str] = Field(None, description="Path/URL to the short clip")
+
+    # ---- sighting geometry (pixels, in the ORIGINAL frame) ----------------
+    bbox: Optional[List[float]] = Field(None, description="[x1,y1,x2,y2] person box, px")
+    frame_w: Optional[int] = Field(None, ge=1, description="original frame width, px")
+    frame_h: Optional[int] = Field(None, ge=1, description="original frame height, px")
+
+    # ---- immutable evidence set -------------------------------------------
+    face_path: Optional[str] = Field(None, description="face crop exactly as captured")
+    body_path: Optional[str] = Field(None, description="body crop exactly as captured")
+    full_frame_path: Optional[str] = Field(None, description="ORIGINAL full frame, untouched")
+    full_frame_annotated_path: Optional[str] = Field(None, description="separate annotated copy")
+    snapshot_path: Optional[str] = Field(None, description="legacy single-photo path (= body)")
+    clip_path: Optional[str] = Field(None, description="short clip around the sighting")
 
     @field_validator("face_embedding", "body_embedding")
     @classmethod
@@ -46,11 +65,12 @@ class DetectionEventIn(BaseModel):
             )
         return v
 
-    @model_validator(mode="after")
-    def _require_one_embedding(self) -> "DetectionEventIn":
-        if not self.face_embedding and not self.body_embedding:
-            raise ValueError("at least one of face_embedding or body_embedding is required")
-        return self
+    @field_validator("bbox")
+    @classmethod
+    def _check_bbox(cls, v: Optional[List[float]]) -> Optional[List[float]]:
+        if v is not None and len(v) != 4:
+            raise ValueError("bbox must be [x1, y1, x2, y2]")
+        return v
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +81,7 @@ class EventOut(BaseModel):
 
     event_id: Optional[int] = None
     detection_id: Optional[str] = None
+    track_uuid: Optional[str] = None
     time: Optional[str] = None
     camera: Optional[str] = None
     camera_id: Optional[int] = None
@@ -72,8 +93,16 @@ class EventOut(BaseModel):
     confidence: Optional[float] = None
     matched_by: Optional[str] = None         # "face" | "body" | "none"
     similarity: Optional[float] = None
-    snapshot: Optional[str] = None
+    # ---- immutable evidence set (explicit paths — never derived) ----------
+    face: Optional[str] = None
+    body: Optional[str] = None
+    full_frame: Optional[str] = None
+    full_frame_annotated: Optional[str] = None
+    snapshot: Optional[str] = None           # legacy alias (= body for new rows)
     clip: Optional[str] = None
+    bbox: Optional[List[float]] = None
+    frame_w: Optional[int] = None
+    frame_h: Optional[int] = None
     duplicate: Optional[bool] = None
 
 
@@ -195,6 +224,44 @@ class DeleteIdentitiesRequest(BaseModel):
 class DeleteEventsRequest(BaseModel):
     """Delete individual sightings (detection_events) by id."""
     event_ids: List[int] = Field(..., min_length=1)
+
+
+class HideEventsRequest(BaseModel):
+    """SOFT-delete sightings: hidden from every feed, kept for audit.
+    This is the default report 'delete' — one bad sighting, with a reason."""
+    event_ids: List[int] = Field(..., min_length=1)
+    reason: str = Field(..., min_length=1, max_length=500)
+
+
+class UnhideEventsRequest(BaseModel):
+    event_ids: List[int] = Field(..., min_length=1)
+
+
+class ReassignEventsRequest(BaseModel):
+    """Move sightings onto another person — fixes a wrong association without
+    touching the rest of either person's history."""
+    event_ids: List[int] = Field(..., min_length=1)
+    target_identity_id: int
+
+
+class SplitCaseRequest(BaseModel):
+    """Detach sightings into a brand-new Unknown case (mark them 'incorrectly
+    associated' when the right person is not yet known)."""
+    event_ids: List[int] = Field(..., min_length=1)
+
+
+class UnmergeRequest(BaseModel):
+    """Reverse a previous merge by its audit id (best effort — see docs)."""
+    audit_id: int
+
+
+class ImportEmployeesRequest(BaseModel):
+    """Bulk roster import. `content_b64` is the base64 file body; the format is
+    inferred from `filename` (.csv / .xlsx / .zip). `dry_run` returns the full
+    row-level validation preview without writing anything."""
+    filename: str = Field(..., min_length=1, max_length=256)
+    content_b64: str = Field(..., min_length=4)
+    dry_run: bool = True
 
 
 # ---------------------------------------------------------------------------

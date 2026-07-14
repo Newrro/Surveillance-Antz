@@ -101,6 +101,9 @@ async def get_person_profile(identity_id: int, history_limit: int = 100) -> Opti
         else (emp.hired_at.isoformat() if emp and emp.hired_at else None)
     )
 
+    # Soft-deleted sightings leave every feed (kept in the DB for audit only).
+    events = [e for e in events if e.hidden_at is None]
+
     # Distinct snapshot paths, most-recent first.
     photos: List[str] = []
     for e in events:
@@ -111,14 +114,25 @@ async def get_person_profile(identity_id: int, history_limit: int = 100) -> Opti
         {
             "event_id": e.id,
             "detection_id": e.detection_id,
+            "track_uuid": e.track_uuid,
             "time": e.detected_at.isoformat() if e.detected_at else None,
             "camera_id": e.camera_id,
             "label": e.classification.value.capitalize(),
             "confidence": e.detection_conf,
             "matched_by": e.matched_by.value,
             "similarity": e.similarity,
+            # One immutable evidence set per sighting — EXPLICIT paths only.
+            # Never derive a companion file from another file's name.
+            "face": e.face_path,
+            "body": e.body_path,
+            "full_frame": e.full_frame_path,
+            "full_frame_annotated": e.full_frame_annotated_path,
             "snapshot": e.snapshot_path,
             "clip": e.clip_path,
+            "bbox": ([e.bbox_x1, e.bbox_y1, e.bbox_x2, e.bbox_y2]
+                     if e.bbox_x1 is not None else None),
+            "frame_w": e.frame_w,
+            "frame_h": e.frame_h,
         }
         for e in events
     ]

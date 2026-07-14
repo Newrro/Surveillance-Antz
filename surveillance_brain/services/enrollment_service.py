@@ -147,6 +147,42 @@ async def enroll_employee_from_images(
     return result
 
 
+async def add_employee_photos(identity_id: int, images_b64: Sequence[str]) -> int:
+    """Add face gallery views to an EXISTING identity from photo(s) — used by
+    the bulk roster import (multiple photos per employee) and re-imports.
+    Returns the number of photos that produced a usable face. Raises ValueError
+    only when the extractor itself fails; a photo with no face is skipped."""
+    if not images_b64:
+        return 0
+    stamp = int(time.time() * 1000)
+    outdir = os.path.join(_REPO_ROOT, "storage", "enroll", f"{identity_id}_{stamp}")
+    os.makedirs(outdir, exist_ok=True)
+    paths: List[str] = []
+    for i, b64 in enumerate(images_b64):
+        raw = base64.b64decode(b64.split(",", 1)[-1])
+        p = os.path.join(outdir, f"{i}.jpg")
+        with open(p, "wb") as f:
+            f.write(raw)
+        paths.append(p)
+    proc = await asyncio.create_subprocess_exec(
+        _AI_PY, _ENROLL_SCRIPT, *paths, "--face-out", outdir,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    out, err = await proc.communicate()
+    try:
+        line = out.decode().strip().splitlines()[-1]
+        results = json.loads(line)["results"]
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"face embedding failed: {(err.decode()[:300] or str(e))}")
+    good = [r for r in results if r.get("ok")]
+    for r in good:
+        await embedding_repo.store_embeddings(
+            identity_id, face_embedding=r["embedding"], source="enroll_photo",
+        )
+    logger.info("Added %d photo view(s) to identity %d", len(good), identity_id)
+    return len(good)
+
+
 async def list_employees(limit: int = 500, offset: int = 0) -> List[Dict[str, Any]]:
     """Return all employees for GET /employees."""
     async with get_session() as session:

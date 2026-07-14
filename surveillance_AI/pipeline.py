@@ -36,6 +36,8 @@ Enroll employees first so they're labelled 'Employee' (else everyone is an
 auto-enrolled Visitor):
     python -m feature_id.enroll  EMP-001  "Asha R."  path/to/photo.jpg
 """
+import collections
+import json
 import os
 import sys
 import time
@@ -91,6 +93,13 @@ DETECT_MAX_SIDE = int(os.environ.get("DETECT_MAX_SIDE", "960"))
 # person. Downscaled + moderate quality: this is for human review, not features.
 FULL_FRAME_MAX_W = int(os.environ.get("FULL_FRAME_MAX_W", "1280"))
 FULL_FRAME_QUALITY = int(os.environ.get("FULL_FRAME_QUALITY", "88"))
+# The ORIGINAL full frame in each evidence set is saved UNTOUCHED at native
+# resolution (only JPEG-compressed at this quality) — raw evidence survives
+# even though the preview/annotated copies are downscaled.
+FULL_FRAME_ORIG_QUALITY = int(os.environ.get("FULL_FRAME_ORIG_QUALITY", "92"))
+# Skip detection on a camera whose newest decoded frame is older than this —
+# a frozen decode must not burn GPU batches on the same stale image.
+STALE_FRAME_MAX_S = float(os.environ.get("STALE_FRAME_MAX_S", "2.0"))
 
 # ── Identity as a lagged background service ────────────────────────────────
 # The grid (live detection boxes) is the real-time FOREGROUND; identity is a
@@ -115,7 +124,11 @@ IDENTITY_REEMIT_FRAC = float(os.environ.get("IDENTITY_REEMIT_FRAC", "0.15"))  # 
 # feed identity. A low-quality face contributes NOTHING to the template, so a
 # track with only bad faces stays faceless → Unknown, rather than enrolling a
 # garbage vector that later false-matches. Biggest single precision lever.
-FACE_MIN_QUALITY = float(os.environ.get("FACE_MIN_QUALITY", "18.0"))
+# 24 (was 18): live-verified 2026-07-14 — a non-face crop (white fabric blob)
+# scored q23, passed the old gate, matched a gallery at 0.47 and was learned,
+# contaminating the identity. Photo-verified real faces this deployment score
+# q24-42, so 24 is the empirical floor separating faces from garbage.
+FACE_MIN_QUALITY = float(os.environ.get("FACE_MIN_QUALITY", "24.0"))
 # Skip identity on a track whose box is heavily overlapped by ANOTHER person's box
 # (the crop would contain a neighbour → wrong face). Fraction of THIS box covered.
 OCCLUSION_OVERLAP = float(os.environ.get("OCCLUSION_OVERLAP", "0.45"))
@@ -143,17 +156,28 @@ def _preview_loop(s, period, enc):
     """Per-camera preview loop. Resize the frame to tile size FIRST, then scale
     the (full-res) detection boxes down and draw them on the small frame — so we
     never copy/annotate an 11 MB 1440p frame. One of these runs per camera, so
-    a slow encode on one tile can't stall the others."""
+    a slow encode on one tile can't stall the others.
+
+    Side outputs per tick (all atomic writes):
+      {cam}.jpg          annotated preview tile (the grid video)
+      {cam}.tracks.json  REAL live-track metadata (normalized boxes + labels) —
+                         the dashboard's only source of boxes; nothing is faked
+      clip ring          CLEAN (un-annotated) frames feed the clip pre-roll
+    """
     tmp = os.path.join(SHM_DIR, f".{s.camera_uid}.tmp")
     final = os.path.join(SHM_DIR, f"{s.camera_uid}.jpg")
+    tracks_tmp = os.path.join(SHM_DIR, f".{s.camera_uid}.tracks.tmp")
+    tracks_final = os.path.join(SHM_DIR, f"{s.camera_uid}.tracks.json")
     while True:
         t0 = time.time()
         frame = s.get_frame()
         if frame is not None:
             h, w = frame.shape[:2]
             small = cv2.resize(frame, (PREVIEW_W, PREVIEW_H))
+            _clips.feed(s.camera_uid, small)          # clean frame → clip pre-roll
             sx, sy = PREVIEW_W / max(1, w), PREVIEW_H / max(1, h)
-            for (x1, y1, x2, y2, label, color) in get_annotations(s.camera_uid):
+            annos = get_annotations(s.camera_uid)
+            for (x1, y1, x2, y2, label, color) in annos:
                 p1 = (int(x1 * sx), int(y1 * sy))
                 p2 = (int(x2 * sx), int(y2 * sy))
                 cv2.rectangle(small, p1, p2, color, 2)
@@ -168,6 +192,19 @@ def _preview_loop(s, period, enc):
                     os.replace(tmp, final)   # atomic swap so readers never see a half-written file
                 except OSError:
                     pass
+            # Real track metadata for the dashboard (normalized coordinates).
+            try:
+                payload = {"ts": t0, "w": w, "h": h, "tracks": [
+                    {"box": [round(x1 / w, 4), round(y1 / h, 4),
+                             round(x2 / w, 4), round(y2 / h, 4)],
+                     "label": label or "person"}
+                    for (x1, y1, x2, y2, label, _c) in annos
+                ]}
+                with open(tracks_tmp, "w") as f:
+                    json.dump(payload, f)
+                os.replace(tracks_tmp, tracks_final)
+            except OSError:
+                pass
         dt = time.time() - t0
         if dt < period:
             time.sleep(period - dt)
@@ -303,58 +340,272 @@ def _pooled_face(emb_sum, w_sum):
     return (v / n).tolist()
 
 
-def save_snapshot(camera_uid, crop_bgr, stamp_ms, idx):
-    """Save the full-body crop under storage/img/<camera_uid>/ and return its path."""
+def _atomic_imwrite(path, img_bgr, quality=None):
+    """Write a JPEG atomically: encode → temp file → os.replace. A reader can
+    never see a half-written file, and an existing file is never mutated
+    in-place (evidence sets are immutable once written)."""
+    params = [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)] if quality else []
+    ok, buf = cv2.imencode(".jpg", img_bgr, params)
+    if not ok:
+        return False
+    tmp = f"{path}.tmp{os.getpid()}"
+    with open(tmp, "wb") as f:
+        f.write(buf.tobytes())
+    os.replace(tmp, path)
+    return True
+
+
+def save_evidence_set(camera_uid, stamp_ms, idx, seq,
+                      frame_bgr=None, box_xyxy=None,
+                      body_bgr=None, face_bgr=None):
+    """Write ONE immutable sighting evidence set — every file from the SAME
+    captured moment, each written once (atomically), none ever replaced:
+
+        {stem}_body.jpg   body crop exactly as captured
+        {stem}_face.jpg   face crop exactly as captured (only when present)
+        {stem}_orig.jpg   ORIGINAL full frame, untouched, original resolution
+        {stem}_annot.jpg  separate annotated copy (box drawn; downscaled)
+
+    `seq` disambiguates multiple evidence sets of the same track (a later,
+    better frame is a NEW sighting — never an overwrite of an earlier one).
+    Returns {stem, body_path, face_path, full_frame_path,
+    full_frame_annotated_path} with repo-relative paths (None where absent)."""
     out_dir = os.path.join(STORAGE_IMG, camera_uid)
     os.makedirs(out_dir, exist_ok=True)
-    fname = f"{stamp_ms}_{idx}.jpg"
-    cv2.imwrite(os.path.join(out_dir, fname), crop_bgr)
-    return f"storage/img/{camera_uid}/{fname}"
+    stem = f"{stamp_ms}_{idx}_s{seq}"
+    rel = f"storage/img/{camera_uid}/{stem}"
+    paths = {"stem": stem, "body_path": None, "face_path": None,
+             "full_frame_path": None, "full_frame_annotated_path": None}
+
+    if body_bgr is not None and body_bgr.size:
+        if _atomic_imwrite(os.path.join(out_dir, f"{stem}_body.jpg"), body_bgr):
+            paths["body_path"] = f"{rel}_body.jpg"
+    if face_bgr is not None and getattr(face_bgr, "size", 0):
+        if _atomic_imwrite(os.path.join(out_dir, f"{stem}_face.jpg"), face_bgr):
+            paths["face_path"] = f"{rel}_face.jpg"
+    if frame_bgr is not None and frame_bgr.size:
+        # ORIGINAL frame: untouched, original resolution — the ground truth.
+        if _atomic_imwrite(os.path.join(out_dir, f"{stem}_orig.jpg"),
+                           frame_bgr, quality=FULL_FRAME_ORIG_QUALITY):
+            paths["full_frame_path"] = f"{rel}_orig.jpg"
+        # Annotated copy: SEPARATE file, may be downscaled — never the original.
+        if box_xyxy is not None:
+            h, w = frame_bgr.shape[:2]
+            s = FULL_FRAME_MAX_W / w if w > FULL_FRAME_MAX_W else 1.0
+            img = cv2.resize(frame_bgr, (int(w * s), int(h * s))) if s < 1.0 else frame_bgr.copy()
+            x1, y1, x2, y2 = (int(v * s) for v in box_xyxy[:4])
+            cv2.rectangle(img, (x1, y1), (x2, y2), _COL_VIS, 2)
+            if _atomic_imwrite(os.path.join(out_dir, f"{stem}_annot.jpg"),
+                               img, quality=FULL_FRAME_QUALITY):
+                paths["full_frame_annotated_path"] = f"{rel}_annot.jpg"
+    return paths
 
 
-def save_face_snapshot(camera_uid, face_bgr, stamp_ms, idx):
-    """Save the aligned face crop next to the body crop as <stem>_face.jpg. The UI
-    derives this path from the body snapshot, so no contract change is needed."""
-    out_dir = os.path.join(STORAGE_IMG, camera_uid)
-    os.makedirs(out_dir, exist_ok=True)
-    fname = f"{stamp_ms}_{idx}_face.jpg"
-    cv2.imwrite(os.path.join(out_dir, fname), face_bgr)
-    return f"storage/img/{camera_uid}/{fname}"
+# ── Short clips: per-camera in-memory ring buffer + background writer ───────
+# The preview loop feeds each camera's ring with CLEAN (un-annotated) frames at
+# CLIP_FPS. When a sighting triggers a clip, the writer thread snapshots the
+# pre-roll from the ring, keeps collecting post-roll, then encodes an MP4
+# atomically (tmp → rename) at the path that was already reported to the Brain.
+CLIP_ENABLE = os.environ.get("CLIP_ENABLE", "1") not in ("0", "false", "no")
+CLIP_FPS = float(os.environ.get("CLIP_FPS", "6"))
+CLIP_PRE_S = float(os.environ.get("CLIP_PRE_S", "4"))
+CLIP_POST_S = float(os.environ.get("CLIP_POST_S", "4"))
+CLIP_MAX_CONCURRENT = int(os.environ.get("CLIP_MAX_CONCURRENT", "3"))
+STORAGE_CLIPS = os.path.join(REPO_ROOT, "storage", "clips")
 
 
-def save_frame_snapshot(camera_uid, frame_bgr, box_xyxy, stamp_ms, idx):
-    """Save the whole scene (downscaled, person's box drawn) as <stem>_full.jpg,
-    sharing the body snapshot's stem so the UI derives it the same way it does the
-    face. A verification companion — lets a human confirm the crops are the right
-    person, not part of the identity signal."""
-    out_dir = os.path.join(STORAGE_IMG, camera_uid)
-    os.makedirs(out_dir, exist_ok=True)
-    h, w = frame_bgr.shape[:2]
-    s = FULL_FRAME_MAX_W / w if w > FULL_FRAME_MAX_W else 1.0
-    img = cv2.resize(frame_bgr, (int(w * s), int(h * s))) if s < 1.0 else frame_bgr.copy()
-    x1, y1, x2, y2 = (int(v * s) for v in box_xyxy[:4])
-    cv2.rectangle(img, (x1, y1), (x2, y2), _COL_VIS, 2)
-    fname = f"{stamp_ms}_{idx}_full.jpg"
-    cv2.imwrite(os.path.join(out_dir, fname), img, [int(cv2.IMWRITE_JPEG_QUALITY), FULL_FRAME_QUALITY])
-    return f"storage/img/{camera_uid}/{fname}"
+class ClipRecorder:
+    """One ring buffer per camera (JPEG-encoded frames — bounded RAM) plus a
+    single background writer pool. Non-blocking: trigger() returns the future
+    clip path immediately; the file appears atomically when post-roll ends."""
+
+    def __init__(self):
+        self._rings = {}          # uid -> deque[(ts, jpg_bytes)]
+        self._lock = threading.Lock()
+        self._deque = collections.deque
+        self._active = threading.Semaphore(CLIP_MAX_CONCURRENT)
+        self._keep = max(2.0, CLIP_PRE_S + 1.0)
+
+    def feed(self, uid, frame_bgr):
+        """Called from the preview loop at preview rate; keeps ≈CLIP_FPS."""
+        now = time.time()
+        with self._lock:
+            ring = self._rings.get(uid)
+            if ring is None:
+                ring = self._rings[uid] = self._deque()
+            if ring and now - ring[-1][0] < 1.0 / CLIP_FPS:
+                return
+        ok, buf = cv2.imencode(".jpg", frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        if not ok:
+            return
+        with self._lock:
+            ring.append((now, buf.tobytes()))
+            while ring and now - ring[0][0] > self._keep:
+                ring.popleft()
+
+    def trigger(self, uid, stem):
+        """Start a clip around NOW for camera `uid`. Returns the repo-relative
+        path the finished file WILL occupy (atomic rename on completion), or
+        None when clips are disabled / the writer pool is saturated."""
+        if not CLIP_ENABLE:
+            return None
+        if not self._active.acquire(blocking=False):
+            return None                      # saturated — skip, never block ingest
+        os.makedirs(os.path.join(STORAGE_CLIPS, uid), exist_ok=True)
+        rel = f"storage/clips/{uid}/{stem}.mp4"
+        final = os.path.join(REPO_ROOT, rel)
+        with self._lock:
+            pre = list(self._rings.get(uid) or ())
+        threading.Thread(target=self._write, args=(uid, pre, final),
+                         daemon=True, name=f"clip-{uid}").start()
+        return rel
+
+    def _write(self, uid, pre, final):
+        try:
+            t_end = time.time() + CLIP_POST_S
+            frames = list(pre)
+            seen = {ts for ts, _ in frames}
+            while time.time() < t_end:
+                time.sleep(1.0 / CLIP_FPS)
+                with self._lock:
+                    ring = list(self._rings.get(uid) or ())
+                for ts, jpg in ring:
+                    if ts not in seen:
+                        frames.append((ts, jpg)); seen.add(ts)
+            if not frames:
+                return
+            frames.sort(key=lambda p: p[0])
+            first = cv2.imdecode(np.frombuffer(frames[0][1], np.uint8), cv2.IMREAD_COLOR)
+            if first is None:
+                return
+            h, w = first.shape[:2]
+            tmp = f"{final}.tmp{os.getpid()}.mp4"
+            vw = cv2.VideoWriter(tmp, cv2.VideoWriter_fourcc(*"mp4v"), CLIP_FPS, (w, h))
+            for _, jpg in frames:
+                img = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
+                if img is not None:
+                    if img.shape[:2] != (h, w):
+                        img = cv2.resize(img, (w, h))
+                    vw.write(img)
+            vw.release()
+            os.replace(tmp, final)           # atomic: readers never see a partial clip
+        except Exception as e:  # noqa: BLE001 — clips are best-effort
+            print(f"    → clip write failed ({uid}): {e}")
+        finally:
+            self._active.release()
 
 
-def build_payload(camera_uid, score, face_embedding, body_embedding, snapshot_path, stamp_ms, idx):
+_clips = ClipRecorder()
+
+
+# ── Runtime metrics (served by the UI bridge at /diag via SHM) ──────────────
+# Per-camera counters + global diagnostics, dumped atomically to
+# {SHM_DIR}/metrics.json every METRICS_INTERVAL seconds by a tiny thread.
+METRICS_INTERVAL = float(os.environ.get("METRICS_INTERVAL", "2.0"))
+_metrics_lock = threading.Lock()
+_metrics = {"started_at": time.time(), "cameras": {}, "tracker_backend": None,
+            "tracker_degraded": False, "detect_ms_ema": None, "identity_queue_depth": 0}
+
+
+def _metrics_cam(uid):
+    with _metrics_lock:
+        return _metrics["cameras"].setdefault(uid, {
+            "detections": 0, "tracks_created": 0, "observations": 0,
+            "identity_emits": 0, "stale_frames_dropped": 0, "frame_age_s": None,
+        })
+
+
+def _metrics_bump(uid, key, n=1):
+    cam = _metrics_cam(uid)
+    with _metrics_lock:
+        cam[key] = cam.get(key, 0) + n
+
+
+def _metrics_set(key, value, uid=None):
+    if uid is None:
+        with _metrics_lock:
+            _metrics[key] = value
+    else:
+        cam = _metrics_cam(uid)
+        with _metrics_lock:
+            cam[key] = value
+
+
+def start_metrics_writer(streams):
+    """Dump metrics.json (atomic) every METRICS_INTERVAL s: per-camera counters,
+    decode frame age, detect latency EMA, identity queue depth, tracker backend
+    (+degraded flag), and GPU memory — the /diag diagnostics surface."""
+    path = os.path.join(SHM_DIR, "metrics.json")
+    tmp = os.path.join(SHM_DIR, ".metrics.tmp")
+
+    def _loop():
+        while True:
+            try:
+                for s in streams:
+                    age = s.frame_age() if hasattr(s, "frame_age") else None
+                    _metrics_set("frame_age_s",
+                                 round(age, 2) if age not in (None, float("inf")) else None,
+                                 uid=s.camera_uid)
+                with _metrics_lock:
+                    snap = json.loads(json.dumps(_metrics))   # deep copy via json
+                snap["ts"] = time.time()
+                if torch.cuda.is_available():
+                    snap["gpu"] = {
+                        "mem_allocated_mb": round(torch.cuda.memory_allocated() / 1e6, 1),
+                        "mem_reserved_mb": round(torch.cuda.memory_reserved() / 1e6, 1),
+                    }
+                with open(tmp, "w") as f:
+                    json.dump(snap, f)
+                os.replace(tmp, path)
+            except Exception:  # noqa: BLE001 — diagnostics must never kill anything
+                pass
+            time.sleep(METRICS_INTERVAL)
+
+    threading.Thread(target=_loop, daemon=True, name="metrics").start()
+
+
+# Per-run epoch baked into every detection_id. Tracker ids restart from t1 on
+# every pipeline launch, so without this a fresh run's "CAM-t3" would collide
+# with the previous run's "CAM-t3" still cached by the Brain's track-sticky map
+# (TTL minutes) — a different person could inherit the old identity.
+_RUN_EPOCH = int(time.time()) % 1_000_000
+
+
+def track_uuid_of(camera_uid, idx):
+    """Run-unique, camera-scoped track id — shared by every emit of one track."""
+    return f"{camera_uid}-r{_RUN_EPOCH}-t{idx}"
+
+
+def build_payload(camera_uid, score, face_embedding, body_embedding, stamp_ms, idx,
+                  evidence=None, bbox=None, frame_wh=None, clip_path=None):
     """Part 1 → Part 2 detection payload (contracts/part1_to_part2.event.schema.json).
 
-    `idx` is the tracker's track id. detection_id is STABLE per track (no
-    timestamp) so every emit of the same person shares one id — the Brain can
-    dedup repeat Unknown sightings on it, and the UI groups them into a single
-    'Unknown person' card instead of minting a new card every emit."""
+    `idx` is the tracker's track id. detection_id/track_uuid are STABLE per
+    track so every emit of the same person shares one id — the Brain groups
+    sightings, keeps identity sticky across re-emits, and folds a track's
+    Unknown case once a face resolves.
+
+    `evidence` is the dict from save_evidence_set(): ONE immutable set of
+    files captured from the same moment. Paths are passed EXPLICITLY — the
+    Brain and UI never derive one path from another."""
+    ev = evidence or {}
     return {
-        "detection_id": f"{camera_uid}-t{idx}",
+        "detection_id": track_uuid_of(camera_uid, idx),
+        "track_uuid": track_uuid_of(camera_uid, idx),
         "camera_id": camera_uid,
         "timestamp": utc_now_iso(),
         "detection_conf": round(float(score), 4),
         "face_embedding": [float(x) for x in face_embedding] if face_embedding is not None else None,
         "body_embedding": [float(x) for x in body_embedding] if body_embedding is not None else None,
-        "snapshot_path": snapshot_path,
-        "clip_path": None,                            # short-clip capture: TODO
+        "bbox": [round(float(v), 1) for v in bbox[:4]] if bbox is not None else None,
+        "frame_w": frame_wh[0] if frame_wh else None,
+        "frame_h": frame_wh[1] if frame_wh else None,
+        "face_path": ev.get("face_path"),
+        "body_path": ev.get("body_path"),
+        "full_frame_path": ev.get("full_frame_path"),
+        "full_frame_annotated_path": ev.get("full_frame_annotated_path"),
+        "snapshot_path": ev.get("body_path"),         # legacy alias
+        "clip_path": clip_path,
     }
 
 
@@ -407,6 +658,7 @@ def main():
 
     streams = nvr.start_streams(cameras)
     start_preview_writer(streams)          # serve REAL annotated frames to the dashboard
+    start_metrics_writer(streams)          # /diag diagnostics via SHM metrics.json
     roles = {c.camera_uid: c for c in cameras}
     detect_interval = float(os.environ.get("DETECT_INTERVAL", "0.25"))
     resolve_interval = float(os.environ.get("RESOLVE_INTERVAL", "1.0"))
@@ -416,22 +668,104 @@ def main():
     # one database id per person. Detection (fast) and identity (background) share
     # the tracks under this lock.
     def _make_tracker():
-        """Kalman-motion tracker (Oc-SORT) by default — stable IDs through
-        occlusion, far fewer spurious new tracks. TRACKER=simple forces the old
-        IoU tracker; falls back to it automatically if BoxMOT can't load."""
+        """Kalman-motion tracker (Oc-SORT via the pinned boxmot dependency).
+        There is NO silent fallback: if BoxMOT cannot load, startup FAILS with
+        the reason, unless the operator explicitly opts into degraded tracking
+        (TRACKER=simple, or TRACKER_ALLOW_FALLBACK=1). A degraded tracker is
+        flagged in /diag metrics — fragmentation counts mean little without
+        knowing which backend produced them."""
         name = os.environ.get("TRACKER", "ocsort").lower()
-        if name in ("ocsort", "bytetrack", "motion", "boxmot"):
-            try:
-                return MotionTracker()
-            except Exception as e:  # noqa: BLE001
-                print(f"[tracker] BoxMOT unavailable ({e}); using SimpleTracker")
-        return SimpleTracker()
+        if name == "simple":
+            _metrics_set("tracker_backend", "simple (explicit)")
+            _metrics_set("tracker_degraded", True)
+            return SimpleTracker()
+        try:
+            tr = MotionTracker()
+            _metrics_set("tracker_backend", "ocsort (boxmot)")
+            return tr
+        except Exception as e:  # noqa: BLE001
+            if os.environ.get("TRACKER_ALLOW_FALLBACK", "0") in ("1", "true", "yes"):
+                print(f"[tracker] DEGRADED: BoxMOT unavailable ({e}); "
+                      f"greedy-IoU fallback EXPLICITLY allowed")
+                _metrics_set("tracker_backend", "simple (degraded fallback)")
+                _metrics_set("tracker_degraded", True)
+                return SimpleTracker()
+            raise SystemExit(
+                f"[tracker] BoxMOT/OC-SORT failed to load: {e}\n"
+                f"  Fix the dependency (pip install boxmot==19.0.0) or explicitly "
+                f"accept degraded tracking with TRACKER_ALLOW_FALLBACK=1.")
 
     state_lock = threading.Lock()
     trackers = {c.camera_uid: _make_tracker() for c in cameras}
     print(f"[tracker] using {type(next(iter(trackers.values()))).__name__}")
     frames = {}          # uid -> latest frame (for the identity worker to crop from)
     stop_flag = threading.Event()
+
+    # ── Per-camera detection gates (configurable — hard filters reject real
+    # humans on some scenes, so every gate can be tuned per camera in
+    # cameras.json: roi / exclude / min_height_frac / min_aspect) ────────────
+    MIN_HEIGHT_FRAC = float(os.environ.get("MIN_HEIGHT_FRAC", "0.0"))
+    MIN_ASPECT = float(os.environ.get("MIN_ASPECT", "0.0"))
+
+    def _passes_gates(cam, box, fw, fh):
+        x1, y1, x2, y2 = box[:4]
+        w, h = max(1.0, x2 - x1), max(1.0, y2 - y1)
+        min_h = cam.min_height_frac if cam.min_height_frac is not None else MIN_HEIGHT_FRAC
+        if min_h and h / fh < min_h:
+            return False
+        min_a = cam.min_aspect if cam.min_aspect is not None else MIN_ASPECT
+        if min_a and h / w < min_a:
+            return False
+        cx, cy = (x1 + x2) / 2 / fw, (y1 + y2) / 2 / fh
+        roi = cam.roi
+        if roi and not (roi[0] <= cx <= roi[2] and roi[1] <= cy <= roi[3]):
+            return False
+        for ex in (cam.exclude or ()):
+            if ex[0] <= cx <= ex[2] and ex[1] <= cy <= ex[3]:
+                return False
+        return True
+
+    # ── Immediate observation: EVERY stable human track logs a sighting NOW —
+    # detect-only cameras and faceless people included. The evidence set +
+    # POST run on a background thread (never blocks the detect loop); identity
+    # (if this camera runs it) arrives later on the SAME track_uuid, and the
+    # Brain folds the observation's Unknown case onto the resolved person. ──
+    obs_queue = collections.deque(maxlen=64)     # (uid, track_id, frame, box)
+    obs_session = None
+    if args.emit:
+        import requests as _rq
+        obs_session = _rq.Session()
+
+    def observation_worker():
+        while not stop_flag.is_set():
+            try:
+                uid, t, frame, box = obs_queue.popleft()
+            except IndexError:
+                time.sleep(0.05)
+                continue
+            try:
+                stamp_ms = int(time.time() * 1000)
+                crop = crop_person(frame, box)
+                evidence = save_evidence_set(uid, stamp_ms, t.id, 0,
+                                             frame_bgr=frame, box_xyxy=box,
+                                             body_bgr=crop, face_bgr=None)
+                clip_path = _clips.trigger(uid, evidence["stem"])
+                with state_lock:
+                    t.sight_stem = evidence["stem"]
+                    t.clip_path = clip_path
+                    if not t.snap_path:
+                        t.snap_path = evidence.get("body_path")
+                _metrics_bump(uid, "observations")
+                if obs_session is not None:
+                    fh, fw = frame.shape[:2]
+                    payload = build_payload(uid, box[4], None, None, stamp_ms, t.id,
+                                            evidence=evidence, bbox=box,
+                                            frame_wh=(fw, fh), clip_path=clip_path)
+                    obs_session.post(f"{args.brain_url}/events", json=payload, timeout=10)
+            except Exception as e:  # noqa: BLE001 — observations are best-effort
+                print(f"    → observation failed ({uid}): {e}")
+
+    threading.Thread(target=observation_worker, daemon=True, name="observer").start()
 
     def _resolve_track(cam, uid, frame, t, box):
         """Heavy identity for ONE track on the LOW-priority GPU stream, using
@@ -479,33 +813,10 @@ def main():
                 fv = np.asarray(face_emb, dtype=np.float32) * w
                 t.face_emb_sum = fv if t.face_emb_sum is None else t.face_emb_sum + fv
                 t.face_w_sum += w
+                if face_q > t.best_face_q:
+                    t.best_face_emb, t.best_body_emb, t.best_face_q = face_emb, body_emb, face_q
             elif t.best_body_emb is None and body_emb is not None:
                 t.best_body_emb = body_emb              # keep a body even before any face
-            # ── Consistent snapshot TRIPLE (body + face + full scene) ──────────
-            # ALL THREE are saved from the SAME frame and share ONE filename stem, so
-            # the face, body and scene a human sees are always the same person at the
-            # same instant (this is what fixes "face of A on the body of B"). We
-            # (re)capture the whole triple whenever this probe's face beats the best
-            # so far — the displayed shot tracks the CLEAREST view of the person, and
-            # the face thumbnail can never drift onto a different frame than the body.
-            new_best_face = face_ok and face_q > t.best_face_q and face_crop is not None
-            if new_best_face:
-                t.best_face_emb, t.best_body_emb, t.best_face_q = face_emb, body_emb, face_q
-                t.snap_path = save_snapshot(uid, crop, stamp_ms, t.id)          # body
-                t.face_path = save_face_snapshot(uid, face_crop, stamp_ms, t.id)  # paired face
-                save_frame_snapshot(uid, frame, box, stamp_ms, t.id)           # paired scene
-            elif t.best_face_q <= 0.0:
-                # No usable face on this track yet — keep the SHARPEST body + scene so
-                # an Unknown still gets a clean picture, upgraded as sharper/bigger
-                # frames arrive (not frozen on a blurry first probe). Replaced wholesale
-                # by the first real face triple above, which shares a stem with its
-                # face — so a body's derived _face.jpg never belongs to another frame.
-                body_q = _crop_sharpness(crop)
-                if body_q > t.best_shot_q:
-                    t.best_shot_q = body_q
-                    t.snap_path = save_snapshot(uid, crop, stamp_ms, t.id)
-                    save_frame_snapshot(uid, frame, box, stamp_ms, t.id)
-                    t.face_path = None
             # Decide whether to (re-)emit. Emit a FIRST label as soon as we've pooled
             # a few good faces (snappy — a poor single face enrolls a bad gallery entry
             # the person then fails to re-match, so we want a few, not one), then keep
@@ -514,22 +825,43 @@ def main():
             have_face = t.face_w_sum > 0.0
             first_ready = have_face and t.probes >= IDENTITY_MIN_EMIT_PROBES
             ready = first_ready or t.emitted
-            ready = ready or (budget_done and not have_face)   # body-only fallback → Unknown
+            ready = ready or (budget_done and not have_face)   # body-only fallback → Unknown case
             if not ready:
                 return True                          # keep probing; worker retries this track
             if t.emitted and not (t.face_w_sum > t.emit_face_w * (1.0 + IDENTITY_REEMIT_FRAC)):
                 return True                          # already sent our pooled best; nothing better yet
             emit_face = _pooled_face(t.face_emb_sum, t.face_w_sum)
             emit_body = t.best_body_emb
-            snap, emit_q = t.snap_path, t.best_face_q
+            emit_q = t.best_face_q
+            seq = t.probes                           # per-track sequence → unique stems
+            clip_path = t.clip_path                  # recorded at first sighting (if any)
             t.emitted = True
             t.emit_face_w = t.face_w_sum
             t.emit_face_q = t.best_face_q
 
+        # ── ONE immutable evidence set from THIS probe's moment ─────────────
+        # Body, face (when this probe had one), untouched original frame and a
+        # separate annotated copy — all from the same frame, written atomically
+        # under a NEW stem. A later, better frame becomes a NEW sighting; it
+        # never replaces these files. No face this probe → face_path stays None
+        # (the UI says "No face captured for this sighting" — it never borrows).
+        evidence = save_evidence_set(
+            uid, stamp_ms, t.id, seq,
+            frame_bgr=frame, box_xyxy=box,
+            body_bgr=crop, face_bgr=face_crop if face_ok else None,
+        )
+        with state_lock:
+            t.snap_path = evidence.get("body_path") or t.snap_path
+            t.face_path = evidence.get("face_path") or t.face_path
+        _metrics_bump(uid, "identity_emits")
+
         disp = color = None
         locked = False
         if args.emit:
-            payload = build_payload(uid, box[4], emit_face, emit_body, snap, stamp_ms, t.id)
+            fh, fw = frame.shape[:2]
+            payload = build_payload(uid, box[4], emit_face, emit_body, stamp_ms, t.id,
+                                    evidence=evidence, bbox=box, frame_wh=(fw, fh),
+                                    clip_path=clip_path)
             try:
                 j = session.post(f"{args.brain_url}/events", json=payload, timeout=10).json()
                 disp, color = _display_from_brain(j)
@@ -608,6 +940,12 @@ def main():
                 uid = stream.camera_uid
                 if now - last_detect[uid] < detect_interval:
                     continue
+                # Stale-frame dropping: a frozen/lagging decode must not burn a
+                # GPU slot detecting the same old frame (fair micro-batching —
+                # live cameras aren't starved by dead ones).
+                if hasattr(stream, "frame_age") and stream.frame_age() > STALE_FRAME_MAX_S:
+                    _metrics_bump(uid, "stale_frames_dropped")
+                    continue
                 frame = stream.get_frame()
                 if frame is None:
                     continue
@@ -637,16 +975,38 @@ def main():
                 [(x1 / s, y1 / s, x2 / s, y2 / s, sc) for (x1, y1, x2, y2, sc) in boxes]
                 for boxes, s in zip(box_lists, det_scales)
             ]
+            batch_ms = (time.time() - t0) * 1000.0
             perf["detect_s"] += time.time() - t0
             perf["calls"] += 1
             perf["cams"] += len(due)
+            with _metrics_lock:
+                ema = _metrics.get("detect_ms_ema")
+                _metrics["detect_ms_ema"] = round(
+                    batch_ms if ema is None else 0.9 * ema + 0.1 * batch_ms, 1)
 
             for (stream, frame), boxes in zip(due, box_lists):
                 uid = stream.camera_uid
                 cam = roles[uid]
+                fh, fw = frame.shape[:2]
+                # Per-camera geometry gates (roi / exclude / min size / aspect).
+                boxes = [b for b in boxes if _passes_gates(cam, b, fw, fh)]
+                _metrics_bump(uid, "detections", len(boxes))
                 with state_lock:
                     frames[uid] = frame
+                    known = {id(t) for t in trackers[uid].tracks} \
+                        if hasattr(trackers[uid], "tracks") else set()
                     tks = trackers[uid].update(boxes, frame)
+                    new_tracks = sum(1 for t in tks if id(t) not in known)
+                    # Immediate sighting: EVERY stable track (identify AND
+                    # detect-only cameras) logs an observation the moment it
+                    # stabilises — faceless people become persistent Unknown
+                    # cases instead of never being logged at all.
+                    for t in tks:
+                        if not t.sighted and t.hits >= IDENTITY_MIN_HITS:
+                            t.sighted = True
+                            obs_queue.append((uid, t, frame.copy(), tuple(t.box)))
+                if new_tracks:
+                    _metrics_bump(uid, "tracks_created", new_tracks)
                 if cam.runs_identity:
                     # Neutral 'person' (grey) until the background worker resolves the
                     # track; it then recolors to Employee/Visitor/Unknown. So a box
@@ -661,6 +1021,7 @@ def main():
                 with state_lock:
                     backlog = sum(1 for c in id_cams for t in trackers[c.camera_uid].tracks
                                   if not t.resolved and t.misses == 0 and t.hits >= IDENTITY_MIN_HITS)
+                _metrics_set("identity_queue_depth", backlog)
                 print(f"[perf] grid: detect {perf['detect_s']/perf['calls']*1000:.0f} ms/batch, "
                       f"{perf['calls']/(now-perf['last_report']):.1f} batches/s, "
                       f"{perf['cams']/perf['calls']:.1f} cams/batch | identity backlog {backlog}")

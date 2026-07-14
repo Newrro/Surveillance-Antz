@@ -38,17 +38,51 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import config
 from db.models import Classification, IdentityType, MatchedBy
-from repositories import embedding_repo, identity_repo
-from services import calibration_service
+from repositories import embedding_repo, event_repo, identity_repo
+from services import calibration_service, presence_cache
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Track-sticky identity cache (detection_id → identity_id)
+# ---------------------------------------------------------------------------
+# Part 1's detection_id is stable per tracker track and camera-scoped
+# ("{camera_uid}-t{n}"). Once a track is resolved to an identity, later payloads
+# of the SAME track (a re-emit with a better face, or a no-face fallback) reuse
+# that identity instead of minting a second id / an id-less Unknown. Redis-backed
+# and best-effort: any cache failure falls through to normal resolution.
+def _track_key(detection_id: str) -> str:
+    return f"trackid:{detection_id}"
+
+
+async def get_track_identity(detection_id: Optional[str]) -> Optional[int]:
+    if not detection_id:
+        return None
+    try:
+        client = await presence_cache.get_client()
+        val = await client.get(_track_key(detection_id))
+        return int(val) if val is not None else None
+    except Exception:  # noqa: BLE001 — cache is an optimisation, never a blocker
+        return None
+
+
+async def remember_track_identity(detection_id: Optional[str], identity_id: Optional[int]) -> None:
+    if not detection_id or identity_id is None:
+        return
+    try:
+        client = await presence_cache.get_client()
+        await client.set(_track_key(detection_id), str(identity_id),
+                         ex=config.TRACK_STICKY_TTL_SECONDS)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @dataclass(frozen=True)
@@ -74,16 +108,24 @@ async def resolve(
     body_embedding: Optional[Sequence[float]] = None,
     camera_id: Optional[int] = None,
     detected_at: Optional[datetime] = None,
+    detection_id: Optional[str] = None,
 ) -> ResolutionResult:
     """Open-set 1:N FACE identification, recall-first + self-calibrating.
 
-    1. GATE: low detection_conf OR no face → UNKNOWN (no id — a non-capture).
+    1. GATE: low detection_conf → UNKNOWN (no id — a non-capture).
+       No face → track-sticky reuse, else constrained body RE-LINK, else Unknown.
     2. Best-of-set search; s1/s2 = top-1/top-2 cosine to DISTINCT identities.
-       Feed s2 (a clean impostor sample) to the calibrator.
-    3. ASSIGN to id1 iff s1 ≥ match_threshold() AND (s1−s2) ≥ margin → re-use id,
-       learn the fresh view, confirm. (Returning person keeps ONE id.)
-    4. Otherwise ENROLL a new Visitor NOW from this good capture (confirmed if a
-       body was captured too). Duplicates are folded by deferred clustering.
+       Feed s2 to the calibrator ONLY when it is below the current threshold —
+       an above-threshold s2 is almost always our OWN duplicate (same person
+       fragmented across two ids), not an impostor, and counting it poisons the
+       impostor statistics upward.
+    3. ASSIGN to id1 iff s1 ≥ match_threshold() AND ((s1−s2) ≥ margin OR s2 is
+       ALSO ≥ threshold). The margin guards against look-alikes — but when both
+       top candidates clear the floor they are (near-always) fragments of the
+       SAME person, so refusing to assign would mint a THIRD id. Assign to the
+       best and let deferred clustering fold the other one.
+    4. Otherwise: same-track sticky id (a re-emit must not mint a duplicate),
+       else ENROLL a new Visitor NOW from this good capture.
     """
     # ---- 1. GATE ----------------------------------------------------- #
     if detection_conf < config.DETECTION_CONF_THRESHOLD:
@@ -93,11 +135,24 @@ async def resolve(
 
     has_face_now = face_embedding is not None and len(face_embedding) > 0
     if not has_face_now:
-        # No clear face → we could not capture this person properly → Unknown, no
-        # identity. (Body/clothing never creates or joins an identity.)
-        logger.info("resolve: NO-FACE (body_only=%s) → Unknown (no id)",
-                    body_embedding is not None)
-        return ResolutionResult(classification=Classification.UNKNOWN, identity_id=None)
+        # No clear face this time — but NOT necessarily a stranger, and NEVER a
+        # throw-away row (2026-07 rework). In order:
+        #   a. the SAME track was already identified → keep that identity (a
+        #      person we named must never also produce stray Unknown rows);
+        #   b. constrained body RE-LINK — same camera, short window, high cosine
+        #      (reconnects a fragmented track to its case/visitor; auditable via
+        #      matched_by='body' + similarity on the event row, reversible via
+        #      the reassign/split report actions);
+        #   c. genuinely new/uncapturable → a PERSISTENT Unknown case: every
+        #      faceless human gets ONE mergeable record, not id-less scatter.
+        sticky = await _resolve_sticky_track(session, detection_id)
+        if sticky is not None:
+            return sticky
+        relinked = await _relink_by_body(session, body_embedding, camera_id, detected_at)
+        if relinked is not None:
+            return relinked
+        return await _get_or_create_unknown_case(
+            session, detection_id, body_embedding, detected_at)
 
     # ---- 2. OPEN-SET best-of-set search ------------------------------ #
     face_hits = await embedding_repo.search_face(face_embedding, limit=10)
@@ -109,12 +164,20 @@ async def resolve(
     id1, s1 = (ranked[0] if ranked else (None, 0.0))
     s2 = ranked[1][1] if len(ranked) > 1 else 0.0
 
-    # The 2nd-best distinct identity is (almost always) a different person → a clean
-    # impostor sample. This is what lets the threshold self-tune per deployment.
-    if len(ranked) > 1:
+    thr = calibration_service.match_threshold()
+    # The 2nd-best distinct identity is an impostor sample ONLY when it sits below
+    # the decision floor. Above it, s2 is nearly always a duplicate of the SAME
+    # person (fragmented gallery) — feeding those high cosines to the calibrator
+    # dragged the impostor mean/std up, raising the threshold, causing MORE misses
+    # and more duplicates: a self-poisoning loop.
+    #
+    # Gate against the FIXED cold-start default, NOT the live threshold: gating on
+    # the moving thr creates the opposite spiral (thr drops → sampling window drops
+    # → mean drops → thr pins at the clamp floor — observed live 2026-07-14, match
+    # floor stuck at 0.38). A fixed reference keeps the sample support stable.
+    if len(ranked) > 1 and s2 < config.FACE_MATCH_THRESHOLD_DEFAULT:
         calibration_service.observe_impostor(s2)
 
-    thr = calibration_service.match_threshold()
     # One structured line per decision — the primary debugging surface. Shows the
     # best/second-best identity cosines, the LIVE self-calibrated threshold, and the
     # margin, so "why did this match / why a new id?" is answerable straight from logs.
@@ -122,10 +185,17 @@ async def resolve(
                 s1, id1, s2, thr, config.FACE_MATCH_MARGIN, len(ranked))
 
     # ---- 3. CONFIDENT re-match → ASSIGN (re-use id) ------------------ #
-    if id1 is not None and s1 >= thr and (s1 - s2) >= config.FACE_MATCH_MARGIN:
+    # Margin: top-1 must beat top-2 clearly — UNLESS top-2 also clears the floor,
+    # in which case the two ids are (near-always) fragments of the same person;
+    # assign to the best one and let deferred clustering fold the other.
+    if id1 is not None and s1 >= thr and ((s1 - s2) >= config.FACE_MATCH_MARGIN or s2 >= thr):
         identity = await identity_repo.fetch_identity_by_id(session, id1)
         if identity is not None:
-            await _assign_and_learn(session, identity, face_embedding, s1)
+            if s2 >= thr and (s1 - s2) < config.FACE_MATCH_MARGIN:
+                logger.info("resolve: duplicate-hint — ids %s both ≥ thr; clustering will fold",
+                            [i for i, _ in ranked[:2]])
+            await _assign_and_learn(session, identity, face_embedding, s1,
+                                    body_embedding=body_embedding)
             classification, label = await _classify(session, identity)
             logger.info("resolve: → ASSIGN id=%d (%s) cls=%s by=face sim=%.3f",
                         identity.id, identity.display_label, classification.value, s1)
@@ -135,10 +205,122 @@ async def resolve(
             )
         logger.warning("resolve: face match id=%d gone from DB — enrolling as new", id1)
 
-    # ---- 4. NO confident match → ENROLL a new Visitor NOW ------------ #
+    # ---- 4a. Same track already has an id → REUSE it (learn the view) - #
+    # A track re-emitting with a better pooled face must NEVER mint a second id:
+    # it is by construction the same physical person the tracker followed.
+    # EXCEPTION: a track whose cached identity is an UNKNOWN CASE (it observed
+    # faceless first) must NOT stick — this payload HAS a good face, so the
+    # person deserves a real Visitor identity; the ingestion layer then folds
+    # the whole case onto it (attach_case_to_identity). Sticking would trap
+    # face-bearing people as Unknown forever.
+    cached_id = await get_track_identity(detection_id)
+    if cached_id is not None:
+        identity = await identity_repo.fetch_identity_by_id(session, cached_id)
+        if identity is not None and identity.identity_type != IdentityType.UNKNOWN:
+            await _assign_and_learn(session, identity, face_embedding, s1,
+                                    body_embedding=body_embedding)
+            classification, label = await _classify(session, identity)
+            logger.info("resolve: → TRACK-STICKY id=%d (%s) cls=%s (track=%s, s1=%.3f)",
+                        identity.id, identity.display_label, classification.value,
+                        detection_id, s1)
+            return ResolutionResult(
+                classification=classification, identity_id=identity.id,
+                matched_by=MatchedBy.FACE, similarity=s1, label=label,
+            )
+
+    # ---- 4b. Face matched nobody — but was this person JUST here? ----- #
+    # Mint-averting constrained body re-link (the other half of the no-face
+    # re-link, and the original anti-fragmentation design): same camera + short
+    # window + high body cosine ⇒ the tracker broke and re-pooled a WORSE face
+    # angle of the SAME person (verified live: one person minted twice 10 s
+    # apart in identical clothes). Attribute the sighting instead of minting a
+    # duplicate. The face view is NOT learned — a body link is not face proof,
+    # and learning it could poison the gallery if the link is ever wrong.
+    # Unknown cases are EXCLUDED here for the same reason as 4a: with a good
+    # face in hand, mint the Visitor — the case folds onto it right after.
+    relink = await _relink_by_body(session, body_embedding, camera_id, detected_at,
+                                   context="mint-avert", skip_unknown_cases=True)
+    if relink is not None:
+        return relink
+
+    # ---- 4c. NO confident match → ENROLL a new Visitor NOW ----------- #
     # A well-captured face with no existing match is a NEW person. We do NOT leave
     # them Unknown (the old bug) — being captured clearly IS the bar for a Visitor.
     return await _create_visitor(session, face_embedding, body_embedding, top_sim=s1)
+
+
+async def _resolve_sticky_track(
+    session: AsyncSession, detection_id: Optional[str]
+) -> Optional[ResolutionResult]:
+    """A no-face payload whose track was ALREADY identified keeps its identity —
+    the person the tracker followed did not change because their face turned away."""
+    cached_id = await get_track_identity(detection_id)
+    if cached_id is None:
+        return None
+    identity = await identity_repo.fetch_identity_by_id(session, cached_id)
+    if identity is None:
+        return None
+    classification, label = await _classify(session, identity)
+    logger.info("resolve: NO-FACE → TRACK-STICKY id=%d (%s) cls=%s (track=%s)",
+                identity.id, identity.display_label, classification.value, detection_id)
+    return ResolutionResult(
+        classification=classification, identity_id=identity.id,
+        matched_by=MatchedBy.BODY, similarity=None, label=label,
+    )
+
+
+async def _relink_by_body(
+    session: AsyncSession,
+    body_embedding: Optional[Sequence[float]],
+    camera_id: Optional[int],
+    detected_at: Optional[datetime],
+    context: str = "no-face",
+    skip_unknown_cases: bool = False,
+) -> Optional[ResolutionResult]:
+    """Constrained body RE-LINK for a no-face sighting: reuse an existing identity
+    iff its body vector matches at/above BODY_MERGE_THRESHOLD AND that identity was
+    seen on THIS camera within BODY_MERGE_WINDOW_SECONDS. Same clothes, same place,
+    seconds apart ⇒ same person walking with their face turned away. The tight
+    cosine + camera + time gate is what keeps clothing from ever merging strangers
+    (body similarity alone never creates or joins an identity)."""
+    if body_embedding is None or len(body_embedding) == 0 or camera_id is None:
+        return None
+    when = detected_at or datetime.utcnow()
+    try:
+        hits = await embedding_repo.search_body(body_embedding, limit=5)
+    except Exception as e:  # noqa: BLE001 — a body-index hiccup must not kill ingest
+        logger.warning("body re-link search failed: %s", e)
+        return None
+    if not hits:
+        return None
+    since = when - timedelta(seconds=config.BODY_MERGE_WINDOW_SECONDS)
+    recent = await event_repo.identities_seen_on_camera_since(session, camera_id, since)
+    best_id, best_sim = None, 0.0
+    for iid, sim in hits:
+        if sim >= config.BODY_MERGE_THRESHOLD and iid in recent and sim > best_sim:
+            best_id, best_sim = iid, sim
+    if best_id is None:
+        # Telemetry for tuning BODY_MERGE_THRESHOLD: show the best CO-PRESENT
+        # candidate (the one the gate was actually judging), not just the top hit.
+        copresent = [(iid, sim) for iid, sim in hits if iid in recent]
+        if copresent:
+            miss_id, miss_sim = max(copresent, key=lambda x: x[1])
+            logger.info("body re-link MISS: best co-present id=%d sim=%.3f < thr=%.2f (cam=%s)",
+                        miss_id, miss_sim, config.BODY_MERGE_THRESHOLD, camera_id)
+        return None
+    identity = await identity_repo.fetch_identity_by_id(session, best_id)
+    if identity is None:
+        return None
+    if skip_unknown_cases and identity.identity_type == IdentityType.UNKNOWN:
+        return None
+    classification, label = await _classify(session, identity)
+    logger.info("resolve: %s → BODY-RELINK id=%d (%s) cls=%s sim=%.3f (same cam ≤%ds)",
+                context.upper(), identity.id, identity.display_label, classification.value,
+                best_sim, config.BODY_MERGE_WINDOW_SECONDS)
+    return ResolutionResult(
+        classification=classification, identity_id=identity.id,
+        matched_by=MatchedBy.BODY, similarity=best_sim, label=label,
+    )
 
 
 async def _create_visitor(
@@ -159,8 +341,12 @@ async def _create_visitor(
         session, identity_id=new_identity.id, visitor_seq=seq,
         year=year, first_seen_at=datetime.utcnow(),
     )
+    # Store the body vector TOO — not for identity (face-only, clothing never
+    # merges people) but for the constrained same-camera body RE-LINK, which needs
+    # something to match when this person's next tracklet has no usable face.
     await embedding_repo.store_embeddings(
-        new_identity.id, face_embedding=face_embedding, source="auto_first_seen",
+        new_identity.id, face_embedding=face_embedding,
+        body_embedding=body_embedding, source="auto_first_seen",
     )
     has_body = body_embedding is not None and len(body_embedding) > 0
     await identity_repo.set_visitor_flags(session, new_identity.id, True, has_body)
@@ -183,23 +369,101 @@ async def _create_visitor(
 
 async def _classify(session: AsyncSession, identity):
     """Event label for a matched identity: Employee, Visitor (confirmed), or Unknown
-    (a provisional visitor — captured a face but no body yet — not yet confirmed)."""
+    (an Unknown case, or a provisional visitor not yet confirmed)."""
     if identity.identity_type == IdentityType.EMPLOYEE:
         return Classification.EMPLOYEE, identity.display_label
+    if identity.identity_type == IdentityType.UNKNOWN:
+        return Classification.UNKNOWN, identity.display_label
     confirmed = await identity_repo.is_confirmed_visitor(session, identity.id)
     return (Classification.VISITOR if confirmed else Classification.UNKNOWN), identity.display_label
 
 
+async def _get_or_create_unknown_case(
+    session: AsyncSession,
+    track_uuid: Optional[str],
+    body_embedding: Optional[Sequence[float]],
+    detected_at: Optional[datetime],
+) -> ResolutionResult:
+    """Anchor a faceless sighting to a PERSISTENT Unknown case (UNK-YYYY-NNNN).
+
+    One case per physical person: the same track always reuses its case (unique
+    on track_uuid); fragmented tracks re-join via the constrained body re-link
+    upstream. The case's body vector is stored so later faceless tracklets can
+    find it — body is used ONLY inside the same-camera/short-window re-link,
+    never to identify someone as a Visitor/Employee (clothing lies)."""
+    if track_uuid:
+        existing = await identity_repo.fetch_unknown_case_by_track(session, track_uuid)
+        if existing is not None:
+            identity = await identity_repo.fetch_identity_by_id(session, existing.identity_id)
+            if identity is not None:
+                return ResolutionResult(
+                    classification=Classification.UNKNOWN, identity_id=identity.id,
+                    matched_by=MatchedBy.NONE, similarity=None, label=identity.display_label,
+                )
+    year = (detected_at or datetime.utcnow()).year
+    seq = await identity_repo.next_unknown_seq(session, year)
+    label = f"UNK-{year}-{seq:04d}"
+    identity = await identity_repo.create_identity(session, IdentityType.UNKNOWN, label)
+    await identity_repo.insert_unknown_case(
+        session, identity_id=identity.id, unknown_seq=seq, year=year,
+        track_uuid=track_uuid, first_seen_at=detected_at or datetime.utcnow(),
+    )
+    if body_embedding is not None and len(body_embedding) > 0:
+        await embedding_repo.store_embeddings(
+            identity.id, body_embedding=body_embedding, source="unknown_case")
+    logger.info("resolve: NO-FACE → new UNKNOWN CASE %s (id=%d, track=%s)",
+                label, identity.id, track_uuid)
+    return ResolutionResult(
+        classification=Classification.UNKNOWN, identity_id=identity.id,
+        matched_by=MatchedBy.NONE, similarity=None, label=label,
+    )
+
+
+async def attach_case_to_identity(
+    session: AsyncSession,
+    track_uuid: Optional[str],
+    resolved_identity_id: int,
+    actor: str = "system",
+) -> Optional[int]:
+    """When a track that opened an Unknown case later resolves to a REAL identity
+    (face finally captured), fold the WHOLE case — all its sightings and body
+    vectors — onto that identity. Returns the folded case id, or None.
+
+    The fold runs through merge_identities, so it is audited and re-points every
+    event; nothing is deleted except the now-empty case row."""
+    if not track_uuid:
+        return None
+    case = await identity_repo.fetch_unknown_case_by_track(session, track_uuid)
+    if case is None or case.identity_id == resolved_identity_id:
+        return None
+    from services import dedup_service  # local import — avoids a module cycle
+    case_id = case.identity_id
+    await dedup_service.merge_identities(
+        session, primary_id=resolved_identity_id, duplicate_id=case_id,
+        actor=actor, action="case-attach",
+    )
+    logger.info("Unknown case id=%d folded into identity id=%d (face resolved for track %s)",
+                case_id, resolved_identity_id, track_uuid)
+    return case_id
+
+
 async def _assign_and_learn(
-    session: AsyncSession, identity, face_embedding: Sequence[float], sim: float
+    session: AsyncSession, identity, face_embedding: Sequence[float], sim: float,
+    body_embedding: Optional[Sequence[float]] = None,
 ) -> None:
     """On a confident re-match: (1) learn — add this face as a fresh gallery view
     when it isn't a near-duplicate, so future angles keep matching (this is what
-    keeps a returning person on ONE id); (2) confirm a provisional visitor, since
-    being re-identified is proof of a re-identifiable person. Employees are already
-    confirmed and carry no visitor row."""
-    if sim < config.LEARN_SIMILARITY_CEILING:      # skip near-duplicate views
-        await embedding_repo.store_embeddings(identity.id, face_embedding=face_embedding, source="relearn")
+    keeps a returning person on ONE id); (2) refresh the body vector (today's
+    clothes) so the same-camera body RE-LINK can follow this person's faceless
+    tracklets; (3) confirm a provisional visitor, since being re-identified is
+    proof of a re-identifiable person. Employees are already confirmed and carry
+    no visitor row."""
+    # Learn only inside the confidence band: above the FLOOR (a borderline assign
+    # must not graft a possibly-wrong face into the gallery) and below the CEILING
+    # (a near-duplicate view adds nothing).
+    if config.LEARN_SIMILARITY_FLOOR <= sim < config.LEARN_SIMILARITY_CEILING:
+        await embedding_repo.store_embeddings(identity.id, face_embedding=face_embedding,
+                                              body_embedding=body_embedding, source="relearn")
 
     if identity.identity_type == IdentityType.EMPLOYEE:
         return

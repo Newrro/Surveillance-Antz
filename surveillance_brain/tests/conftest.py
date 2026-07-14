@@ -35,6 +35,12 @@ def app():
     # Disable the midnight flush scheduler inside tests so we don't
     # accidentally mutate the DB during a test run.
     os.environ["ENABLE_MIDNIGHT_FLUSH"] = "0"
+    # No background consolidation while tests assert on identity counts.
+    os.environ["CONSOLIDATE_ENABLE"] = "0"
+    # Embedded Qdrant allows ONE process — the live Brain may hold the real
+    # store's lock, so tests run against their own throwaway vector store.
+    import tempfile
+    os.environ["QDRANT_LOCAL_PATH"] = tempfile.mkdtemp(prefix="qdrant_test_")
 
     from api.main import app as _app
     yield _app

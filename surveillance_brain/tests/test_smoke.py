@@ -81,15 +81,27 @@ def test_events_rejects_unknown_camera(client):
     assert r.status_code < 500, f"Got 5xx: {r.status_code} {r.text}"
 
 
-def test_events_requires_embedding(client):
-    """POST /events with neither embedding → 422 validation error."""
+def test_events_accepts_observation_without_embedding(client):
+    """POST /events with no embeddings is a valid OBSERVATION (2026-07 rework):
+    it logs a sighting anchored to a persistent Unknown case instead of being
+    rejected — a real person with no usable face must never vanish from logs."""
+    import os
     payload = {
         "camera_id": "GATE-01",
         "timestamp": "2026-01-01T12:00:00Z",
         "detection_conf": 0.95,
+        "track_uuid": "SMOKE:obs:t1",
     }
     r = client.post("/events", json=payload)
-    assert r.status_code == 422, r.text
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["identity_id"] is not None
+    assert (body.get("person_id") or "").startswith("UNK-")
+    # clean up the case this smoke test minted
+    client.post("/identities/delete",
+                auth=(os.environ.get("ADMIN_USERNAME", "admin"),
+                      os.environ.get("ADMIN_PASSWORD", "password123")),
+                json={"identity_ids": [body["identity_id"]]})
 
 
 def test_person_not_found(client):

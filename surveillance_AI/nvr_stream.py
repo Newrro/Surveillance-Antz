@@ -182,12 +182,19 @@ class CameraStream(threading.Thread):
 
             with self.lock:
                 self.frame = frame
+                self.frame_ts = time.time()
 
         cap.release()
 
     def get_frame(self):
         with self.lock:
             return self.frame.copy() if self.frame is not None else None
+
+    def frame_age(self):
+        """Seconds since the newest decoded frame (inf before the first)."""
+        with self.lock:
+            ts = getattr(self, "frame_ts", None)
+        return (time.time() - ts) if ts else float("inf")
 
     def stop(self):
         self.running = False
@@ -250,6 +257,7 @@ class FFmpegCameraStream(threading.Thread):
                 continue
             with self.lock:
                 self.frame = np.frombuffer(buf, np.uint8).reshape(self.h, self.w, 3)
+                self.frame_ts = time.time()
         try:
             proc.kill()
         except Exception:
@@ -258,6 +266,12 @@ class FFmpegCameraStream(threading.Thread):
     def get_frame(self):
         with self.lock:
             return self.frame.copy() if self.frame is not None else None
+
+    def frame_age(self):
+        """Seconds since the newest decoded frame (inf before the first)."""
+        with self.lock:
+            ts = getattr(self, "frame_ts", None)
+        return (time.time() - ts) if ts else float("inf")
 
     def stop(self):
         self.running = False

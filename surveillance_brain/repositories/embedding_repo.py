@@ -89,3 +89,8 @@ async def delete_embeddings_for_identity(identity_id: int) -> None:
 async def fetch_face_vectors(identity_id: int) -> List[List[float]]:
     """All face vectors stored for an identity (for centroid consolidation)."""
     return await vector_store.fetch_vectors_for_identity(config.QDRANT_FACE_COLLECTION, identity_id)
+
+
+async def fetch_body_vectors(identity_id: int) -> List[List[float]]:
+    """All body vectors stored for an identity (for merge gallery transfer)."""
+    return await vector_store.fetch_vectors_for_identity(config.QDRANT_BODY_COLLECTION, identity_id)

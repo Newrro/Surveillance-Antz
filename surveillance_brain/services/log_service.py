@@ -38,11 +38,13 @@ logger = logging.getLogger(__name__)
 
 
 def _enriched_stmt():
-    """Shared joined SELECT for the event feed."""
+    """Shared joined SELECT for the event feed. Soft-deleted (hidden) sightings
+    are excluded from EVERY feed — they remain in the table for audit only."""
     return (
         select(
             DetectionEvent.id.label("event_id"),
             DetectionEvent.detection_id,
+            DetectionEvent.track_uuid,
             DetectionEvent.detected_at,
             DetectionEvent.classification,
             DetectionEvent.detection_conf,
@@ -50,6 +52,13 @@ def _enriched_stmt():
             DetectionEvent.similarity,
             DetectionEvent.snapshot_path,
             DetectionEvent.clip_path,
+            DetectionEvent.face_path,
+            DetectionEvent.body_path,
+            DetectionEvent.full_frame_path,
+            DetectionEvent.full_frame_annotated_path,
+            DetectionEvent.bbox_x1, DetectionEvent.bbox_y1,
+            DetectionEvent.bbox_x2, DetectionEvent.bbox_y2,
+            DetectionEvent.frame_w, DetectionEvent.frame_h,
             DetectionEvent.identity_id,
             Identity.display_label.label("person_id"),
             Identity.identity_type,
@@ -63,13 +72,19 @@ def _enriched_stmt():
         .join(Employee, Employee.identity_id == Identity.id, isouter=True)
         .join(Visitor, Visitor.identity_id == Identity.id, isouter=True)
         .join(Camera, Camera.id == DetectionEvent.camera_id, isouter=True)
+        .where(DetectionEvent.hidden_at.is_(None))
     )
 
 
 def _row_to_event(r: Any) -> Dict[str, Any]:
+    bbox = None
+    if r.bbox_x1 is not None and r.bbox_y1 is not None \
+            and r.bbox_x2 is not None and r.bbox_y2 is not None:
+        bbox = [r.bbox_x1, r.bbox_y1, r.bbox_x2, r.bbox_y2]
     return {
         "event_id": r.event_id,
         "detection_id": r.detection_id,
+        "track_uuid": r.track_uuid,
         "time": r.detected_at.isoformat() if r.detected_at else None,
         "camera": r.camera_uid,
         "camera_id": r.camera_id,
@@ -81,8 +96,18 @@ def _row_to_event(r: Any) -> Dict[str, Any]:
         "confidence": r.detection_conf,
         "matched_by": r.matched_by.value if r.matched_by else None,
         "similarity": r.similarity,
+        # One immutable evidence set — EXPLICIT paths. Old rows (pre-rework)
+        # were backfilled by migration 0003; consumers must never derive one
+        # path from another.
+        "face": r.face_path,
+        "body": r.body_path,
+        "full_frame": r.full_frame_path,
+        "full_frame_annotated": r.full_frame_annotated_path,
         "snapshot": r.snapshot_path,
         "clip": r.clip_path,
+        "bbox": bbox,
+        "frame_w": r.frame_w,
+        "frame_h": r.frame_h,
     }
 
 

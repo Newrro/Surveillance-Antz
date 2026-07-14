@@ -74,8 +74,23 @@ async def update_identity_type_and_label(
 # ---------------------------------------------------------------------------
 # visitors
 # ---------------------------------------------------------------------------
+
+async def _serialize_label_allocation(session: AsyncSession, namespace: str) -> None:
+    """Transaction-scoped Postgres advisory lock around MAX(seq)+1 label
+    allocation. Two concurrent ingests (the immediate-observation worker and
+    the identity worker POST in parallel) otherwise compute the same next
+    sequence and collide on the unique display_label (observed live:
+    UniqueViolationError on identities_display_label_key). The lock releases
+    automatically at commit/rollback."""
+    from sqlalchemy import text
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:ns))"), {"ns": f"label:{namespace}"}
+    )
+
+
 async def next_visitor_seq(session: AsyncSession, year: int) -> int:
-    """SELECT MAX(visitor_seq)+1 FROM visitors WHERE year=?.  1 if empty."""
+    """SELECT MAX(visitor_seq)+1 FROM visitors WHERE year=? (serialized). 1 if empty."""
+    await _serialize_label_allocation(session, "visitor")
     result = await session.execute(
         select(func.max(Visitor.visitor_seq)).where(Visitor.year == year)
     )
@@ -117,6 +132,7 @@ async def fetch_visitor(session: AsyncSession, identity_id: int) -> Optional[Vis
 # employees
 # ---------------------------------------------------------------------------
 async def next_employee_seq(session: AsyncSession, year: int) -> int:
+    await _serialize_label_allocation(session, "employee")
     result = await session.execute(
         select(func.max(Employee.employee_seq)).where(Employee.year == year)
     )
@@ -131,6 +147,7 @@ async def insert_employee(
     name: str,
     department: str,
     email: Optional[str] = None,
+    external_id: Optional[str] = None,
 ) -> Employee:
     employee = Employee(
         identity_id=identity_id,
@@ -139,6 +156,7 @@ async def insert_employee(
         name=name,
         department=department,
         email=email,
+        external_id=external_id,
     )
     session.add(employee)
     await session.flush()
@@ -247,3 +265,97 @@ async def find_identity_by_query(session: AsyncSession, query: str) -> Optional[
         .limit(1)
     )
     return vis_result.scalar_one_or_none()
+
+
+# ---------------------------------------------------------------------------
+# unknown_cases — persistent case per unidentified human track
+# ---------------------------------------------------------------------------
+async def next_unknown_seq(session: AsyncSession, year: int) -> int:
+    from db.models import UnknownCase
+    await _serialize_label_allocation(session, "unknown")
+    result = await session.execute(
+        select(func.coalesce(func.max(UnknownCase.unknown_seq), 0)).where(UnknownCase.year == year)
+    )
+    return int(result.scalar_one()) + 1
+
+
+async def insert_unknown_case(
+    session: AsyncSession,
+    identity_id: int,
+    unknown_seq: int,
+    year: int,
+    track_uuid: Optional[str],
+    first_seen_at: Optional[datetime] = None,
+):
+    from db.models import UnknownCase
+    case = UnknownCase(
+        identity_id=identity_id, unknown_seq=unknown_seq, year=year,
+        track_uuid=track_uuid, first_seen_at=first_seen_at or datetime.utcnow(),
+    )
+    session.add(case)
+    await session.flush()
+    return case
+
+
+async def fetch_unknown_case_by_track(session: AsyncSession, track_uuid: str):
+    from db.models import UnknownCase
+    result = await session.execute(
+        select(UnknownCase).where(UnknownCase.track_uuid == track_uuid)
+    )
+    return result.scalar_one_or_none()
+
+
+# ---------------------------------------------------------------------------
+# identity search (admin report operations — merge target picker etc.)
+# ---------------------------------------------------------------------------
+async def search_identities(session: AsyncSession, query: str, limit: int = 20) -> List[dict]:
+    """Search by display_label OR employee/visitor name (ILIKE). Returns light
+    dicts for pickers: {identity_id, label, name, type}. Unlike
+    find_identity_by_query (single best hit, used by live search), this returns
+    a ranked LIST for report operations."""
+    like = f"%{query.strip()}%"
+    out: List[dict] = []
+    seen: set[int] = set()
+
+    label_rows = await session.execute(
+        select(Identity).where(Identity.display_label.ilike(like)).limit(limit)
+    )
+    for ident in label_rows.scalars():
+        seen.add(ident.id)
+        out.append({"identity_id": ident.id, "label": ident.display_label,
+                    "name": None, "type": ident.identity_type.value})
+
+    emp_rows = await session.execute(
+        select(Identity, Employee.name)
+        .join(Employee, Employee.identity_id == Identity.id)
+        .where(Employee.name.ilike(like)).limit(limit)
+    )
+    for ident, name in emp_rows.all():
+        if ident.id not in seen:
+            seen.add(ident.id)
+            out.append({"identity_id": ident.id, "label": ident.display_label,
+                        "name": name, "type": ident.identity_type.value})
+
+    vis_rows = await session.execute(
+        select(Identity, Visitor.name)
+        .join(Visitor, Visitor.identity_id == Identity.id)
+        .where(Visitor.name.ilike(like)).limit(limit)
+    )
+    for ident, name in vis_rows.all():
+        if ident.id not in seen:
+            seen.add(ident.id)
+            out.append({"identity_id": ident.id, "label": ident.display_label,
+                        "name": name, "type": ident.identity_type.value})
+
+    # Fill display names for the label-matched rows (best effort, single queries)
+    for row in out:
+        if row["name"] is None:
+            row["name"] = await get_name_for_identity(session, row["identity_id"])
+    return out[:limit]
+
+
+async def fetch_employee_by_external_id(session: AsyncSession, external_id: str) -> Optional[Employee]:
+    result = await session.execute(
+        select(Employee).where(Employee.external_id == external_id)
+    )
+    return result.scalar_one_or_none()

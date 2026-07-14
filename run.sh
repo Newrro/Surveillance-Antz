@@ -130,7 +130,12 @@ cmd_start() {
     "$AI_PY" surveillance_UI/server.py
   log "Starting perception pipeline…"
   local cam_arg=(); [[ -n "$CAMERAS" ]] && cam_arg=(--cameras "$CAMERAS")
+  # Offline-first model loading: every model (RT-DETR, AdaFace, OSNet) is already
+  # in the local HF cache; without these flags a transient huggingface.co hiccup
+  # at startup kills the whole pipeline (observed: httpx 'client has been closed'
+  # → OSError loading PekingU/rtdetr_r50vd despite a complete local cache).
   _start_one pipeline "$ROOT/surveillance_AI" "$LOGS/pipeline.log" \
+    env HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
     "$AI_PY" pipeline.py "${cam_arg[@]}" $PIPELINE_ARGS --brain-url http://localhost:8000
   log "Starting storage pruner (keep ${RETENTION_DAYS}d, cap ${STORAGE_MAX_GB}GB)…"
   _start_one prune "$ROOT/surveillance_AI" "$LOGS/prune.log" \

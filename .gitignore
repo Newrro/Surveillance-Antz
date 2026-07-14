@@ -92,6 +92,7 @@ storage/
 *.onnx
 *.engine
 *.weights
+*.claude
 
 # ═══════════════════════════════════════════════════════════════════════════
 # IDE / editor / OS
@@ -110,3 +111,4 @@ logs/
 # local run state (PID files + logs)
 runtime/
 scratchpad_vtest.avi
+eval_run/

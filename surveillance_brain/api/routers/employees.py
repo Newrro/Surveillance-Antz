@@ -21,8 +21,9 @@ from api.schemas import (
     EmployeeOut,
     EmployeePhotoIn,
     EmployeeRecord,
+    ImportEmployeesRequest,
 )
-from services import enrollment_service
+from services import enrollment_service, import_service
 
 logger = logging.getLogger(__name__)
 
@@ -101,3 +102,40 @@ async def enroll_employee_photo(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Photo enrollment failed: {e}",
         )
+
+
+@router.post(
+    "/import",
+    status_code=status.HTTP_200_OK,
+    summary="Bulk roster import: XLSX/CSV or ZIP (roster + photos). dry_run previews.",
+)
+async def import_employees(body: ImportEmployeesRequest, actor: str = Depends(require_admin)) -> dict:
+    """external_id is the idempotency key — re-imports UPDATE, never duplicate.
+    dry_run=true returns the full row-level validation preview without writing.
+    The apply run is audited (action='import')."""
+    try:
+        return await import_service.run_import(
+            filename=body.filename, content_b64=body.content_b64,
+            dry_run=body.dry_run, actor=actor,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Employee import failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Import failed: {e}",
+        )
+
+
+@router.get(
+    "/import/{job_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Fetch a completed import's summary by job id",
+)
+async def import_status(job_id: str, _: str = Depends(require_admin)) -> dict:
+    summary = import_service.job_status(job_id)
+    if summary is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail=f"no import job {job_id!r} in this process")
+    return summary

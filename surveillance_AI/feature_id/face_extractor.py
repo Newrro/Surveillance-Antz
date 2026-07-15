@@ -2,18 +2,19 @@
 #  FACE EXTRACTOR  — the PRIMARY identity signal (AdaFace, NOT InsightFace)
 # ─────────────────────────────────────────────
 # Turns a person crop into a 512-number FACE embedding:
-#   1. MTCNN (facenet-pytorch) finds the largest face + its 5 landmarks.
+#   1. Face DETECTOR finds the largest face + its 5 landmarks.
+#        WAS: MTCNN (facenet-pytorch).  NOW: SCRFD (scrfd_500m_bnkps.onnx),
+#        selectable via config.FACE_DETECTOR ("scrfd" default, "mtcnn" to revert).
 #   2. Align to the standard ArcFace 112x112 template (similarity transform).
 #   3. AdaFace IR-101 (WebFace12M) produces the embedding.
 #
 # Returns None when there is no usable face (too small / not frontal / occluded) —
 # the caller then falls back to the body ReID embedding. Only the recognition model
-# is AdaFace; MTCNN is used purely as a face detector.
+# is AdaFace; the detector (SCRFD/MTCNN) is used purely to locate the face.
 
 import cv2
 import numpy as np
 import torch
-from facenet_pytorch import MTCNN
 
 from . import config
 from .adaface_net import build_model
@@ -41,8 +42,23 @@ class FaceExtractor:
 
     def __init__(self):
         self.device = config.DEVICE
-        print(f"[face] loading MTCNN detector + AdaFace ({config.FACE_BACKBONE}) on {self.device} ...")
-        self.mtcnn = MTCNN(keep_all=True, min_face_size=config.FACE_MIN_SIZE, device=self.device)
+        self.backend = config.FACE_DETECTOR
+        print(f"[face] loading {self.backend.upper()} detector + AdaFace "
+              f"({config.FACE_BACKBONE}) on {self.device} ...")
+        if self.backend == "scrfd":
+            from .scrfd_detector import SCRFD
+            self.detector = SCRFD(
+                config.SCRFD_MODEL_PATH,
+                input_size=config.SCRFD_INPUT_SIZE,
+                conf_thresh=config.SCRFD_CONF,
+                nms_thresh=config.SCRFD_NMS,
+                device=self.device,
+            )
+            self.mtcnn = None
+        else:
+            from facenet_pytorch import MTCNN
+            self.mtcnn = MTCNN(keep_all=True, min_face_size=config.FACE_MIN_SIZE, device=self.device)
+            self.detector = None
         self.model = build_model(config.FACE_BACKBONE).eval().to(self.device)
         self.model.load_state_dict(torch.load(config.FACE_WEIGHTS, map_location=self.device))
         # AdaFace's UN-normalized feature norm is a free FACE-QUALITY proxy: the
@@ -52,7 +68,19 @@ class FaceExtractor:
         self.last_norm = 0.0
         print("[face] ready.")
 
-    def _largest_face_landmarks(self, rgb):
+    def _largest_face_landmarks(self, img_bgr):
+        """Return the 5 landmarks (5x2) of the largest usable face, or None.
+        SCRFD path: onnxruntime on BGR (already score-thresholded). MTCNN path:
+        facenet-pytorch on RGB, filtered by FACE_DET_CONF."""
+        if self.backend == "scrfd":
+            boxes, scores, kpss = self.detector.detect(img_bgr)
+            if len(boxes) == 0:
+                return None
+            areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+            return kpss[int(areas.argmax())]
+
+        # MTCNN backend (legacy) — wants RGB.
+        rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         try:
             boxes, probs, lms = self.mtcnn.detect(rgb, landmarks=True)
         except RuntimeError:
@@ -94,8 +122,7 @@ class FaceExtractor:
             if scale > 1.01:
                 img = cv2.resize(img, (int(w * scale), int(h * scale)),
                                  interpolation=cv2.INTER_CUBIC)
-        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)          # MTCNN wants RGB
-        lm = self._largest_face_landmarks(rgb)
+        lm = self._largest_face_landmarks(img)              # detector handles colour space
         if lm is None:
             return None, None
         aligned = _align_112(img, lm)                        # AdaFace wants BGR

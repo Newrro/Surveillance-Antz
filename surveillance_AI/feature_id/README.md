@@ -6,12 +6,15 @@ face first and body as a fallback (the same design the Brain uses).
 
 | Signal | Model | Role |
 |---|---|---|
-| **Face** (primary) | **AdaFace IR-101 / WebFace12M** + MTCNN detector | most discriminative → stable IDs |
+| **Face** (primary) | **AdaFace IR-101 / WebFace12M** + **SCRFD** detector | most discriminative → stable IDs |
 | **Body** (fallback) | **OSNet** (`osnet_x1_0`, market1501) | used when no usable face (small / turned away) |
 
-> Recognition model is **AdaFace, not InsightFace**. MTCNN (facenet-pytorch) is used
-> only to find + align the face; the embedding is AdaFace. The AdaFace network code is
-> vendored in [`adaface_net.py`](adaface_net.py); its weights live in `../models/`.
+> Recognition model is **AdaFace, not InsightFace**. The face **detector** (find +
+> align the face) **was MTCNN** (facenet-pytorch) and is **now SCRFD**
+> (`scrfd_500m_bnkps.onnx`, run via onnxruntime in [`scrfd_detector.py`](scrfd_detector.py)) —
+> faster and better on small/angled CCTV faces. Switch back with `FACE_DETECTOR=mtcnn`.
+> Either way the embedding is AdaFace; the AdaFace network code is vendored in
+> [`adaface_net.py`](adaface_net.py) and its weights live in `../models/`.
 
 ## Files
 

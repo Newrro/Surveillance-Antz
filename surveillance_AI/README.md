@@ -18,14 +18,15 @@ body-only ReID used to churn a new ID every frame).
 |---|---|---|
 | **Detection** — find people (boxes) | **RT-DETR** (default; swappable via `DETECTOR_MODEL`, not YOLO) | [`detector.py`](detector.py) |
 | **Segmentation** — mask each person | **SAM 2** (optional) | [`segmenter.py`](segmenter.py) |
-| **Face embedding — PRIMARY identity** | **AdaFace IR-101 / WebFace12M** + MTCNN detector | [`feature_id/face_extractor.py`](feature_id/face_extractor.py) |
+| **Face embedding — PRIMARY identity** | **AdaFace IR-101 / WebFace12M** + **SCRFD** detector (was MTCNN) | [`feature_id/face_extractor.py`](feature_id/face_extractor.py) |
 | **Body ReID — FALLBACK identity** | **OSNet** (torchreid) | [`feature_id/extractor.py`](feature_id/extractor.py) |
 
 > **Face first, body fallback** (matching the Brain's design): faces are far more
 > discriminative than body ReID, so a visible face gives a stable ID; when no usable
 > face is found (too small / turned away) we fall back to the body vector.
-> AdaFace is the recognition model (**not** InsightFace); MTCNN is used only as the
-> face detector. SAM 2 is *segmentation* — the detector finds the box, SAM 2 masks it.
+> AdaFace is the recognition model (**not** InsightFace); the face **detector** was
+> **MTCNN** and is **now SCRFD** (`scrfd_500m_bnkps.onnx`, onnxruntime) — set
+> `FACE_DETECTOR=mtcnn` to revert. SAM 2 is *segmentation* — the detector finds the box, SAM 2 masks it.
 > The person detector is **swappable** via `DETECTOR_MODEL` (`rtdetr` default,
 > `fasterrcnn_resnet50`, or the light `fasterrcnn_mobilenet`).
 

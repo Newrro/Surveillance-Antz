@@ -63,6 +63,17 @@ FACE_WEIGHTS = os.path.join(_MODELS_DIR, "adaface_ir101_webface12m.pt")
 # against false face matches downstream.
 FACE_MIN_SIZE = 28        # ignore faces smaller than this (px side)
 FACE_DET_CONF = 0.90      # MTCNN face-detection confidence floor
+
+# ── Face detector backend ──────────────────────────────────────────────────
+# WAS: MTCNN (facenet-pytorch) — torch-based, slower, weaker on small/angled
+#      CCTV faces.  NOW: SCRFD (scrfd_500m_bnkps.onnx via onnxruntime) — the
+# detector + 5-landmark stage. Recognition is still AdaFace either way; only the
+# "where is the face" stage changed. Override with FACE_DETECTOR=mtcnn to revert.
+FACE_DETECTOR = os.environ.get("FACE_DETECTOR", "scrfd").lower()   # "scrfd" | "mtcnn"
+SCRFD_MODEL_PATH = os.path.join(_MODELS_DIR, "scrfd_500m_bnkps.onnx")
+SCRFD_INPUT_SIZE = int(os.environ.get("SCRFD_INPUT_SIZE", "640"))  # square model input
+SCRFD_CONF = float(os.environ.get("SCRFD_CONF", "0.5"))           # SCRFD score floor
+SCRFD_NMS = float(os.environ.get("SCRFD_NMS", "0.4"))             # SCRFD NMS IoU
 # Sharpness gate (variance of Laplacian on the aligned 112x112). Blurry/motion
 # faces score low; a floor keeps only CLEAR faces so a "Visitor" is genuinely
 # re-identifiable. Tune down if too few faces qualify on distant cameras.

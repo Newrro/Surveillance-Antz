@@ -384,23 +384,31 @@
   </div>
 </div>
 
-<!-- ===================== Sighting evidence carousel =====================
-     ONE sighting = ONE immutable evidence set (same event_id for everything
-     shown). Arrows / keyboard ←→ change the WHOLE set together. Images are
-     shown uncropped (contain) and click-through to the original file. -->
+<!-- ===================== Sighting evidence popup =====================
+     ONE sighting = ONE evidence set: the Face, Full body and Full scene shown
+     always share a single filename stem (<stem>.jpg / _face.jpg / _full.jpg),
+     written by Part 1 from the same frame — so the face can never belong to a
+     different person than the body. A figure hides itself when its file is
+     absent (e.g. a faceless sighting shows no Face panel). -->
 <div class="modal-backdrop" id="photo-modal" onclick="closePersonPhotoIfBackdrop(event)">
   <div class="photo-pop">
     <button class="sidebar-close" onclick="closePersonPhoto()"><i class="ti ti-x"></i></button>
-    <div class="carousel-wrap">
-      <button class="carousel-arrow" id="carousel-prev" title="Previous sighting (←)"
-              onclick="stepSightCarousel(-1)"><i class="ti ti-chevron-left"></i></button>
-      <div class="photo-imgs" id="photo-imgs"></div>
-      <button class="carousel-arrow" id="carousel-next" title="Next sighting (→)"
-              onclick="stepSightCarousel(1)"><i class="ti ti-chevron-right"></i></button>
+    <div class="photo-imgs">
+      <figure class="photo-fig" id="photo-face-fig">
+        <img class="photo-img" id="photo-face-img" alt="face">
+        <figcaption>Face</figcaption>
+      </figure>
+      <figure class="photo-fig" id="photo-body-fig">
+        <img class="photo-img" id="photo-body-img" alt="full body">
+        <figcaption>Full body</figcaption>
+      </figure>
+      <figure class="photo-fig" id="photo-full-fig">
+        <img class="photo-img" id="photo-full-img" alt="full scene">
+        <figcaption>Full scene</figcaption>
+      </figure>
     </div>
     <div class="photo-name" id="photo-name">—</div>
     <div class="photo-sub" id="photo-sub">—</div>
-    <div class="carousel-actions" id="carousel-actions"></div>
   </div>
 </div>
 

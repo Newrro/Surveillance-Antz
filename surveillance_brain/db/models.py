@@ -282,12 +282,68 @@ class DetectionEvent(Base):
     )
     similarity: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
+    # ---- Sighting evidence group (2026-07 rework) -------------------------
+    # ONE sighting = ONE immutable evidence set. Every path below was written
+    # ONCE by the pipeline from the SAME captured moment and is never edited,
+    # cropped or replaced. Consumers must use these EXPLICIT columns — never
+    # derive a companion file from another file's name.
+    track_uuid: Mapped[Optional[str]] = mapped_column(String(96), nullable=True, index=True)
+    bbox_x1: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bbox_y1: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bbox_x2: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bbox_y2: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    frame_w: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    frame_h: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    face_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    body_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    full_frame_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)            # ORIGINAL, untouched
+    full_frame_annotated_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # separate copy, optional
+
     # Media references — the files themselves live in shared storage / S3;
-    # the Brain only stores the path/URL string.
+    # the Brain only stores the path/URL string. snapshot_path is the legacy
+    # single-photo column (kept so pre-rework rows stay readable); new rows
+    # set it to body_path for back-compat.
     snapshot_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     clip_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # ---- Soft delete (report "delete" hides ONE sighting, never history) --
+    hidden_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    hidden_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    hidden_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     def __repr__(self) -> str:
         return f"<DetectionEvent id={self.id} cls={self.classification} cam={self.camera_id}>"
+
+
+# ---------------------------------------------------------------------------
+# unknown_cases — 1:1 with identities (only when identity_type='unknown')
+# ---------------------------------------------------------------------------
+class UnknownCase(Base):
+    """A persistent grouped record for one UNIDENTIFIED person. Created on the
+    first stable faceless track; later tracks re-attach by track continuity or
+    the constrained same-camera body link. When a face finally resolves, the
+    whole case (all sightings) is folded onto the Visitor/Employee identity."""
+    __tablename__ = "unknown_cases"
+
+    identity_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("identities.id", ondelete="CASCADE"), primary_key=True
+    )
+    unknown_seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # The tracker track that opened the case (run-unique, camera-scoped).
+    track_uuid: Mapped[Optional[str]] = mapped_column(String(96), nullable=True, index=True)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("year", "unknown_seq", name="uq_unknown_cases_year_seq"),
+        UniqueConstraint("track_uuid", name="uq_unknown_cases_track_uuid"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<UnknownCase id={self.identity_id} seq={self.unknown_seq} year={self.year}>"

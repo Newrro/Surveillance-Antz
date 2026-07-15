@@ -136,12 +136,17 @@ class Employee(Base):
     department: Mapped[str] = mapped_column(String(64), nullable=False)
     email: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
 
+    # Idempotency key for bulk roster import (XLSX/CSV/ZIP): re-importing the
+    # same external_id UPDATES the employee instead of duplicating them.
+    external_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
     hired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     identity: Mapped["Identity"] = relationship(back_populates="employee")
 
     __table_args__ = (
         UniqueConstraint("year", "employee_seq", name="uq_employees_year_seq"),
+        UniqueConstraint("external_id", name="uq_employees_external_id"),
         Index("ix_employees_name", "name"),
     )
 

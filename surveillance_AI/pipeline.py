@@ -62,8 +62,14 @@ from surveillance_Camera_config import load_cameras  # noqa: E402
 
 import nvr_stream as nvr  # noqa: E402
 
-STORAGE_IMG = os.path.join(REPO_ROOT, "storage", "img")
-MIN_CROP_SIDE = 24  # skip crops too tiny to embed reliably
+# Helpers extracted from this file for readability (behaviour unchanged):
+from ppl_colors import _COL_EMP, _COL_PERSON, _COL_UNKNOWN, _COL_VIS  # noqa: E402,F401
+from geometry import _iou, _label_for_box, _occluded, _overlap_frac  # noqa: E402,F401
+from snapshots import (  # noqa: E402,F401
+    crop_person, _crop_sharpness, _pooled_face,
+    save_snapshot, save_face_snapshot, save_frame_snapshot,
+)
+from payload import build_payload, utc_now_iso, _display_from_brain  # noqa: E402,F401
 
 # ── Live annotated preview (REAL boxes on the dashboard) ───────────────────
 # The pipeline is the single camera consumer: it decodes, detects and identifies,
@@ -84,13 +90,6 @@ PREVIEW_QUALITY = int(os.environ.get("PREVIEW_QUALITY", "85"))
 # and scale the boxes back to full-res coords. Crops are then taken from the
 # full-res frame. Bigger = catches smaller/distant people; smaller = less lag.
 DETECT_MAX_SIDE = int(os.environ.get("DETECT_MAX_SIDE", "960"))
-
-# ── Full-scene verification snapshot ───────────────────────────────────────
-# Beside the face + body crops we save the whole frame (box drawn) so the UI can
-# show the crops IN CONTEXT — you can eyeball whether they came from the right
-# person. Downscaled + moderate quality: this is for human review, not features.
-FULL_FRAME_MAX_W = int(os.environ.get("FULL_FRAME_MAX_W", "1280"))
-FULL_FRAME_QUALITY = int(os.environ.get("FULL_FRAME_QUALITY", "88"))
 
 # ── Identity as a lagged background service ────────────────────────────────
 # The grid (live detection boxes) is the real-time FOREGROUND; identity is a
@@ -120,9 +119,6 @@ IDENTITY_REEMIT_FRAC = float(os.environ.get("IDENTITY_REEMIT_FRAC", "0.15"))  # 
 # contaminating the identity. Photo-verified real faces this deployment score
 # q24-42, so 24 is the empirical floor separating faces from garbage.
 FACE_MIN_QUALITY = float(os.environ.get("FACE_MIN_QUALITY", "24.0"))
-# Skip identity on a track whose box is heavily overlapped by ANOTHER person's box
-# (the crop would contain a neighbour → wrong face). Fraction of THIS box covered.
-OCCLUSION_OVERLAP = float(os.environ.get("OCCLUSION_OVERLAP", "0.45"))
 
 
 def _stream_ctx(s):
@@ -191,182 +187,6 @@ def start_preview_writer(streams):
         threads.append(th)
     return threads
 
-
-# Box colours (BGR) by identity outcome.
-_COL_EMP = (0, 200, 0)        # Employee → green
-_COL_VIS = (0, 170, 255)      # Visitor → orange
-_COL_UNKNOWN = (60, 60, 220)  # Unknown / below gate → red
-_COL_PERSON = (200, 200, 200) # detected, not yet identified → grey
-
-
-def _iou(a, b):
-    """IoU of two (x1,y1,x2,y2) boxes."""
-    ax1, ay1, ax2, ay2 = a[:4]
-    bx1, by1, bx2, by2 = b[:4]
-    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
-    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
-    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
-    inter = iw * ih
-    if inter <= 0:
-        return 0.0
-    ua = (ax2 - ax1) * (ay2 - ay1) + (bx2 - bx1) * (by2 - by1) - inter
-    return inter / ua if ua > 0 else 0.0
-
-
-def _overlap_frac(a, b):
-    """Fraction of box `a` that is covered by box `b` (intersection / area(a))."""
-    ax1, ay1, ax2, ay2 = a[:4]
-    bx1, by1, bx2, by2 = b[:4]
-    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
-    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
-    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
-    inter = iw * ih
-    area = max(1.0, (ax2 - ax1) * (ay2 - ay1))
-    return inter / area
-
-
-def _occluded(box, others):
-    """True if another person's box covers too much of this one — the crop would
-    include a neighbour, so the face we extract might be the wrong person."""
-    return any(_overlap_frac(box, o) > OCCLUSION_OVERLAP for o in others)
-
-
-def _label_for_box(box, id_labels):
-    """Pick the identity label whose (older) box best overlaps this fresh box.
-    Falls back to a plain grey 'person' marker until identity catches up."""
-    best, best_iou = None, 0.30
-    for (lbox, disp, color) in id_labels:
-        v = _iou(box, lbox)
-        if v > best_iou:
-            best, best_iou = (disp, color), v
-    return best if best else ("person", _COL_PERSON)
-
-
-def _display_from_brain(j):
-    """Build a box label from the Brain's POST /events response (authoritative,
-    matches the database). Returns (text, color)."""
-    label = (j.get("label") or "Unknown")
-    name = j.get("name")
-    pid = j.get("person_id")
-    if label == "Employee":
-        return (f"Employee {name or pid or ''}".strip(), _COL_EMP)
-    if label == "Visitor":
-        return (f"Visitor {pid or ''}".strip(), _COL_VIS)
-    return ("Unknown", _COL_UNKNOWN)
-
-
-def utc_now_iso():
-    return datetime.now(timezone.utc).isoformat()
-
-
-def crop_person(frame_bgr, box_xyxy, mask=None):
-    """Crop the person's bounding box. If a mask is given, blank the background
-    (pixels outside the mask → black) so the ReID vector describes the person."""
-    h, w = frame_bgr.shape[:2]
-    x1, y1, x2, y2 = box_xyxy[:4]
-    x1, y1 = max(0, int(x1)), max(0, int(y1))
-    x2, y2 = min(w, int(x2)), min(h, int(y2))
-    if x2 - x1 < MIN_CROP_SIDE or y2 - y1 < MIN_CROP_SIDE:
-        return None
-    if mask is not None:
-        person = np.zeros_like(frame_bgr)
-        person[mask] = frame_bgr[mask]
-        return person[y1:y2, x1:x2].copy()
-    return frame_bgr[y1:y2, x1:x2].copy()
-
-
-def _crop_sharpness(crop_bgr):
-    """Cheap 'good shot' score for a body crop: variance-of-Laplacian (in-focus
-    detail) scaled by the crop's short side. Higher = sharper AND bigger. Lets us
-    keep the SHARPEST frame as the snapshot instead of whatever frame identity
-    happened to probe first — so a person who walks past doesn't get a motion-
-    blurred picture just because the first probe caught them mid-stride."""
-    if crop_bgr is None or crop_bgr.size == 0:
-        return 0.0
-    h, w = crop_bgr.shape[:2]
-    g = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-    m = max(h, w)
-    if m > 256:                              # keep the Laplacian cheap on big crops
-        sc = 256.0 / m
-        g = cv2.resize(g, (max(1, int(w * sc)), max(1, int(h * sc))), interpolation=cv2.INTER_AREA)
-    lap = cv2.Laplacian(g, cv2.CV_64F).var()
-    return float(lap) * float(min(h, w))
-
-
-def _pooled_face(emb_sum, w_sum):
-    """Quality-weighted temporal pool → one L2-normalized face vector. Averaging
-    several frames' embeddings (weighted by quality) cancels per-frame noise, so
-    the same person enrolls/matches ONE stable gallery vector (less fragmentation).
-    Returns a plain list (JSON-serializable for the Brain payload), or None."""
-    if emb_sum is None or w_sum <= 0:
-        return None
-    v = np.asarray(emb_sum, dtype=np.float32)
-    n = float(np.linalg.norm(v))
-    if n <= 0:
-        return None
-    return (v / n).tolist()
-
-
-def save_snapshot(camera_uid, crop_bgr, stamp_ms, idx):
-    """Save the full-body crop under storage/img/<camera_uid>/ and return its path."""
-    out_dir = os.path.join(STORAGE_IMG, camera_uid)
-    os.makedirs(out_dir, exist_ok=True)
-    fname = f"{stamp_ms}_{idx}.jpg"
-    cv2.imwrite(os.path.join(out_dir, fname), crop_bgr)
-    return f"storage/img/{camera_uid}/{fname}"
-
-
-def save_face_snapshot(camera_uid, face_bgr, stamp_ms, idx):
-    """Save the aligned face crop next to the body crop as <stem>_face.jpg. The UI
-    derives this path from the body snapshot, so no contract change is needed."""
-    out_dir = os.path.join(STORAGE_IMG, camera_uid)
-    os.makedirs(out_dir, exist_ok=True)
-    fname = f"{stamp_ms}_{idx}_face.jpg"
-    cv2.imwrite(os.path.join(out_dir, fname), face_bgr)
-    return f"storage/img/{camera_uid}/{fname}"
-
-
-def save_frame_snapshot(camera_uid, frame_bgr, box_xyxy, stamp_ms, idx):
-    """Save the whole scene (downscaled, person's box drawn) as <stem>_full.jpg,
-    sharing the body snapshot's stem so the UI derives it the same way it does the
-    face. A verification companion — lets a human confirm the crops are the right
-    person, not part of the identity signal."""
-    out_dir = os.path.join(STORAGE_IMG, camera_uid)
-    os.makedirs(out_dir, exist_ok=True)
-    h, w = frame_bgr.shape[:2]
-    s = FULL_FRAME_MAX_W / w if w > FULL_FRAME_MAX_W else 1.0
-    img = cv2.resize(frame_bgr, (int(w * s), int(h * s))) if s < 1.0 else frame_bgr.copy()
-    x1, y1, x2, y2 = (int(v * s) for v in box_xyxy[:4])
-    cv2.rectangle(img, (x1, y1), (x2, y2), _COL_VIS, 2)
-    fname = f"{stamp_ms}_{idx}_full.jpg"
-    cv2.imwrite(os.path.join(out_dir, fname), img, [int(cv2.IMWRITE_JPEG_QUALITY), FULL_FRAME_QUALITY])
-    return f"storage/img/{camera_uid}/{fname}"
-
-
-# Per-run epoch baked into every detection_id. Tracker ids restart from t1 on
-# every pipeline launch, so without this a fresh run's "CAM-t3" would collide
-# with the previous run's "CAM-t3" still cached by the Brain's track-sticky map
-# (TTL minutes) — a different person could inherit the old identity.
-_RUN_EPOCH = int(time.time()) % 1_000_000
-
-
-def build_payload(camera_uid, score, face_embedding, body_embedding, snapshot_path, stamp_ms, idx):
-    """Part 1 → Part 2 detection payload (contracts/part1_to_part2.event.schema.json).
-
-    `idx` is the tracker's track id. detection_id is STABLE per track (no
-    timestamp) so every emit of the same person shares one id — the Brain can
-    dedup repeat Unknown sightings on it, group them into one 'Unknown person'
-    card, and keep a track's identity sticky across re-emits."""
-    return {
-        "detection_id": f"{camera_uid}-r{_RUN_EPOCH}-t{idx}",
-        "camera_id": camera_uid,
-        "timestamp": utc_now_iso(),
-        "detection_conf": round(float(score), 4),
-        "face_embedding": [float(x) for x in face_embedding] if face_embedding is not None else None,
-        "body_embedding": [float(x) for x in body_embedding] if body_embedding is not None else None,
-        "snapshot_path": snapshot_path,
-        "clip_path": None,                            # short-clip capture: TODO
-    }
 
 
 def main():

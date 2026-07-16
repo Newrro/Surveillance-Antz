@@ -1,0 +1,82 @@
+/* styles/grid.css — section split from the original styles.css (cascade order preserved). */
+/* ---------- Camera grid ---------- */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+.tile {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  background: linear-gradient(160deg, #171B22, #0E1116);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.12s;
+}
+.tile:hover { border-color: var(--accent); box-shadow: var(--glow); transform: translateY(-2px); }
+/* Live MJPEG feed fills the tile, sitting behind labels / brackets / detection
+   boxes. z-index:0 keeps it below the positioned overlay spans (which paint
+   above it in DOM order). */
+.tile-feed, .feed-video {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  z-index: 0;
+  background: #0E1116;
+}
+.tile::before {
+  content: '';
+  position: absolute; inset: 0;
+  background: repeating-linear-gradient(0deg, rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 1px, transparent 1px, transparent 3px);
+  pointer-events: none;
+}
+.tile-label {
+  position: absolute; top: 10px; left: 10px;
+  font-size: 12px; font-weight: 500;
+  background: rgba(10,12,15,0.6);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+}
+.tile-time {
+  position: absolute; bottom: 10px; right: 10px;
+  font-family: var(--font-mono); font-size: 11px;
+  color: var(--text-secondary);
+  background: rgba(10,12,15,0.6);
+  padding: 3px 7px;
+  border-radius: var(--radius-sm);
+}
+.tile-status {
+  position: absolute; top: 12px; right: 12px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent);
+}
+.tile.offline .tile-status { background: var(--danger); }
+.tile.offline .tile-label::after { content: ' · offline'; color: var(--danger); }
+.tile-count {
+  position: absolute; bottom: 10px; left: 10px;
+  font-size: 11px; color: var(--text-secondary);
+  background: rgba(10,12,15,0.6);
+  padding: 3px 8px; border-radius: var(--radius-sm);
+}
+.detbox {
+  position: absolute;
+  border: 1.5px solid var(--accent);
+  border-radius: 8px;
+}
+.detbox.category-Visitor { border-color: var(--warn); }
+.detbox.category-Unknown { border-color: var(--danger); }
+
+/* Camera feed corner brackets (signature detail) */
+.tile .bracket, .feed-frame .bracket {
+  position: absolute; width: 16px; height: 16px;
+  border: 1.5px solid transparent;
+  opacity: 0; transition: opacity 0.15s;
+}
+.tile:hover .bracket { opacity: 0.7; border-color: var(--accent); }
+.bracket.tl { top: 6px; left: 6px; border-right: none; border-bottom: none; }
+.bracket.tr { top: 6px; right: 6px; border-left: none; border-bottom: none; }
+.bracket.bl { bottom: 6px; left: 6px; border-right: none; border-top: none; }
+.bracket.br { bottom: 6px; right: 6px; border-left: none; border-top: none; }
+

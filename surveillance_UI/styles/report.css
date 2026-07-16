@@ -1,0 +1,120 @@
+/* styles/report.css — section split from the original styles.css (cascade order preserved). */
+/* ---------- Report: category groups + person cards ---------- */
+.report-section { margin-bottom: 24px; }
+.report-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.report-count { font-size: 12px; color: var(--text-muted); }
+.people-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.person-card {
+  position: relative;
+  background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px; cursor: pointer; box-shadow: var(--shadow);
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.12s;
+}
+.person-card:hover { border-color: var(--accent); box-shadow: var(--glow); transform: translateY(-2px); }
+.person-card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+/* Bigger, square snapshot thumbnail (real photo via photoCss, initials fallback) */
+.person-card-head .avatar.person-card-photo {
+  width: 96px; height: 96px; border-radius: var(--radius-sm);
+  font-size: 30px; flex-shrink: 0;
+}
+.person-card-head .name { font-size: 13.5px; font-weight: 600; }
+.person-card-head .sub { font-size: 11.5px; color: var(--text-muted); }
+/* Keep the "Last seen" label on one line; let its value wrap/align right */
+.person-card .kv { gap: 12px; }
+.person-card .kv .k { white-space: nowrap; flex-shrink: 0; }
+.person-card .kv .v { text-align: right; }
+
+/* Per-card delete button — top-right, immediately left of the merge button */
+.person-card-del {
+  position: absolute; top: 8px; right: 42px; z-index: 2;
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--text-muted);
+  opacity: 0.55;
+  transition: opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
+}
+.person-card-del i { font-size: 15px; }
+.person-card-del svg { width: 15px; height: 15px; display: block; }
+.person-card:hover .person-card-del { opacity: 1; }
+.person-card-del:hover {
+  background: var(--danger); color: #ffffff; border-color: var(--danger);
+  box-shadow: 0 0 14px rgba(255, 107, 107, 0.5);
+}
+
+/* Per-card merge button — top-right corner */
+.person-card-merge {
+  position: absolute; top: 8px; right: 8px; z-index: 2;
+  width: 27px; height: 27px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.28); color: var(--text-muted);
+  opacity: 0.55; transition: opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
+}
+.person-card-merge i { font-size: 15px; }
+.person-card:hover .person-card-merge { opacity: 1; }
+.person-card-merge:hover {
+  background: var(--accent); color: #06210a; border-color: var(--accent);
+  box-shadow: var(--glow);
+}
+
+/* Collapsible Unknown group — caret button next to the label */
+.report-caret-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; margin-left: 2px;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text-secondary); cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.report-caret-btn:hover { color: var(--text-primary); border-color: var(--accent); }
+.report-caret-btn i { font-size: 15px; transition: transform 0.15s; }
+.report-caret-btn.open i { transform: rotate(180deg); }
+
+/* Enroll-employee photo preview */
+.enroll-preview { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 10px; }
+.enroll-thumb { height: 84px; width: 84px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); }
+/* Per-sighting delete in the person log */
+.plog-row-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.plog-del-btn { background: none; border: 0; color: var(--text-muted); cursor: pointer; padding: 4px; border-radius: 6px; opacity: 0.55; transition: opacity 0.12s, color 0.12s; }
+.plog-del-btn:hover { opacity: 1; color: var(--danger); background: var(--danger-dim); }
+
+/* Selection mode: hide the per-card action buttons, show a checkbox instead */
+.person-card-check {
+  position: absolute; top: 8px; right: 8px; z-index: 3;
+  width: 24px; height: 24px; border-radius: 50%;
+  border: 1.5px solid var(--border-strong); background: rgba(0, 0, 0, 0.28);
+  display: none; align-items: center; justify-content: center;
+  color: transparent;
+}
+.person-card-check i { font-size: 14px; }
+.person-card.selectable { cursor: pointer; }
+.person-card.selectable .person-card-merge,
+.person-card.selectable .person-card-del { display: none; }
+.person-card.selectable .person-card-check { display: flex; }
+.person-card.selected { border-color: var(--accent); box-shadow: var(--glow); }
+.person-card.selected .person-card-check {
+  background: var(--accent); border-color: var(--accent); color: #06210a;
+}
+
+/* Merge action bar — floats above the nav dock while selecting */
+.merge-bar {
+  position: fixed; left: 50%; bottom: 92px;
+  transform: translateX(-50%) translateY(16px);
+  z-index: 46;
+  display: flex; align-items: center; gap: 14px;
+  padding: 10px 12px 10px 18px;
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 18px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.20);
+  -webkit-backdrop-filter: var(--glass-blur);
+          backdrop-filter: var(--glass-blur);
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: opacity 0.2s, transform 0.2s, visibility 0.2s;
+}
+.merge-bar.open { opacity: 1; visibility: visible; pointer-events: auto; transform: translateX(-50%) translateY(0); }
+.merge-bar-info { font-size: 13px; color: var(--text-primary); }
+.merge-bar-info b { color: var(--accent); font-family: var(--font-mono); }
+

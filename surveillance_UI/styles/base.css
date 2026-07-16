@@ -1,0 +1,82 @@
+/* styles/base.css — section split from the original styles.css (cascade order preserved). */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+:root {
+  /* Glassmorphism theme — frosted panels + light text over the forest photo */
+  --bg-0: transparent;                       /* app canvas — lets the photo through */
+  --bg-1: rgba(255, 255, 255, 0.09);         /* panels: topbar, cards, tables, sidebar, modals */
+  --bg-2: rgba(255, 255, 255, 0.14);         /* hover states, inputs */
+  --bg-3: rgba(255, 255, 255, 0.20);         /* avatars, secondary buttons */
+  --border: rgba(255, 255, 255, 0.16);
+  --border-strong: rgba(255, 255, 255, 0.32);
+
+  --text-primary: #F3F7F0;   /* near-white */
+  --text-secondary: rgba(238, 244, 235, 0.80);
+  --text-muted: rgba(238, 244, 235, 0.56);
+
+  --accent: #93C572;      /* bright leaf green — reads on dark glass */
+  --accent-2: #6FA24E;    /* deeper green — button gradient partner */
+  --on-accent: #12240C;   /* dark text for bright-green fills */
+  --accent-dim: rgba(147, 197, 114, 0.20);   /* translucent green for badges / active nav */
+  --warn: #EBB24A;        /* gold — visitor */
+  --warn-dim: rgba(235, 178, 74, 0.22);
+  --danger: #FF6B6B;      /* red — unknown / flagged */
+  --danger-dim: rgba(255, 107, 107, 0.16);
+
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  /* frosted-glass blur used across panels */
+  --glass-blur: saturate(160%) blur(18px);
+
+  --radius-sm: 14px;
+  --radius: 20px;
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.28);
+  --glow: 0 0 18px rgba(147, 197, 114, 0.45);
+
+  --mx: -999px;           /* live cursor position (set from JS) */
+  --my: -999px;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: url('../static/logo-bg.jpg') center center / cover no-repeat fixed;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Readability scrim over the forest photo + faint HUD grid, bright under cursor */
+#bg-fx {
+  position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(130% 100% at 50% 0%, rgba(12, 24, 16, 0.28), rgba(5, 11, 8, 0.66)),
+    linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px) 0 0 / 40px 40px,
+    linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px) 0 0 / 40px 40px;
+}
+/* brighter grid, revealed only in a circle around the pointer */
+#bg-fx::before {
+  content: ''; position: absolute; inset: 0;
+  background:
+    linear-gradient(rgba(147, 197, 114, 0.22) 1px, transparent 1px) 0 0 / 40px 40px,
+    linear-gradient(90deg, rgba(147, 197, 114, 0.22) 1px, transparent 1px) 0 0 / 40px 40px;
+  -webkit-mask-image: radial-gradient(circle 150px at var(--mx) var(--my), #000 0%, transparent 72%);
+          mask-image: radial-gradient(circle 150px at var(--mx) var(--my), #000 0%, transparent 72%);
+}
+/* soft green glow following the pointer */
+#bg-fx::after {
+  content: ''; position: absolute; inset: 0;
+  background: radial-gradient(circle 200px at var(--mx) var(--my), rgba(147, 197, 114, 0.10), transparent 70%);
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+::selection { background: var(--accent-dim); color: var(--accent); }
+

@@ -9,8 +9,19 @@ import re
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# app.js was split into ordered feature files (app-core.js … app-boot.js) for
+# readability. These static checks operate on the whole client, so reading
+# "app.js" transparently returns the concatenation of the split files in their
+# index.html load order — the tests stay meaningful without listing each file.
+_APP_PARTS = [
+    "app-core.js", "app-grid.js", "app-person.js", "app-admin.js",
+    "app-track.js", "app-log.js", "app-report.js", "app-boot.js",
+]
+
 
 def _read(name):
+    if name == "app.js" and not os.path.exists(os.path.join(HERE, name)):
+        return "\n".join(_read(p) for p in _APP_PARTS)
     with open(os.path.join(HERE, name), encoding="utf-8") as f:
         return f.read()
 

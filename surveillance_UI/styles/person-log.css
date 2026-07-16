@@ -1,0 +1,458 @@
+/* styles/person-log.css — section split from the original styles.css (cascade order preserved). */
+/* ---------- Person log modal (opens at ~3/4 of the screen) ---------- */
+.modal-plog {
+  width: 82vw; height: 82vh; max-width: 82vw; max-height: 82vh;
+  display: flex; flex-direction: column;
+}
+.plog-head { justify-content: flex-start; gap: 12px; flex-shrink: 0; }
+.plog-head .avatar { width: 44px; height: 44px; font-size: 14px; }
+.plog-who { display: flex; flex-direction: column; }
+.plog-who .name { font-size: 15px; font-weight: 600; }
+.plog-who .id { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+.plog-head .sidebar-close { margin-left: auto; }
+.modal-actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+
+/* Inline promote-to-employee control in the person-log modal header */
+.plog-promote { display: inline-flex; align-items: center; }
+.plog-promote-btn { padding: 5px 12px; font-size: 12.5px; }
+.plog-promote-form { display: inline-flex; align-items: center; gap: 6px; }
+.plog-promote-form select,
+.plog-promote-form input {
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text-primary); font-size: 12.5px; padding: 6px 10px; font-family: inherit;
+}
+.plog-promote-form input { width: 130px; }
+.plog-dept-label {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; color: var(--text-secondary);
+}
+
+/* Two-column body: details/report on the left, movement log on the right. */
+.plog-body-grid {
+  flex: 1; min-height: 0;
+  display: grid; grid-template-columns: minmax(300px, 0.85fr) 1.15fr; gap: 18px;
+}
+.plog-left { display: flex; flex-direction: column; gap: 14px; overflow-y: auto; padding-right: 4px; }
+.plog-right { display: flex; flex-direction: column; min-height: 0; }
+
+.plog-card {
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px;
+}
+.plog-card-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-secondary); margin-bottom: 10px; }
+.plog-details .kv { padding: 5px 0; font-size: 12.5px; }
+
+/* Weekly report chart */
+.plog-chart { position: relative; }
+.plog-svg { width: 100%; height: 128px; display: block; }
+.plog-area { fill: var(--accent-dim); stroke: none; }
+.plog-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.plog-dot { fill: var(--accent); }
+.plog-axis { fill: var(--text-muted); font-size: 9px; font-family: var(--font-mono); }
+.plog-chart-cap { font-size: 11px; color: var(--text-muted); margin-top: 6px; text-align: center; }
+.plog-hours {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);
+}
+.plog-hours-label { font-size: 12px; color: var(--text-secondary); }
+.plog-hours-val { font-size: 15px; font-weight: 700; font-family: var(--font-mono); color: var(--accent); }
+
+/* Month/year + day tiles */
+.plog-monthyear { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.plog-my-label { font-size: 12px; font-weight: 600; margin-right: auto; }
+.plog-monthyear select {
+  background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text-primary); font-size: 12.5px; padding: 6px 8px; font-family: inherit;
+}
+.plog-daygrid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.plog-day {
+  aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-1); color: var(--text-secondary);
+  font-size: 12px; font-family: var(--font-mono); cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.plog-day:hover:not(.selected) { border-color: var(--accent); }
+.plog-day.has { color: var(--text-primary); font-weight: 600; border-color: var(--border-strong); }
+.plog-day.selected { background: var(--accent); color: #ffffff; border-color: var(--accent); font-weight: 700; box-shadow: var(--glow); }
+
+/* Right column: date heading + filters + movement log */
+.plog-right-head { margin-bottom: 12px; }
+.plog-sel-date { font-size: 16px; font-weight: 600; font-family: var(--font-mono); }
+.plog-sel-day { font-size: 12.5px; color: var(--text-secondary); margin-top: 2px; }
+.plog-filters { display: flex; align-items: flex-end; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.plog-filters .filter-field { flex: 1; min-width: 150px; }
+.plog-filters input, .plog-filters select {
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text-primary); font-size: 13px; padding: 8px 10px; font-family: inherit;
+  outline: none; width: 100%; box-sizing: border-box; height: 38px;
+}
+.plog-filters .btn { flex-shrink: 0; height: 38px; }
+.plog-right .table-wrap { flex: 1; min-height: 0; overflow-y: auto; }
+
+/* Photo-captured cell in the movement log */
+.plog-cap { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); }
+.plog-cap .ti { font-size: 14px; }
+
+@media (max-width: 860px) {
+  .modal-plog { width: 94vw; height: 90vh; max-width: 94vw; }
+  .plog-body-grid { grid-template-columns: 1fr; overflow-y: auto; }
+  .plog-right { min-height: 320px; }
+}
+
+/* ---------- Log page: calendar + day datasheet ---------- */
+.log-layout {
+  display: grid;
+  grid-template-columns: minmax(340px, 0.9fr) 1.2fr;
+  gap: 20px;
+  align-items: stretch;                 /* both columns share the taller height */
+  height: calc(100vh - 150px);          /* fixed height so the sheet scrolls, not the page */
+  min-height: 0;
+}
+.log-controls { display: flex; flex-direction: column; gap: 16px; }
+
+.log-filters { display: flex; flex-direction: column; gap: 12px; }
+.log-filters input, .log-filters select, .log-monthyear select {
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text-primary); font-size: 13px; padding: 8px 10px; font-family: inherit; outline: none; width: 100%;
+  box-sizing: border-box; height: 38px;   /* uniform bar size across all filters */
+}
+.log-filters input:focus, .log-filters select:focus, .log-monthyear select:focus { border-color: var(--accent); }
+
+.time-range { display: flex; align-items: center; gap: 8px; }
+.time-range input { flex: 1; }
+.time-range-sep { font-size: 12px; color: var(--text-muted); }
+
+.log-monthyear {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: var(--bg-1); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow);
+}
+.log-monthyear select { width: auto; }
+.log-my-label { font-size: 13px; font-weight: 600; margin-right: auto; }
+
+.cal { background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); }
+.cal-weekdays, .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.cal-weekdays { margin-bottom: 8px; }
+.cal-weekdays span { text-align: center; font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.cal-cell {
+  position: relative; height: 42px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-2); color: var(--text-primary);
+  font-size: 13px; font-family: var(--font-mono); cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.cal-cell.empty { border: none; background: none; cursor: default; }
+.cal-cell:hover:not(.empty):not(.selected) { border-color: var(--accent); }
+.cal-cell.selected { background: var(--accent); color: #ffffff; border-color: var(--accent); font-weight: 700; box-shadow: var(--glow); }
+.cal-dot { position: absolute; bottom: 5px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+.cal-cell.selected .cal-dot { background: #ffffff; }
+
+.log-sheet {
+  background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px; box-shadow: var(--shadow);
+  display: flex; flex-direction: column;    /* so the table fills the panel */
+  min-height: 0; overflow: hidden;          /* contain the scroll to the table below */
+}
+.log-sheet-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin-bottom: 14px; }
+/* Category toggle next to the datasheet date (replaces the old dropdown) */
+.log-cat-toggle {
+  display: inline-flex; gap: 4px; padding: 4px;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.log-cat-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px; border: none; border-radius: 10px;
+  background: none; color: var(--text-secondary); cursor: pointer;
+  font: inherit; font-size: 12.5px; font-weight: 500;
+  transition: background 0.15s, color 0.15s;
+}
+.log-cat-btn i { font-size: 15px; }
+.log-cat-btn:hover { color: var(--text-primary); }
+.log-cat-btn.active { background: var(--accent); color: #06210a; }
+.log-sheet-date { font-size: 16px; font-weight: 600; font-family: var(--font-mono); }
+.log-sheet-day { font-size: 12.5px; color: var(--text-secondary); margin-top: 2px; }
+.log-sheet .table-wrap { box-shadow: none; flex: 1; min-height: 0; overflow-y: auto; }
+
+@media (max-width: 940px) { .log-layout { grid-template-columns: 1fr; min-height: 0; } }
+
+/* ---------- Settings: department chips ---------- */
+.chip-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: 20px; padding: 5px 6px 5px 12px; font-size: 12.5px;
+}
+.chip-x { background: none; border: none; color: var(--text-muted); display: flex; padding: 2px; border-radius: 50%; }
+.chip-x:hover { color: var(--danger); background: var(--danger-dim); }
+
+/* ═══════════ HUD accents — corner brackets & header glow ═══════════ */
+
+/* Glowing accent segment beneath every section header */
+.view-header {
+  position: relative;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.view-header::after {
+  content: ''; position: absolute; left: 0; bottom: -1px;
+  width: 120px; height: 2px;
+  background: var(--accent);
+  box-shadow: var(--glow);
+}
+
+/* Corner-bracket framing on the main structural panels */
+.cal, .log-monthyear, .log-sheet, .plog-card, .inside-stat {
+  position: relative;
+}
+.cal::before, .cal::after,
+.log-monthyear::before, .log-monthyear::after,
+.log-sheet::before, .log-sheet::after,
+.plog-card::before, .plog-card::after,
+.inside-stat::before, .inside-stat::after {
+  content: ''; position: absolute; width: 14px; height: 14px;
+  pointer-events: none; z-index: 2;
+  opacity: 0.75;
+}
+.cal::before, .log-monthyear::before, .log-sheet::before,
+.plog-card::before, .inside-stat::before {
+  top: -1px; left: -1px;
+  border-top: 2px solid var(--accent); border-left: 2px solid var(--accent);
+  border-top-left-radius: 4px;
+}
+.cal::after, .log-monthyear::after, .log-sheet::after,
+.plog-card::after, .inside-stat::after {
+  bottom: -1px; right: -1px;
+  border-bottom: 2px solid var(--accent); border-right: 2px solid var(--accent);
+  border-bottom-right-radius: 4px;
+}
+
+/* Nav status ticks at the foot of the sidebar */
+.nav-ticks {
+  margin-top: auto;
+  display: flex; flex-direction: column; gap: 6px; align-items: center;
+  padding-bottom: 4px;
+}
+.nav-ticks span {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: rgba(70, 114, 53, 0.25);
+}
+.nav-ticks span:nth-child(1) { animation: hud-blink 1.8s ease-in-out infinite; }
+.nav-ticks span:nth-child(2) { animation: hud-blink 1.8s ease-in-out 0.6s infinite; }
+.nav-ticks span:nth-child(3) { animation: hud-blink 1.8s ease-in-out 1.2s infinite; }
+@keyframes hud-blink {
+  0%, 100% { background: rgba(70, 114, 53, 0.2); box-shadow: none; }
+  50%      { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+}
+
+/* ═══════════ Track: currently-inside list ═══════════ */
+.modal-track { width: 720px; max-width: 92vw; }
+.track-head { gap: 10px; }
+.track-head h3 { display: flex; align-items: center; gap: 8px; }
+.track-count {
+  font-family: var(--font-mono); font-size: 12px; font-weight: 600;
+  background: var(--accent-dim); color: var(--accent);
+  border-radius: 20px; padding: 2px 10px;
+}
+.track-head .sidebar-close { margin-left: auto; }
+.modal-track .desc { font-size: 12.5px; color: var(--text-secondary); margin: 0 0 12px; }
+.track-search {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 8px 11px;
+  color: var(--text-muted); margin-bottom: 14px;
+}
+.track-search:focus-within { border-color: var(--accent); box-shadow: var(--glow); }
+.track-search input {
+  background: none; border: none; outline: none;
+  color: var(--text-primary); font-size: 13px; width: 100%; font-family: inherit;
+}
+.track-search input::placeholder { color: var(--text-muted); }
+.modal-track .table-wrap { max-height: 56vh; overflow-y: auto; }
+.track-empty:hover { background: none; cursor: default; }
+.track-empty-msg {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  color: var(--text-muted); font-size: 13px; padding: 22px 8px;
+}
+.track-empty-msg .ti { font-size: 16px; color: var(--text-secondary); }
+.track-name { font-size: 13.5px; font-weight: 500; }
+.track-uid { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.track-lasttime { color: var(--text-muted); font-size: 11.5px; margin-left: 4px; }
+.track-go { padding: 6px 12px; font-size: 12px; }
+
+/* ═══════════ Auto-track simulation ═══════════ */
+.modal-autotrack { width: 860px; max-width: 94vw; }
+.autotrack-head { gap: 12px; }
+.autotrack-head .avatar { width: 44px; height: 44px; font-size: 14px; }
+.at-back { padding: 7px 10px; }
+.autotrack-head .sidebar-close { margin-left: 4px; }
+
+/* Status pill (state machine: acquiring → tracking → located / exited) */
+.at-status {
+  margin-left: auto;
+  display: inline-flex; align-items: center; gap: 7px;
+  font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 5px 11px; border-radius: 20px; white-space: nowrap;
+}
+.at-status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.at-status.acquiring { background: var(--warn-dim); color: var(--warn); }
+.at-status.acquiring .at-status-dot { animation: cctv-rec 1s steps(2) infinite; }
+.at-status.tracking { background: var(--accent-dim); color: var(--accent); }
+.at-status.tracking .at-status-dot { animation: cctv-rec 0.8s ease-in-out infinite; }
+.at-status.located { background: rgba(5, 150, 105, 0.12); color: #059669; }
+.at-status.exited { background: var(--danger-dim); color: var(--danger); }
+
+.autotrack-body { display: grid; grid-template-columns: 1.7fr 1fr; gap: 16px; margin-top: 4px; }
+
+.at-feed { aspect-ratio: 16 / 9; }
+.at-feed .bracket { opacity: 0.7; border-color: var(--accent); }   /* always framed while tracking */
+
+/* Sweeping scan line across the tracked feed — full top-to-bottom sweep */
+.at-scanline {
+  position: absolute; left: 8px; right: 8px; height: 2px; z-index: 3;
+  background: linear-gradient(90deg, transparent, #7FB069, transparent);
+  box-shadow: 0 0 10px 2px rgba(127, 176, 105, 0.7);
+  /* Sweep once, then hold the final (off-screen, faded-out) state. */
+  animation: at-scan 2.4s ease-in-out forwards;
+}
+/* Percentage-based so the line always covers the entire feed height,
+   whatever the feed is sized to (normal, modal, or fullscreen). */
+@keyframes at-scan {
+  0%   { top: 0;    opacity: 0; }
+  6%   { opacity: 1; }
+  94%  { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}
+
+/* Lock-on detection box — animates in on every camera jump */
+.at-detbox {
+  z-index: 4;
+  border-width: 2px;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.35), 0 0 14px rgba(70,114,53,0.55);
+  animation: at-lock 0.5s ease-out;
+}
+.at-detbox.category-Visitor { box-shadow: 0 0 0 1px rgba(0,0,0,0.35), 0 0 14px rgba(194,116,10,0.6); }
+.at-detbox.category-Unknown { box-shadow: 0 0 0 1px rgba(0,0,0,0.35), 0 0 14px rgba(217,45,32,0.6); }
+@keyframes at-lock {
+  0%   { transform: scale(1.5); opacity: 0; }
+  60%  { transform: scale(0.94); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.at-crosshair {
+  position: absolute; top: 50%; left: 50%; width: 18px; height: 18px;
+  transform: translate(-50%, -50%);
+  background:
+    linear-gradient(currentColor, currentColor) center/2px 100% no-repeat,
+    linear-gradient(currentColor, currentColor) center/100% 2px no-repeat;
+  color: inherit; opacity: 0.7;
+}
+
+/* "Scanning network" placeholder before the target is acquired */
+.at-searching {
+  position: absolute; inset: 0; z-index: 3;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.08em;
+  color: #7FB069; text-transform: uppercase;
+}
+.at-searching .ti { font-size: 18px; animation: fp-pulse 1.2s ease-in-out infinite; }
+
+.at-camid {
+  position: absolute; top: 14px; right: 14px; z-index: 3;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em;
+  color: var(--text-secondary); background: rgba(10,12,15,0.6);
+  padding: 4px 8px; border-radius: var(--radius-sm);
+}
+
+/* Right column — live trail + progress */
+.at-side {
+  background: var(--bg-1); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.at-side .sidebar-section-title { margin-top: 0; }
+.at-trail { flex: 1; overflow-y: auto; }
+.at-trail-item { animation: at-lock 0.4s ease-out; }
+.at-trail-item.current { color: var(--accent); font-weight: 600; }
+.at-trail-item.current .t { color: var(--accent); }
+.at-here { margin-left: auto; color: var(--accent); font-size: 14px; }
+
+.at-progress { margin-top: 12px; }
+.at-progress-label {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em;
+  color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px;
+}
+.at-progress-bar {
+  height: 5px; border-radius: 3px; background: var(--bg-3); overflow: hidden;
+}
+.at-progress-bar span {
+  display: block; height: 100%; border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent-2), var(--accent));
+  box-shadow: 0 0 8px rgba(70, 114, 53, 0.5);
+  transition: width 0.5s ease;
+}
+
+@media (max-width: 720px) {
+  .autotrack-body { grid-template-columns: 1fr; }
+  .at-side { max-height: 200px; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   GLASSMORPHISM LAYER
+   Frosted-glass blur on every translucent panel + contrast fixes
+   for the brighter accent. Everything below rides on the palette
+   variables redefined in :root, so the whole app reads as one
+   system over the forest photo.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Frosted blur on all panel-level surfaces */
+.topbar,
+.table-wrap,
+.record-card, .person-card,
+.modal, .photo-pop,
+.sidebar-panel,
+.cal, .log-monthyear, .log-sheet,
+.plog-card, .inside-stat,
+.at-side,
+.side-panel,
+.chip {
+  -webkit-backdrop-filter: var(--glass-blur);
+          backdrop-filter: var(--glass-blur);
+}
+
+/* Softer, rounder cards for the glass look */
+.record-card, .person-card, .modal, .photo-pop,
+.cal, .log-monthyear, .log-sheet, .plog-card,
+.inside-stat, .at-side, .table-wrap { border-radius: var(--radius); }
+
+/* Inputs / search bars as light frosted glass */
+.field input, .field select,
+.filters input, .filters select,
+.log-filters input, .log-filters select, .log-monthyear select,
+.plog-filters input, .plog-filters select, .plog-monthyear select,
+.settings-row-actions select,
+.topbar-search, .track-search {
+  -webkit-backdrop-filter: blur(6px);
+          backdrop-filter: blur(6px);
+}
+input::placeholder, textarea::placeholder { color: var(--text-muted); }
+/* Native select drop-downs render on the OS — keep their options readable */
+.field select option, select option { color: #16240F; background: #EAF0E4; }
+
+/* Dark text on the brighter-green fills so labels stay legible */
+.btn-primary,
+.cal-cell.selected,
+.plog-day.selected { color: var(--on-accent); }
+.btn-primary { text-shadow: none; }
+
+/* Camera feeds sit over glass — keep a crisp translucent frame */
+.tile { background: linear-gradient(160deg, rgba(20,26,33,0.55), rgba(10,14,20,0.65)); border-radius: 14px; }
+.feed-frame { border-radius: 14px; }
+
+/* Avatars read better as solid-ish chips on glass */
+.avatar { color: var(--text-primary); }
+
+/* Reduce the heavy inner shadow on modals to a soft glass edge */
+.modal, .photo-pop { box-shadow: 0 20px 60px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.14); }
+.sidebar-panel { box-shadow: -12px 0 40px rgba(0,0,0,0.4), inset 1px 0 0 rgba(255,255,255,0.12); }

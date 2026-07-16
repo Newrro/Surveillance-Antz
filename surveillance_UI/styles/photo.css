@@ -1,0 +1,60 @@
+/* styles/photo.css — section split from the original styles.css (cascade order preserved). */
+/* ---------- Grid: "currently inside" banner ---------- */
+.grid-header-left { display: flex; align-items: center; gap: 18px; flex: 1; justify-content: space-between; }
+.grid-stats { display: flex; align-items: stretch; gap: 14px; }
+.log-photo { border-radius: var(--radius-sm); }
+
+/* Clickable avatar in the person-details popup */
+.plog-avatar-clickable { cursor: pointer; transition: box-shadow 0.15s, transform 0.1s; }
+.plog-avatar-clickable:hover { box-shadow: var(--glow); transform: scale(1.05); }
+
+/* Enlarged person-photo popup */
+.photo-pop {
+  position: relative;
+  background: var(--bg-1); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); padding: 28px 32px;
+  box-shadow: 0 12px 50px rgba(16, 24, 40, 0.25), var(--glow);
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  min-width: 240px;
+}
+.photo-pop .sidebar-close { position: absolute; top: 12px; right: 12px; }
+.photo-big {
+  width: 180px; height: 180px; border-radius: var(--radius);
+  background: var(--accent-dim); border: 1.5px solid var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono); font-size: 56px; font-weight: 700; color: var(--accent);
+  box-shadow: inset 0 0 24px rgba(70, 114, 53, 0.15);
+  margin-bottom: 6px;
+}
+.photo-name { font-size: 16px; font-weight: 600; color: var(--text-primary); }
+.photo-sub { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); }
+/* Face + full-body crops, plus the full-scene verification frame, in the popup */
+.photo-imgs { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: center; margin-bottom: 8px; }
+.photo-fig { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.photo-fig figcaption { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.photo-img { border-radius: var(--radius); border: 1.5px solid var(--accent); object-fit: cover; background: var(--accent-dim); }
+#photo-face-img { width: 180px; height: 180px; }
+#photo-body-img { width: 180px; height: 234px; }
+/* Full scene: wider (16:9), whole frame visible (contain, not cropped) so the
+   drawn box can be checked against the crops. */
+#photo-full-img { width: 416px; height: 234px; max-width: 100%; object-fit: contain; }
+.inside-stat {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--accent-dim); border: 1px solid var(--accent);
+  border-radius: var(--radius); padding: 10px 16px;
+}
+.inside-num { font-size: 30px; font-weight: 700; color: var(--accent); line-height: 1; font-family: var(--font-mono); }
+.inside-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.inside-sub { font-size: 11px; color: var(--text-secondary); }
+
+/* ---------- Grid: camera title ABOVE the thumbnail ---------- */
+.tile-head { display: flex; align-items: center; gap: 8px; margin: 0 2px 6px; }
+.tile-head .tile-status { position: static; width: 8px; height: 8px; flex-shrink: 0; }
+.tile-status.off { background: var(--danger); }
+.tile-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.tile-loc { font-size: 11.5px; color: var(--text-muted); margin-left: auto; }
+
+/* ---------- Log / filter field labels ---------- */
+.filter-field { display: flex; flex-direction: column; gap: 4px; }
+.filter-field label { font-size: 11px; color: var(--text-secondary); }
+

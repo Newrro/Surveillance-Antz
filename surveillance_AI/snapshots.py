@@ -2,6 +2,7 @@
    quality-weighted face pooling. Extracted from pipeline.py."""
 
 import os
+import shutil
 
 import cv2
 import numpy as np
@@ -10,9 +11,46 @@ from ppl_colors import _COL_VIS
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STORAGE_IMG = os.path.join(REPO_ROOT, "storage", "img")
+# Tier-A durable per-identity photos live HERE — deliberately OUTSIDE storage/img
+# so the storage pruner (which only walks storage/img) never deletes them.
+PROFILES_DIR = os.path.join(REPO_ROOT, "storage", "profiles")
 MIN_CROP_SIDE = 24  # skip crops too tiny to embed reliably
 FULL_FRAME_MAX_W = int(os.environ.get("FULL_FRAME_MAX_W", "1280"))
 FULL_FRAME_QUALITY = int(os.environ.get("FULL_FRAME_QUALITY", "88"))
+
+
+def _abs(relpath):
+    if not relpath:
+        return None
+    return relpath if os.path.isabs(relpath) else os.path.join(REPO_ROOT, relpath)
+
+
+def save_profile_photo(identity_id, face_path=None, snap_path=None):
+    """Tier-A durable per-identity photo → storage/profiles/<identity_id>.jpg.
+
+    This is the ONE image the UI shows for a person, and it is NEVER pruned (the
+    folder is outside storage/img), so a face never disappears from the Report/
+    Records when the per-sighting frames age out. Prefer the aligned FACE crop; a
+    face always refreshes the profile, while a body-only shot only FILLS an empty
+    slot (so we never downgrade a good face profile to a back/body shot).
+
+    Best-effort — copies from the already-saved snapshot files; never raises."""
+    if identity_id is None:
+        return None
+    try:
+        os.makedirs(PROFILES_DIR, exist_ok=True)
+        dst = os.path.join(PROFILES_DIR, f"{identity_id}.jpg")
+        face = _abs(face_path)
+        if face and os.path.exists(face):
+            shutil.copyfile(face, dst)          # a real face → always refresh
+            return dst
+        body = _abs(snap_path)
+        if body and os.path.exists(body) and not os.path.exists(dst):
+            shutil.copyfile(body, dst)          # body-only → fill an empty slot only
+            return dst
+    except OSError:
+        pass
+    return None
 
 
 def crop_person(frame_bgr, box_xyxy, mask=None):

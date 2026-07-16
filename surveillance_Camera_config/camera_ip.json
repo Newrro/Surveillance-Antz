@@ -1,0 +1,14 @@
+{
+  "_comment": "REAL credentials (gitignored). Keys MUST match camera_uid in cameras.json. stream_type 'sub' = lighter …/102, 'main' = full …/101. Cameras are streamed DIRECTLY by IP — the NVR at 192.168.1.9 only serves one camera over RTSP, so it is NOT used. Source: Downloads/livestream/nvr_stream.py (read from the NVR's InputProxy channel config).",
+  "stream_type": "sub",
+  "cameras": {
+    "GATE-RIGHT":              { "ip": "192.168.1.210", "username": "admin", "password": "Admin@123", "rtsp_path": "Streaming/Channels/101" },
+    "GATE-INSIDE-LEFT":        { "ip": "192.168.1.202", "username": "admin", "password": "Admin@123", "rtsp_path": "Streaming/Channels/101" },
+    "GATE-OUTSIDE-LEFT":       { "ip": "192.168.1.205", "username": "admin", "password": "Admin@123", "rtsp_path": "Streaming/Channels/101" },
+    "PATHWAY-FRONT":           { "ip": "192.168.1.236", "username": "admin", "password": "Admin@123", "rtsp_path": "Streaming/Channels/101" },
+    "CAVILAND-FRONT":          { "ip": "192.168.1.237", "username": "admin", "password": "Admin@123", "rtsp_path": "Streaming/Channels/101" },
+    "SANJEEVAN-INSIDE-FRONT":  { "ip": "192.168.1.30",  "username": "admin", "password": "Lset@123",  "rtsp_path": "Streaming/Channels/101" },
+    "SANJEEVAN-INSIDE":        { "ip": "192.168.1.31",  "username": "admin", "password": "Lset@123",  "rtsp_path": "Streaming/Channels/101" },
+    "TURRET":                  { "url": "http://192.168.1.9:8080/local_feed" }
+  }
+}

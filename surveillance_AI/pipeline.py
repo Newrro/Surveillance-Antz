@@ -67,7 +67,7 @@ from ppl_colors import _COL_EMP, _COL_PERSON, _COL_UNKNOWN, _COL_VIS  # noqa: E4
 from geometry import _iou, _label_for_box, _occluded, _overlap_frac  # noqa: E402,F401
 from snapshots import (  # noqa: E402,F401
     crop_person, _crop_sharpness, _pooled_face,
-    save_snapshot, save_face_snapshot, save_frame_snapshot,
+    save_snapshot, save_face_snapshot, save_frame_snapshot, save_profile_photo,
 )
 from payload import build_payload, utc_now_iso, _display_from_brain  # noqa: E402,F401
 
@@ -365,6 +365,11 @@ def main():
                 j = session.post(f"{args.brain_url}/events", json=payload, timeout=10).json()
                 disp, color = _display_from_brain(j)
                 locked = j.get("label") in ("Visitor", "Employee")
+                # Tier-A: give this identity a durable profile photo (never pruned)
+                # so its face survives after the per-sighting frames age out.
+                iid = j.get("identity_id")
+                if iid is not None:
+                    save_profile_photo(iid, t.face_path, t.snap_path)
             except Exception as e:  # noqa: BLE001 — keep the worker alive
                 print(f"    → POST failed: {e}")
         if disp is None:                     # offline / no --emit → local gallery

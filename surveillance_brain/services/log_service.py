@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from services import media_paths
 
 from db.connection import get_session
 from db.models import (
@@ -82,6 +83,7 @@ def _row_to_event(r: Any) -> Dict[str, Any]:
         "matched_by": r.matched_by.value if r.matched_by else None,
         "similarity": r.similarity,
         "snapshot": r.snapshot_path,
+        "profile": media_paths.profile_rel(r.identity_id),   # durable Tier-A photo (if any)
         "clip": r.clip_path,
     }
 

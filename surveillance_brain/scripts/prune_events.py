@@ -8,7 +8,7 @@ disabled (ENABLE_MIDNIGHT_FLUSH=0), so run.sh runs THIS instead — it touches
 only Postgres (no Qdrant client), so it's safe alongside the embedded-Qdrant
 Brain process.
 
-Deletes detection_events older than config.RETENTION_DAYS (0 = keep forever).
+Deletes detection_events older than config.EVENT_RETENTION_DAYS (0 = keep forever).
 Rows are exported to JSONL by the archive job before this trims the live ledger.
 
 Run once:      python scripts/prune_events.py
@@ -29,7 +29,7 @@ PRUNE_INTERVAL_S = float(os.environ.get("PRUNE_INTERVAL_S", "3600"))
 
 
 async def prune_once() -> int:
-    if config.RETENTION_DAYS <= 0:
+    if config.EVENT_RETENTION_DAYS <= 0:
         return 0
     async with get_session() as session:
         result = await session.execute(
@@ -37,18 +37,18 @@ async def prune_once() -> int:
                 "DELETE FROM detection_events "
                 "WHERE detected_at < NOW() - make_interval(days => :days)"
             ),
-            {"days": int(config.RETENTION_DAYS)},
+            {"days": int(config.EVENT_RETENTION_DAYS)},
         )
     deleted = result.rowcount or 0
     if deleted:
         print(f"[prune-events] deleted {deleted} row(s) older than "
-              f"{config.RETENTION_DAYS}d", flush=True)
+              f"{config.EVENT_RETENTION_DAYS}d", flush=True)
     return deleted
 
 
 async def _loop() -> None:
     print(f"[prune-events] loop every {PRUNE_INTERVAL_S:g}s "
-          f"(keep {config.RETENTION_DAYS}d)", flush=True)
+          f"(keep {config.EVENT_RETENTION_DAYS}d)", flush=True)
     while True:
         try:
             await prune_once()

@@ -87,10 +87,10 @@ async def run_archive() -> None:
 
 
 async def run_retention() -> None:
-    """Delete detection_events older than config.RETENTION_DAYS. They are archived
+    """Delete detection_events older than config.EVENT_RETENTION_DAYS. They are archived
     to JSONL first (run_archive), so this only trims the live ledger — the one
     table that grows without bound on a 24/7 system. No-op when RETENTION_DAYS<=0."""
-    if config.RETENTION_DAYS <= 0:
+    if config.EVENT_RETENTION_DAYS <= 0:
         return
     start = datetime.utcnow()
     deleted = 0
@@ -101,12 +101,12 @@ async def run_retention() -> None:
                     "DELETE FROM detection_events "
                     "WHERE detected_at < NOW() - make_interval(days => :days)"
                 ),
-                {"days": int(config.RETENTION_DAYS)},
+                {"days": int(config.EVENT_RETENTION_DAYS)},
             )
             deleted = result.rowcount or 0
         logger.info(
             "Retention: deleted %d detection_event(s) older than %d day(s) in %.2fs",
-            deleted, config.RETENTION_DAYS, (datetime.utcnow() - start).total_seconds(),
+            deleted, config.EVENT_RETENTION_DAYS, (datetime.utcnow() - start).total_seconds(),
         )
     except Exception as e:  # noqa: BLE001
         logger.error("Retention: detection_events prune failed: %s", e)
@@ -156,7 +156,7 @@ def start_scheduler() -> AsyncIOScheduler:
     logger.info(
         "Schedulers registered (flush=%r archive=%r retention=%r keep=%dd)",
         config.MIDNIGHT_FLUSH_CRON, config.ARCHIVE_CRON,
-        config.RETENTION_CRON, config.RETENTION_DAYS,
+        config.RETENTION_CRON, config.EVENT_RETENTION_DAYS,
     )
     return _scheduler
 

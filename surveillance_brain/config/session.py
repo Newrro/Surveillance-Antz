@@ -18,8 +18,20 @@ class _SessionCronSettings(BaseModel):
     ARCHIVE_CRON: str = "*/30 * * * *"       # export logs+datasheet every 30 min
     RETENTION_CRON: str = "30 0 * * *"       # prune old detection_events @ 00:30
 
-    # Delete detection_events older than this many days (0 = keep forever). They
-    # are archived to JSONL first (ARCHIVE_CRON), so this only trims the live
-    # ledger — the unbounded table on a 24/7 system. Vectors are per-identity
-    # (bounded) and unknowns are cleared daily, so only this table needs ageing.
+    # ---- Tiered retention (2026-07 rework) ------------------------------
+    # The old single RETENTION_DAYS conflated two very different things and
+    # caused real record loss. They are now split:
+    #
+    #   EVENT_RETENTION_DAYS  — detection_events ROWS (who/where/when). These are
+    #       tiny (~0.5 KB) and archived to JSONL nightly, so we keep them LONG
+    #       (movement history / attendance). 0 = keep forever.
+    #   MEDIA_RETENTION_DAYS  — per-sighting JPEGs under storage/img (the bulk).
+    #       Forensic media whose value decays with age; pruned on this window
+    #       (with STORAGE_MAX_GB as a size backstop). Losing an old frame does
+    #       NOT lose the sighting row or the person's durable profile photo
+    #       (storage/profiles/<id>.jpg, never pruned).
+    #
+    # RETENTION_DAYS is kept as a back-compat fallback for either if unset.
     RETENTION_DAYS: int = 7
+    EVENT_RETENTION_DAYS: int = 365
+    MEDIA_RETENTION_DAYS: int = 30

@@ -72,9 +72,16 @@ export IDENTITY_MAX_PROBES="${IDENTITY_MAX_PROBES:-6}"    # frames pooled (upper
 export IDENTITY_MIN_EMIT_PROBES="${IDENTITY_MIN_EMIT_PROBES:-3}"  # show a first label after this many face frames
 export IDENTITY_LATENCY_BUDGET="${IDENTITY_LATENCY_BUDGET:-2.5}"  # re-probe an emitted track this often (was 1.5 → too hot)
 
-# ── Storage retention (bound storage/img growth on a 24/7 system) ────────────
-export RETENTION_DAYS="${RETENTION_DAYS:-7}"   # delete snapshots older than this
-export STORAGE_MAX_GB="${STORAGE_MAX_GB:-5}"   # hard ceiling; oldest deleted first
+# ── Tiered retention (bound growth on a 24/7 system without losing records) ──
+# Two DIFFERENT windows, deliberately split:
+#   MEDIA_RETENTION_DAYS — per-sighting JPEGs under storage/img (the bulk). Short
+#       window + STORAGE_MAX_GB size backstop. Durable per-identity photos in
+#       storage/profiles/ are NOT here and are never pruned.
+#   EVENT_RETENTION_DAYS — detection_events ROWS (who/where/when). Tiny + archived
+#       nightly, so kept LONG (movement history / attendance). Read by the Brain.
+export MEDIA_RETENTION_DAYS="${MEDIA_RETENTION_DAYS:-30}"
+export EVENT_RETENTION_DAYS="${EVENT_RETENTION_DAYS:-365}"
+export STORAGE_MAX_GB="${STORAGE_MAX_GB:-50}"  # hard ceiling on storage/img; oldest deleted first
 export PRUNE_INTERVAL_S="${PRUNE_INTERVAL_S:-3600}"
 export PYTHONUNBUFFERED=1                     # live logs (no block-buffering to the log file)
 
@@ -137,7 +144,7 @@ cmd_start() {
   _start_one pipeline "$ROOT/surveillance_AI" "$LOGS/pipeline.log" \
     env HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
     "$AI_PY" pipeline.py "${cam_arg[@]}" $PIPELINE_ARGS --brain-url http://localhost:8000
-  log "Starting storage pruner (keep ${RETENTION_DAYS}d, cap ${STORAGE_MAX_GB}GB)…"
+  log "Starting storage pruner (media ${MEDIA_RETENTION_DAYS}d, cap ${STORAGE_MAX_GB}GB; event rows ${EVENT_RETENTION_DAYS}d)…"
   _start_one prune "$ROOT/surveillance_AI" "$LOGS/prune.log" \
     "$AI_PY" prune_storage.py --loop
   # DB retention (Postgres-only; the Brain's own scheduler is off in native mode).

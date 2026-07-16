@@ -1,13 +1,12 @@
 {
   "_comment": "Authoritative camera metadata (NO credentials — those live in cameras.secrets.json, gitignored). role: 'identify' = run detect+segment+ReID+identity (high-res gate/back cams for feature extraction); 'detect' = detection only (path/perimeter cams). match_threshold (optional) overrides feature_id's global MATCH_THRESHOLD for this camera only — raise it on a camera you want stricter. is_exit_camera drives the Brain's presence-session close. REVIEW roles/zones/exit flags for your site.",
   "cameras": [
-    { "camera_uid": "GATE-RIGHT",            "name": "Front Gate Right",        "zone_id": "ZONE-GATE",      "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75 },
-    { "camera_uid": "GATE-INSIDE-LEFT",      "name": "Front Gate Inside Left",  "zone_id": "ZONE-GATE",      "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75 },
-    { "camera_uid": "GATE-OUTSIDE-LEFT",     "name": "Front Gate Outside Left", "zone_id": "ZONE-GATE",      "is_exit_camera": true,  "is_active": true, "role": "identify", "match_threshold": 0.75 },
-    { "camera_uid": "PATHWAY-FRONT",         "name": "Building Front Pathway",  "zone_id": "ZONE-PATHWAY",   "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75 },
-    { "camera_uid": "CAVILAND-FRONT",        "name": "Caviland Front",          "zone_id": "ZONE-CAVILAND",  "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75 },
-    { "camera_uid": "SANJEEVAN-INSIDE-FRONT","name": "Sanjeevan Inside Front",  "zone_id": "ZONE-SANJEEVAN", "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75 },
-    { "camera_uid": "SANJEEVAN-INSIDE",      "name": "Sanjeevan Inside",        "zone_id": "ZONE-SANJEEVAN", "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75 },
+    { "camera_uid": "GATE-INSIDE-LEFT",       "name": "Front Gate Inside Left",  "zone_id": "ZONE-GATE",     "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75 },
+    { "camera_uid": "GATE-OUTSIDE-LEFT",      "name": "Front Gate Outside Left", "zone_id": "ZONE-GATE",     "is_exit_camera": true,  "is_active": true, "role": "identify", "match_threshold": 0.75 },
+    { "camera_uid": "FRONT-GATE-INSIDE-RIGHT","name": "Front Gate Inside Right", "zone_id": "ZONE-GATE",     "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75 },
+    { "camera_uid": "SECURITY-CAM-FRONT-GATE","name": "Security Cam Front Gate", "zone_id": "ZONE-GATE",     "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75 },
+    { "camera_uid": "PATHWAY-FRONT",          "name": "Building Front Pathway",  "zone_id": "ZONE-PATHWAY",  "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75 },
+    { "camera_uid": "CAVILAND-FRONT",         "name": "Caviland Front",          "zone_id": "ZONE-CAVILAND", "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75 },
 
     { "camera_uid": "TURRET", "name": "Turret Local Feed", "zone_id": "ZONE-TURRET", "is_exit_camera": false, "is_active": true, "role": "identify", "match_threshold": 0.75, "source": { "type": "url" } },
 

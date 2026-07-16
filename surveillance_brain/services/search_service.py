@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 from db.connection import get_session
 from db.models import Camera
 from repositories import camera_repo, event_repo, identity_repo, session_repo
-from services import presence_cache
+from services import media_paths, presence_cache
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +161,7 @@ async def get_person_profile(identity_id: int, history_limit: int = 100) -> Opti
         "email": email,
         "first_seen_at": first_seen_at,
         "live": {"status": "inside", **live} if live else {"status": "not_in_facility"},
+        "profile": media_paths.profile_rel(identity.id),   # durable Tier-A photo (if any)
         "photos": photos,
         "history": history,
         "sessions": session_summaries,

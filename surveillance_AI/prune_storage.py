@@ -20,9 +20,17 @@ import time
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STORAGE_IMG = os.path.join(REPO_ROOT, "storage", "img")
+# NOTE: this prunes ONLY the per-sighting media tier (storage/img). The durable
+# per-identity photos in storage/profiles/ are a SEPARATE tier and are never
+# touched here (they live outside STORAGE_IMG by design) — so a person's face
+# never disappears from the UI when their old sighting frames age out.
 
-RETENTION_DAYS = float(os.environ.get("RETENTION_DAYS", "7"))
-STORAGE_MAX_GB = float(os.environ.get("STORAGE_MAX_GB", "5"))
+# Media-tier window (per-sighting JPEGs). Falls back to the legacy RETENTION_DAYS
+# if MEDIA_RETENTION_DAYS isn't set. DB event ROWS have their OWN, longer window
+# (EVENT_RETENTION_DAYS, handled by the Brain) — the two are deliberately split.
+MEDIA_RETENTION_DAYS = float(os.environ.get("MEDIA_RETENTION_DAYS",
+                                            os.environ.get("RETENTION_DAYS", "30")))
+STORAGE_MAX_GB = float(os.environ.get("STORAGE_MAX_GB", "50"))
 PRUNE_INTERVAL_S = float(os.environ.get("PRUNE_INTERVAL_S", "3600"))
 
 
@@ -41,7 +49,7 @@ def prune_once():
     if not os.path.isdir(STORAGE_IMG):
         return 0, 0
     now = time.time()
-    cutoff = now - RETENTION_DAYS * 86400
+    cutoff = now - MEDIA_RETENTION_DAYS * 86400
     max_bytes = int(STORAGE_MAX_GB * 1024**3)
 
     files = list(_iter_files(STORAGE_IMG))
@@ -85,7 +93,7 @@ def prune_once():
 
     if removed:
         print(f"[prune] removed {removed} file(s), freed {freed/1024**2:.1f} MB "
-              f"(keep {RETENTION_DAYS:g}d, cap {STORAGE_MAX_GB:g}GB)", flush=True)
+              f"(keep {MEDIA_RETENTION_DAYS:g}d, cap {STORAGE_MAX_GB:g}GB)", flush=True)
     return removed, freed
 
 
@@ -96,7 +104,7 @@ def main():
     args = ap.parse_args()
     if args.loop:
         print(f"[prune] loop every {PRUNE_INTERVAL_S:g}s "
-              f"(keep {RETENTION_DAYS:g}d, cap {STORAGE_MAX_GB:g}GB) → {STORAGE_IMG}", flush=True)
+              f"(keep {MEDIA_RETENTION_DAYS:g}d, cap {STORAGE_MAX_GB:g}GB) → {STORAGE_IMG}", flush=True)
         while True:
             try:
                 prune_once()

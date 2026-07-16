@@ -29,6 +29,7 @@ from services import (
     dedup_service,
     identity_resolver,
     live_broadcaster,
+    media_paths,
     session_tracker,
 )
 
@@ -195,6 +196,7 @@ def _event_object(
         "matched_by": matched_by.value,
         "similarity": similarity,
         "snapshot": snapshot_path,
+        "profile": media_paths.profile_rel(identity_id),   # durable Tier-A photo (if any)
         "clip": clip_path,
         "duplicate": duplicate,
     }

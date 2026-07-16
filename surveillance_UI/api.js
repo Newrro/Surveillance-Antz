@@ -129,16 +129,20 @@ const Brain = (() => {
     return evt.camera || evt.zone_id || (evt.camera_id != null ? `Camera ${evt.camera_id}` : 'Unknown location');
   }
 
-  // A photo URL for a detected person. A real Part 1 attaches a cropped image
-  // (absolute URL) — use it when present. Otherwise fall back to a live still
-  // from the camera they were seen on (served by server.py's /snapshot/<uid>,
-  // same origin as this page). Returns null when neither is available.
+  // A photo URL for a detected person. Preference order:
+  //   1. the DURABLE per-identity profile photo (Tier A) — the Brain sends
+  //      `profile` only when storage/profiles/<id>.jpg actually exists. This is
+  //      never pruned, so a face never disappears from the Report/Records.
+  //   2. the per-sighting snapshot crop (may age out under the media pruner).
+  //   3. a live still from the camera they were seen on (server.py /snapshot).
+  // Returns null when none are available (UI falls back to initials).
+  function resolveStoragePath(p) {
+    if (/^https?:\/\//i.test(p)) return p;            // already a full URL
+    return '/' + String(p).replace(/^\/+/, '');       // 'storage/..' -> '/storage/..'
+  }
   function photoFor(evt) {
-    const s = evt.snapshot;
-    if (s) {
-      if (/^https?:\/\//i.test(s)) return s;          // already a full URL
-      return '/' + String(s).replace(/^\/+/, '');     // 'storage/img/..' -> '/storage/img/..' (server.py serves it)
-    }
+    if (evt.profile) return resolveStoragePath(evt.profile);   // durable, never pruned
+    if (evt.snapshot) return resolveStoragePath(evt.snapshot); // per-sighting crop
     const camUid = evt.camera || null;                // fallback: live camera still
     if (camUid) return `/snapshot/${encodeURIComponent(camUid)}`;
     return null;

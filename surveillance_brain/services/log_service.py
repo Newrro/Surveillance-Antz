@@ -17,10 +17,10 @@ from __future__ import annotations
 import csv
 import io
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from services import media_paths
 
@@ -123,6 +123,89 @@ async def list_events(
         rows = result.all()
 
     return [_row_to_event(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# GET /identities/roster  — one aggregated row per person (Report/roster)
+# ---------------------------------------------------------------------------
+async def get_roster(
+    unknown_days: int = 2,
+    unknown_limit: int = 500,
+) -> List[Dict[str, Any]]:
+    """One row per person for the UI Report/roster — bounded by HEADCOUNT, not by
+    event volume, so the browser never has to hold the whole event history.
+
+    IDENTIFIED people (employee/visitor) are aggregated by identity_id: each row is
+    that person's LATEST sighting (enriched, so photo/camera/label resolve exactly
+    like an event) plus ``first_seen`` and ``sighting_count``. This section is
+    complete for all time.
+
+    UNKNOWN detections have no identity to fold on (≈ one row per track) and would
+    grow without limit, so only a bounded RECENT window is appended — matching the
+    UI's collapsed "don't flood the page" treatment. The full unknown history stays
+    queryable via GET /events with a date range.
+
+    Newest-first overall (the UI keeps the newest snapshot as a person's photo).
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(0, unknown_days))
+    async with get_session() as session:
+        # Identified: latest sighting per identity (Postgres DISTINCT ON).
+        latest_stmt = (
+            _enriched_stmt()
+            .where(DetectionEvent.identity_id.isnot(None))
+            .where(DetectionEvent.hidden_at.is_(None))
+            .distinct(DetectionEvent.identity_id)
+            .order_by(DetectionEvent.identity_id, DetectionEvent.detected_at.desc())
+        )
+        latest_rows = (await session.execute(latest_stmt)).all()
+
+        # Identified: per-person count + first_seen (one cheap grouped scan).
+        agg_stmt = (
+            select(
+                DetectionEvent.identity_id,
+                func.count().label("cnt"),
+                func.min(DetectionEvent.detected_at).label("first_seen"),
+            )
+            .where(DetectionEvent.identity_id.isnot(None))
+            .where(DetectionEvent.hidden_at.is_(None))
+            .group_by(DetectionEvent.identity_id)
+        )
+        agg = {r.identity_id: r for r in (await session.execute(agg_stmt)).all()}
+
+        # Unknowns: bounded recent window (one row ≈ one track).
+        unk_rows: List[Any] = []
+        if unknown_limit > 0:
+            unk_stmt = (
+                _enriched_stmt()
+                .where(DetectionEvent.identity_id.is_(None))
+                .where(DetectionEvent.hidden_at.is_(None))
+                .where(DetectionEvent.detected_at >= cutoff)
+                .order_by(DetectionEvent.detected_at.desc())
+                .limit(unknown_limit)
+            )
+            unk_rows = (await session.execute(unk_stmt)).all()
+
+    people: List[Dict[str, Any]] = []
+    for r in latest_rows:
+        evt = _row_to_event(r)
+        # Stable per-person category from identity_type, not the per-event class
+        # (an identified person's latest event can still be an 'unknown' probe).
+        if getattr(r, "identity_type", None) is not None:
+            evt["label"] = r.identity_type.value.capitalize()
+        a = agg.get(r.identity_id)
+        evt["sighting_count"] = int(a.cnt) if a else 1
+        evt["first_seen"] = (a.first_seen.isoformat() if a and a.first_seen else evt["time"])
+        people.append(evt)
+
+    for r in unk_rows:
+        evt = _row_to_event(r)
+        evt["label"] = "Unknown"
+        evt["sighting_count"] = 1
+        evt["first_seen"] = evt["time"]
+        people.append(evt)
+
+    people.sort(key=lambda e: e["time"] or "", reverse=True)
+    return people
 
 
 # ---------------------------------------------------------------------------

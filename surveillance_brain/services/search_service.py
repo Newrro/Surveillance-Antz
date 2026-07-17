@@ -92,6 +92,10 @@ async def get_person_profile(identity_id: int, history_limit: int = 100) -> Opti
         vis = await identity_repo.fetch_visitor(session, identity_id)
         events = await event_repo.fetch_events_for_identity(session, identity_id, limit=history_limit)
         sessions = await session_repo.fetch_sessions_for_identity(session, identity_id)
+        # camera_id → uid map so the UI resolves friendly trail locations (the raw
+        # events only carry the numeric camera_id).
+        cams = await camera_repo.fetch_all_cameras(session, active_only=False)
+        cam_uid_by_id = {c.id: c.camera_uid for c in cams}
 
     name = emp.name if emp else (vis.name if vis else None)
     department = emp.department if emp else None
@@ -117,6 +121,7 @@ async def get_person_profile(identity_id: int, history_limit: int = 100) -> Opti
             "track_uuid": e.track_uuid,
             "time": e.detected_at.isoformat() if e.detected_at else None,
             "camera_id": e.camera_id,
+            "camera": cam_uid_by_id.get(e.camera_id),
             "label": e.classification.value.capitalize(),
             "confidence": e.detection_conf,
             "matched_by": e.matched_by.value,

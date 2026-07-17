@@ -82,6 +82,13 @@ class EventsResponse(BaseModel):
     events: List[EventOut]
 
 
+class RosterResponse(BaseModel):
+    """One aggregated row per person for the Report/roster. Each person is their
+    LATEST sighting (same shape as an event) plus first_seen + sighting_count."""
+    count: int
+    people: List[EventOut]
+
+
 # ---------------------------------------------------------------------------
 # GET /person/{id}
 # ---------------------------------------------------------------------------

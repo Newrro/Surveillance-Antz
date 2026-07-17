@@ -31,13 +31,17 @@ BRAIN_DIR="$ROOT/surveillance_brain"
 BRAIN_PY="$BRAIN_DIR/.venv/bin/uvicorn"
 BRAIN_PYEXE="$BRAIN_DIR/.venv/bin/python"
 
-# Pipeline options (override via env). Default: emit to Brain, NO SAM2 segment.
-# SAM2 (--segment) only background-blanked the body crop for BODY ReID. Identity is
-# now FACE-ONLY (body embeddings aren't even stored), so SAM2 does heavy GPU work
-# for a feature that no longer affects identity — and on a 4GB card it saturates
-# VRAM, stalling detection to 3-5 s/batch, which in turn makes the RTSP capture loop
-# time out and the camera feeds drop/tear. It is OFF by default for that reason.
-# Re-enable with PIPELINE_ARGS="--emit --segment" ONLY on a bigger GPU.
+# Pipeline options (override via env). Default: emit to Brain, NO SAM2 (Phase 1 only).
+# Phase 1 already guarantees NO GHOSTS — every stable track is logged: faceless people
+# emit a body-only Unknown early, occluded/brief/starved tracks are flushed as Unknown
+# on exit. No extra GPU cost; detection stays fast.
+#
+# SAM2 (--segment) is fully wired and OPTIONAL: when enabled it runs ONLY on OCCLUDED
+# tracks (the grouped minority) and masks the neighbour out of the face+body crop, so a
+# person in a group is IDENTIFIED (real Visitor) instead of logged as Unknown. Measured
+# on this 6GB RTX 4050 it ~halves detection (3.0→1.8 fps) via GPU serialization, which
+# can fragment fast tracks — so it's OFF by default. Enable on a bigger GPU with:
+#   PIPELINE_ARGS="--emit --segment" ./run.sh start   (also raise DETECT_INTERVAL to fund it)
 PIPELINE_ARGS="${PIPELINE_ARGS:---emit}"
 CAMERAS="${CAMERAS:-}"          # empty = all cameras in cameras.json
 
@@ -49,7 +53,7 @@ export GPU_DECODE="${GPU_DECODE:-1}"
 
 # ── Detector + preview tuning ────────────────────────────────────────────────
 export DET_MAX_SIDE="${DET_MAX_SIDE:-640}"    # detector input longest side (speed)
-export DETECT_INTERVAL="${DETECT_INTERVAL:-0.2}"
+export DETECT_INTERVAL="${DETECT_INTERVAL:-0.2}"   # ~5 fps/cam. Raise to ~0.33 if you enable SAM2 (--segment) to give the encode headroom.
 export DET_FP16="${DET_FP16:-1}"              # half-precision detection on the GPU
 export PREVIEW_W="${PREVIEW_W:-1280}"         # grid tile resolution (was 640×360)
 export PREVIEW_H="${PREVIEW_H:-720}"
@@ -66,7 +70,8 @@ export PREVIEW_QUALITY="${PREVIEW_QUALITY:-85}"  # grid JPEG quality (was 70)
 # IDENTITY_MAX_RATE first. On a bigger GPU you can raise these back up.
 export IDENTITY_MIN_HITS="${IDENTITY_MIN_HITS:-2}"        # start identity once a track is briefly stable
 export TRACK_MIN_HITS="${TRACK_MIN_HITS:-2}"              # OcSort confirms a track in ~0.4s
-export IDENTITY_MAX_RATE="${IDENTITY_MAX_RATE:-6}"        # heavy resolves/sec across ALL cams (was 14 → over-subscribed the 4GB GPU)
+export IDENTITY_MAX_RATE="${IDENTITY_MAX_RATE:-6}"        # heavy resolves/sec across ALL cams (raise on a bigger GPU; lower if cameras drop)
+export IDENTITY_BODYONLY_EMIT_PROBES="${IDENTITY_BODYONLY_EMIT_PROBES:-2}"  # faceless → log a body-only Unknown after this many probes (don't wait for the full budget)
 export RESOLVE_INTERVAL="${RESOLVE_INTERVAL:-0.4}"        # re-probe an unresolved track this often (was 0.25 → too hot)
 export IDENTITY_MAX_PROBES="${IDENTITY_MAX_PROBES:-6}"    # frames pooled (upper bound; was 8)
 export IDENTITY_MIN_EMIT_PROBES="${IDENTITY_MIN_EMIT_PROBES:-3}"  # show a first label after this many face frames

@@ -90,6 +90,7 @@ class MotionTracker:
         )
         self._by_id = {}        # stable boxmot id -> Track (identity state lives here)
         self._drop_after = int(os.environ.get("TRACK_MAX_AGE", max_age or 60)) * 3
+        self._evicted = []      # tracks aged out this update — drained for exit-flush
 
     def update(self, boxes, frame):
         import numpy as np
@@ -118,8 +119,16 @@ class MotionTracker:
             if tid not in present:
                 t.misses += 1
                 if t.misses > self._drop_after:
+                    self._evicted.append(t)     # leaving for good → flush if never logged
                     del self._by_id[tid]
         return visible
+
+    def drain_evicted(self):
+        """Tracks that aged out since the last call (they've left the scene). The
+        pipeline flushes any that never emitted, so a person is never a silent ghost."""
+        out = self._evicted
+        self._evicted = []
+        return out
 
     @property
     def tracks(self):
@@ -132,6 +141,7 @@ class SimpleTracker:
         self.next_id = 1
         self.iou_thresh = iou_thresh
         self.max_misses = max_misses   # frames a track survives without a detection
+        self._evicted = []             # tracks dropped this update — drained for exit-flush
 
     def update(self, boxes, frame=None):
         """Associate `boxes` (list of (x1,y1,x2,y2,conf)) to existing tracks by
@@ -156,6 +166,12 @@ class SimpleTracker:
         for j in unmatched:
             self.tracks.append(Track(self.next_id, boxes[j]))
             self.next_id += 1
-        # Drop stale tracks.
+        # Drop stale tracks (keep the dropped ones for the exit-flush).
+        self._evicted.extend(t for t in self.tracks if t.misses > self.max_misses)
         self.tracks = [t for t in self.tracks if t.misses <= self.max_misses]
         return [t for t in self.tracks if t.misses == 0]
+
+    def drain_evicted(self):
+        out = self._evicted
+        self._evicted = []
+        return out

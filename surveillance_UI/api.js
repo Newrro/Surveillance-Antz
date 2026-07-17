@@ -213,13 +213,16 @@ const Brain = (() => {
   async function hydrate(camNameById) {
     if (!(await health())) return false;
 
-    // Pull a generous window of recent events (newest-first per the Brain).
-    let events = [];
+    // Pull ONE aggregated row per person (their latest sighting + first_seen +
+    // sighting_count). Bounded by HEADCOUNT, not event volume — so the whole
+    // history never has to live in the browser. Each person's full history is
+    // lazy-loaded from /person/{id} the moment their card/modal is opened.
+    let roster = [];
     try {
-      const resp = await getJSON('/events?limit=2000');
-      events = (resp && resp.events) || [];
+      const resp = await getJSON('/identities/roster');
+      roster = (resp && resp.people) || [];
     } catch (e) {
-      console.warn('[Brain] /events failed:', e.message);
+      console.warn('[Brain] /identities/roster failed:', e.message);
       return false;
     }
 
@@ -247,9 +250,14 @@ const Brain = (() => {
       if (emp.department && !DEPARTMENTS.includes(emp.department)) DEPARTMENTS.push(emp.department);
     });
 
-    // Fold every event into the people registry + history.
-    events.forEach(evt => {
-      const { person } = upsertPerson(PEOPLE, evt, camNameById);
+    // Fold each person's roster row (their LATEST sighting) into the registry via
+    // the SAME path as a live event, so photo/location/category all resolve
+    // identically. history holds just that one sighting until it's lazy-loaded.
+    roster.forEach(row => {
+      const { person } = upsertPerson(PEOPLE, row, camNameById);
+      person.sightingCount = row.sighting_count ?? person.history.length;
+      person.firstSeen = row.first_seen || null;
+      person.historyLoaded = false;   // full history not fetched yet
       if (person.department && !DEPARTMENTS.includes(person.department)) DEPARTMENTS.push(person.department);
     });
 
@@ -257,8 +265,46 @@ const Brain = (() => {
     Object.keys(DETECTIONS).forEach(k => delete DETECTIONS[k]);
 
     state.connected = true;
-    console.info(`[Brain] hydrated ${Object.keys(PEOPLE).length} people from ${events.length} events @ ${BASE}`);
+    console.info(`[Brain] hydrated ${Object.keys(PEOPLE).length} people from ${roster.length} roster rows @ ${BASE}`);
     return true;
+  }
+
+  /* ---------- lazy per-person history (fetched when a card/modal opens) ----------
+     The roster gives each person only their latest sighting. The first time a
+     person is opened we pull their FULL history from /person/{id} and fold every
+     sighting in through upsertPerson (same dedupe/photo/evidence logic). Unknowns
+     have no identity_id, so their single roster sighting is all there is. */
+  async function loadPersonHistory(userId, camNameById) {
+    const p = PEOPLE[userId];
+    if (!p || p.historyLoaded) return p || null;
+    if (p.identityId == null) { p.historyLoaded = true; return p; }  // Unknown → one sighting only
+    let prof;
+    try {
+      prof = await getJSON(`/person/${p.identityId}`);
+    } catch (e) {
+      console.warn('[Brain] /person failed:', e.message);
+      return p;                       // keep the single-sighting summary
+    }
+    const hist = (prof && prof.history) || [];
+    p.history = [];                   // rebuild from the authoritative full history
+    p._photoTime = null;
+    hist.forEach(h => {
+      upsertPerson(PEOPLE, {
+        identity_id: p.identityId, person_id: p.displayLabel,
+        label: p.category, name: p.name,
+        camera: h.camera, camera_id: h.camera_id, time: h.time,
+        event_id: h.event_id, detection_id: h.detection_id, track_uuid: h.track_uuid,
+        confidence: h.confidence, similarity: h.similarity, matched_by: h.matched_by,
+        face: h.face, body: h.body,
+        full_frame: h.full_frame, full_frame_annotated: h.full_frame_annotated,
+        snapshot: h.snapshot, clip: h.clip, profile: prof.profile || null,
+      }, camNameById);
+    });
+    // Keep the roster's TRUE total (the profile history is capped at 100 recent
+    // rows, so history.length would under-report a very frequent person).
+    if (p.sightingCount == null) p.sightingCount = p.history.length;
+    p.historyLoaded = true;
+    return p;
   }
 
   /* ---------- live WS stream ---------- */
@@ -287,6 +333,11 @@ const Brain = (() => {
   /* Fold one live event into PEOPLE + DETECTIONS and hand the caller the person key. */
   function applyLiveEvent(evt, camNameById) {
     const { key, person, loc } = upsertPerson(PEOPLE, evt, camNameById);
+    // Keep the roster summary fields coherent for live arrivals. A brand-new
+    // person gets initialised; once a person's full history is loaded the count
+    // tracks history directly (a fresh person hasn't been lazy-loaded yet).
+    if (person.sightingCount == null) { person.sightingCount = person.history.length; person.historyLoaded = false; }
+    else if (person.historyLoaded) { person.sightingCount = person.history.length; }
     // Surface the person on the camera's live overlay. The Brain event has no
     // pixel box, so we place a centered marker; Part 1 can later send real boxes.
     const camId = evt.camera || (evt.camera_id != null ? String(evt.camera_id) : null);
@@ -485,7 +536,7 @@ const Brain = (() => {
   return {
     get base() { return state.base; },
     get connected() { return state.connected; },
-    health, hydrate, connectLive, applyLiveEvent, enrollEmployee, findLive, resetDatabase, setName, promoteToEmployee, clearUnknowns, consolidate, mergeIdentities, deleteIdentities, enrollEmployeePhoto, attendance, deleteSighting,
+    health, hydrate, loadPersonHistory, connectLive, applyLiveEvent, enrollEmployee, findLive, resetDatabase, setName, promoteToEmployee, clearUnknowns, consolidate, mergeIdentities, deleteIdentities, enrollEmployeePhoto, attendance, deleteSighting,
     searchIdentities, hideSightings, reassignSightings, splitCase, unmerge, importEmployees, importStatus,
     // exposed for reuse/testing
     _map: { splitTime, locationFor, personKey, upsertPerson },

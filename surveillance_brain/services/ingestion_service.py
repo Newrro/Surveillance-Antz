@@ -137,6 +137,22 @@ async def ingest(
         )
         event_db_id = row.id
 
+    # Fold this track's earlier id-less Unknown rows (emitted while the person was
+    # still faceless) into the identity we just resolved — so a recognised person
+    # doesn't also leave a stray Unknown card. Runs even when the identified row above
+    # was deduped, and self-limits (after the first adopt there are no id-less rows
+    # left for this detection_id). detection_id is indexed → cheap no-op otherwise.
+    if resolution.identity_id is not None:
+        adopted = await event_repo.adopt_idless_track_rows(
+            session,
+            detection_id=detection_id,
+            identity_id=resolution.identity_id,
+            classification=resolution.classification,
+        )
+        if adopted:
+            logger.info("Adopted %d earlier id-less row(s) for track %s into identity %s",
+                        adopted, detection_id, resolution.identity_id)
+
     # ---- Build the Part 3 event object ------------------------------- #
     event = _event_object(
         event_db_id=event_db_id,

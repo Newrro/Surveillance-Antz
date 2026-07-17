@@ -10,23 +10,43 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import require_admin
 from api.schemas import (
     ConversionResponse,
     DeleteIdentitiesRequest,
+    EventOut,
     MergeRequest,
     NameRequest,
     PromoteRequest,
+    RosterResponse,
 )
 from db.connection import get_db, get_session
-from services import conversion_service, dedup_service
+from services import conversion_service, dedup_service, log_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/identities", tags=["identities"])
+
+
+@router.get(
+    "/roster",
+    response_model=RosterResponse,
+    status_code=status.HTTP_200_OK,
+    summary="One aggregated row per person for the Report/roster (bounded by headcount)",
+)
+async def roster(
+    unknown_days: int = Query(2, ge=0, le=365, description="recent window (days) for faceless Unknowns"),
+    unknown_limit: int = Query(500, ge=0, le=5000, description="max Unknown rows (0 = none)"),
+) -> RosterResponse:
+    """Complete list of identified people (each = their latest sighting + first_seen
+    + sighting_count) plus a bounded recent window of Unknowns. Lets the UI show
+    every person's last-seen without pulling the whole event history into the browser.
+    Per-person history is loaded lazily via GET /person/{identity_id}."""
+    people = await log_service.get_roster(unknown_days=unknown_days, unknown_limit=unknown_limit)
+    return RosterResponse(count=len(people), people=[EventOut(**p) for p in people])
 
 
 @router.post(

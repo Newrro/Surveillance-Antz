@@ -37,6 +37,14 @@ let plogYear, plogMonth, plogDay;   // selected day inside the modal (month 0-in
 function openPersonLog(userId) {
   plogPersonId = userId;
   const p = PEOPLE[userId];
+  // First open of a person: pull their FULL history, then re-render this modal.
+  // The first pass renders instantly from the roster summary (correct name/photo/
+  // count); the day grid, chart and records fill in once history arrives.
+  if (p && !p.historyLoaded && typeof Brain !== 'undefined' && Brain.loadPersonHistory) {
+    Brain.loadPersonHistory(userId, CAM_NAME_BY_ID).then(() => {
+      if (plogPersonId === userId) openPersonLog(userId);
+    });
+  }
   setAvatar(document.getElementById('plog-avatar'), p);
   document.getElementById('plog-name').textContent = personName(p);
   document.getElementById('plog-id').textContent = p.employeeId ? `${p.userId} · ${p.employeeId}` : p.userId;
@@ -57,7 +65,7 @@ function openPersonLog(userId) {
   if (p.age)    rows.push(['Age', String(p.age)]);
   if (p.height) rows.push(['Height', p.height]);
   if (p.features) rows.push(['Features', p.features]);
-  rows.push(['Total sightings', String(p.history.length)]);
+  rows.push(['Total sightings', String(p.sightingCount ?? p.history.length)]);
   document.getElementById('plog-details').innerHTML =
     `<div class="plog-card-title">Details of the person</div>` +
     rows.map(([k, v]) => `<div class="kv"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('');

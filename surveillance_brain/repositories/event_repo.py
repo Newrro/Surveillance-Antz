@@ -180,6 +180,31 @@ async def unhide_events(session: AsyncSession, event_ids: list[int]) -> int:
     return result.rowcount or 0
 
 
+async def adopt_idless_track_rows(
+    session: AsyncSession,
+    detection_id: str,
+    identity_id: int,
+    classification: Classification,
+) -> int:
+    """When a track resolves to an identity, fold its EARLIER id-less Unknown rows
+    (emitted before a clear face appeared — same stable detection_id) into that
+    identity. Without this, a faceless-then-recognised person leaves a stray Unknown
+    card duplicating their Visitor/Employee card. detection_id is indexed, so this is
+    a cheap no-op when there are none to adopt."""
+    if not detection_id or identity_id is None:
+        return 0
+    from sqlalchemy import update
+    result = await session.execute(
+        update(DetectionEvent)
+        .where(
+            DetectionEvent.detection_id == detection_id,
+            DetectionEvent.identity_id.is_(None),
+        )
+        .values(identity_id=identity_id, classification=classification)
+    )
+    return result.rowcount or 0
+
+
 async def reassign_events(
     session: AsyncSession,
     event_ids: list[int],

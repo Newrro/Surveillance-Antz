@@ -40,6 +40,7 @@ import os
 import sys
 import time
 import argparse
+import queue
 import threading
 from datetime import datetime, timezone
 
@@ -107,6 +108,10 @@ IDENTITY_LATENCY_BUDGET = float(os.environ.get("IDENTITY_LATENCY_BUDGET", "4.0")
 # far more reliably → the same person stops splitting into many Visitors.
 IDENTITY_MAX_PROBES = int(os.environ.get("IDENTITY_MAX_PROBES", "8"))      # frames pooled (upper bound / body-only fallback)
 IDENTITY_MIN_EMIT_PROBES = int(os.environ.get("IDENTITY_MIN_EMIT_PROBES", "3"))  # emit a first label after this many face probes
+# Faceless (back-turned / face-occluded) people must not wait for the full probe
+# budget to be logged — emit a body-only Unknown after this many probes so a real
+# person is recorded while still on screen, not just caught by the exit-flush.
+IDENTITY_BODYONLY_EMIT_PROBES = int(os.environ.get("IDENTITY_BODYONLY_EMIT_PROBES", "2"))
 IDENTITY_REEMIT_FRAC = float(os.environ.get("IDENTITY_REEMIT_FRAC", "0.15"))  # re-emit if a face is this much better
 
 # ── Face quality gate (IDENTITY_REDESIGN.md Phase A) ───────────────────────
@@ -220,8 +225,13 @@ def main():
     identifier = Identifier() if id_cams else None   # ReID + gallery only if needed
     segmenter = None
     if args.segment and id_cams:
-        from segmenter import SAM2Segmenter
-        segmenter = SAM2Segmenter()
+        try:
+            from segmenter import SAM2Segmenter
+            segmenter = SAM2Segmenter()
+        except Exception as e:  # noqa: BLE001 — degrade to Phase-1 (skip-and-flush) not crash
+            print(f"[segmenter] SAM 2 unavailable ({e}); occluded tracks fall back to "
+                  f"snapshot+exit-flush (no per-group segmentation).")
+            segmenter = None
 
     # Detection (the grid) gets a HIGH-priority CUDA stream; the heavy identity
     # work gets a LOW-priority one. On the single GPU this lets the detector's
@@ -263,32 +273,61 @@ def main():
     print(f"[tracker] using {type(next(iter(trackers.values()))).__name__}")
     frames = {}          # uid -> latest frame (for the identity worker to crop from)
     stop_flag = threading.Event()
+    flush_q = queue.Queue()   # (uid, track) evicted tracks awaiting an exit-flush POST
 
     def _resolve_track(cam, uid, frame, t, box):
         """Heavy identity for ONE track on the LOW-priority GPU stream, using
         quality-gated temporal pooling. Returns True if features were found."""
-        # Occlusion gate: if another person's box heavily covers this one, the crop
-        # would include a neighbour (wrong face) — skip and retry once they separate.
+        # Occlusion: if another person's box heavily covers this one, a raw crop would
+        # include the neighbour (wrong face). Phase 2 — when SAM 2 is available we
+        # SEGMENT the target out (only here, the grouped minority, so the heavy encode
+        # is affordable) and identify the clean crop, turning a would-be group Unknown
+        # into a real identity. Without SAM 2 we keep the Phase 1 safety net below.
         with state_lock:
             others = [tuple(o.box) for o in trackers[uid].tracks
                       if o.id != t.id and o.misses == 0]
-        if _occluded(box, others):
+        occluded = _occluded(box, others)
+        seg_mask = None
+        if occluded and segmenter is not None:
+            try:
+                with _stream_ctx(lo_stream):
+                    # The image ENCODE (set_frame, ~260ms) dominates; mask_for_box is
+                    # ~10ms. Several occluded people share one frame, so encode it ONCE
+                    # and reuse — keep a reference to the exact array so `is` can't hit a
+                    # recycled id(). This is what keeps per-group SAM 2 affordable.
+                    if getattr(segmenter, "_frame_obj", None) is not frame:
+                        segmenter.set_frame(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                        segmenter._frame_obj = frame
+                    seg_mask = segmenter.mask_for_box(box)   # full-frame boolean mask
+            except Exception as e:  # noqa: BLE001 — fall back to the skip-and-flush path
+                print(f"    → segment failed [{uid}#{t.id}]: {e}")
+                seg_mask = None
+        if occluded and seg_mask is None:
+            # Couldn't clean the crop (no SAM 2 / segmentation failed) — don't resolve a
+            # contaminated face. Keep a snapshot so the exit-flush logs this person as
+            # Unknown rather than dropping them (a real person is never a ghost).
+            if t.snap_path is None:
+                fallback = crop_person(frame, box)
+                if fallback is not None:
+                    stamp_ms = int(time.time() * 1000)
+                    with state_lock:
+                        if t.snap_path is None:
+                            t.probes += 1
+                            t.snap_path = save_snapshot(uid, fallback, stamp_ms, t.id)
+                            save_frame_snapshot(uid, frame, box, stamp_ms, t.id)
             return False
         with _stream_ctx(lo_stream):
-            crop = crop_person(frame, box)                  # raw crop → face
+            crop = crop_person(frame, box)                  # RAW crop → snapshots (nice photo)
             if crop is None:
                 return False
-            body_crop = crop
-            if segmenter is not None:
-                try:
-                    segmenter.set_frame(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                    mask = segmenter.mask_for_box(box)
-                    masked = crop_person(frame, box, mask=mask)
-                    if masked is not None:
-                        body_crop = masked                  # background-blanked → body ReID
-                except Exception as e:  # noqa: BLE001 — fall back to raw crop
-                    print(f"    → segment failed: {e}")
-            face_emb, body_emb = identifier.extract(crop, body_bgr=body_crop)
+            # When segmented, extract face AND body from the neighbour-blanked crop so
+            # neither describes the wrong person; snapshots still use the raw `crop`.
+            feat_crop = crop
+            if seg_mask is not None:
+                masked = crop_person(frame, box, mask=seg_mask)
+                if masked is not None:
+                    feat_crop = masked
+            face_emb, body_emb = identifier.extract(feat_crop, body_bgr=feat_crop)
         if lo_stream is not None:
             lo_stream.synchronize()
         if face_emb is None and body_emb is None:
@@ -344,8 +383,11 @@ def main():
             budget_done = t.probes >= IDENTITY_MAX_PROBES
             have_face = t.face_w_sum > 0.0
             first_ready = have_face and t.probes >= IDENTITY_MIN_EMIT_PROBES
-            ready = first_ready or t.emitted
-            ready = ready or (budget_done and not have_face)   # body-only fallback → Unknown
+            # Faceless people emit a body-only Unknown EARLY (don't wait for the full
+            # budget) so they're logged while on screen. A later clear face re-emits
+            # and upgrades them to Visitor/Employee.
+            bodyonly_ready = (not have_face) and t.probes >= IDENTITY_BODYONLY_EMIT_PROBES
+            ready = first_ready or t.emitted or bodyonly_ready or (budget_done and not have_face)
             if not ready:
                 return True                          # keep probing; worker retries this track
             if t.emitted and not (t.face_w_sum > t.emit_face_w * (1.0 + IDENTITY_REEMIT_FRAC)):
@@ -389,6 +431,28 @@ def main():
         print(f"[{uid}] track#{t.id} -> {disp}  (det {box[4]:.2f} feat {feat} q{emit_q:.0f} p{t.probes})")
         return True
 
+    def _flush_unknown(uid, t):
+        """A stable track is leaving having NEVER emitted (occluded its whole life,
+        too brief, or starved by the identity backlog). Log it ONCE from whatever we
+        pooled, so a person the camera saw is never a silent ghost. No fresh frame
+        needed — uses the track's stored snapshot / embeddings."""
+        if t.emitted or not args.emit or session is None:
+            return
+        if t.hits < IDENTITY_MIN_HITS:
+            return                       # never a stable person (flicker/noise) — no spurious row
+        emit_face = _pooled_face(t.face_emb_sum, t.face_w_sum)   # usually None at this point
+        stamp_ms = int(time.time() * 1000)
+        payload = build_payload(uid, t.box[4], emit_face, t.best_body_emb, t.snap_path, stamp_ms, t.id)
+        try:
+            j = session.post(f"{args.brain_url}/events", json=payload, timeout=10).json()
+            t.emitted = True
+            iid = j.get("identity_id")
+            if iid is not None:
+                save_profile_photo(iid, t.face_path, t.snap_path)
+            print(f"[{uid}] track#{t.id} -> FLUSH {j.get('label', 'Unknown')}  (hits {t.hits} p{t.probes})")
+        except Exception as e:  # noqa: BLE001 — never let a flush kill the loop
+            print(f"    → flush POST failed [{uid}#{t.id}]: {e}")
+
     def identity_worker():
         """Background identity SERVICE. Each pass it picks the single most-overdue
         STABLE track across all identify cameras, resolves it on the low-priority
@@ -427,8 +491,23 @@ def main():
                 print(f"    → identity error [{uid}#{t.id}]: {e}")
             time.sleep(gap)                  # YIELD the GPU to the detector between resolves
 
+    def flush_worker():
+        """Drain evicted tracks and POST their exit-flush in the BACKGROUND, so a slow
+        Brain (restart / GC / a burst of a whole group leaving at once) can never block
+        the detection loop. Detection latency stays flat regardless of Brain health."""
+        while not stop_flag.is_set():
+            try:
+                uid, t = flush_q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                _flush_unknown(uid, t)
+            except Exception as e:  # noqa: BLE001 — never kill the flusher
+                print(f"    → flush worker error [{uid}#{t.id}]: {e}")
+
     if id_cams:
         threading.Thread(target=identity_worker, daemon=True).start()
+        threading.Thread(target=flush_worker, daemon=True).start()
 
     last_detect = {c.camera_uid: 0.0 for c in cameras}
     print(f"Running (boxes ~{1/detect_interval:.0f} fps/cam, batched fp16 detect, "
@@ -483,6 +562,11 @@ def main():
                 with state_lock:
                     frames[uid] = frame
                     tks = trackers[uid].update(boxes, frame)
+                    evicted = trackers[uid].drain_evicted() if cam.runs_identity else []
+                # Hand tracks that just left to the background flusher (enqueue is
+                # instant) — the POST must never block the detector.
+                for t in evicted:
+                    flush_q.put((uid, t))
                 if cam.runs_identity:
                     # Neutral 'person' (grey) until the background worker resolves the
                     # track; it then recolors to Employee/Visitor/Unknown. So a box
@@ -505,6 +589,22 @@ def main():
         print("\nStopping...")
     finally:
         stop_flag.set()
+        # Flush every stable, un-emitted track so a run that ends (Ctrl-C / restart)
+        # still logs whoever was on screen at the time — no ghosts on shutdown.
+        if args.emit and session is not None:
+            drained = []
+            while True:
+                try:
+                    drained.append(flush_q.get_nowait())
+                except queue.Empty:
+                    break
+            with state_lock:
+                pending = [(uid, t) for uid in trackers
+                           for t in trackers[uid].tracks
+                           if roles[uid].runs_identity and not t.emitted and t.hits >= IDENTITY_MIN_HITS]
+            print(f"[shutdown] flushing {len(drained)} queued + {len(pending)} on-screen track(s)")
+            for uid, t in drained + pending:
+                _flush_unknown(uid, t)
         for s in streams:
             s.stop()
 

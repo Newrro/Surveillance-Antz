@@ -44,7 +44,7 @@
   box-shadow: 0 0 14px rgba(255, 107, 107, 0.5);
 }
 
-/* Merge button — sits in the top-right corner, immediately right of the delete button */
+/* Per-card merge button — top-right corner */
 .person-card-merge {
   position: absolute; top: 8px; right: 8px; z-index: 2;
   width: 27px; height: 27px;
@@ -54,26 +54,23 @@
   opacity: 0.55; transition: opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
 }
 .person-card-merge i { font-size: 15px; }
-.person-card-merge svg { width: 15px; height: 15px; display: block; }
 .person-card:hover .person-card-merge { opacity: 1; }
 .person-card-merge:hover {
   background: var(--accent); color: #06210a; border-color: var(--accent);
   box-shadow: var(--glow);
 }
 
-/* Collapsible Unknown group — boxed caret button next to the label */
+/* Collapsible Unknown group — caret button next to the label */
 .report-caret-btn {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 27px; height: 27px; padding: 0; margin-left: 2px;
-  background: var(--bg-2); border: 1px solid var(--border-strong); border-radius: 8px;
+  width: 24px; height: 24px; padding: 0; margin-left: 2px;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px;
   color: var(--text-secondary); cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 .report-caret-btn:hover { color: var(--text-primary); border-color: var(--accent); }
 .report-caret-btn i { font-size: 15px; transition: transform 0.15s; }
-.report-caret-btn svg { width: 16px; height: 16px; display: block; transition: transform 0.15s; }
-.report-caret-btn.open i,
-.report-caret-btn.open svg { transform: rotate(180deg); }
+.report-caret-btn.open i { transform: rotate(180deg); }
 
 /* Enroll-employee photo preview */
 .enroll-preview { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 10px; }
@@ -101,32 +98,23 @@
   background: var(--accent); border-color: var(--accent); color: #06210a;
 }
 
-/* Merge button — sits in the top-right corner, immediately right of the delete button */
-.person-card-merge {
-  position: absolute; top: 8px; right: 8px; z-index: 2;
-  width: 27px; height: 27px;
-  display: flex; align-items: center; justify-content: center;
-  border-radius: 50%; border: 1px solid var(--border);
-  background: rgba(0, 0, 0, 0.28); color: var(--text-muted);
-  opacity: 0.55; transition: opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
+/* Merge action bar — floats above the nav dock while selecting */
+.merge-bar {
+  position: fixed; left: 50%; bottom: 92px;
+  transform: translateX(-50%) translateY(16px);
+  z-index: 46;
+  display: flex; align-items: center; gap: 14px;
+  padding: 10px 12px 10px 18px;
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 18px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.20);
+  -webkit-backdrop-filter: var(--glass-blur);
+          backdrop-filter: var(--glass-blur);
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: opacity 0.2s, transform 0.2s, visibility 0.2s;
 }
-.person-card-merge i { font-size: 15px; }
-.person-card:hover .person-card-merge { opacity: 1; }
-.person-card-merge:hover {
-  background: var(--accent); color: #06210a; border-color: var(--accent);
-  box-shadow: var(--glow);
-}
+.merge-bar.open { opacity: 1; visibility: visible; pointer-events: auto; transform: translateX(-50%) translateY(0); }
+.merge-bar-info { font-size: 13px; color: var(--text-primary); }
+.merge-bar-info b { color: var(--accent); font-family: var(--font-mono); }
 
-/* Merge selection bar — hidden until you enter merge mode (click a card's merge
-   icon). Floats above the nav dock while selecting; never sits in the page flow. */
-.merge-bar { display: none; }
-.merge-bar.open {
-  display: flex; align-items: center; gap: 16px;
-  position: fixed; left: 50%; bottom: 110px; transform: translateX(-50%);
-  z-index: 60; padding: 10px 14px 10px 18px;
-  background: rgba(18, 26, 18, 0.92);
-  border: 1px solid var(--border-strong); border-radius: 30px;
-  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.12);
-  -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
-}
-.merge-bar-info { font-size: 12.5px; color: var(--text-secondary); white-space: nowrap; }

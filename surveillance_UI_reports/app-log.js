@@ -59,13 +59,13 @@ function selectLogDay(d) {
   renderLogSheet();
 }
 
-/* Reset the search/location/time filters on the Log page. Keeps the selected
-   calendar day and the active category tab (Employees / Visitors / Unknowns). */
+/* Reset every filter on the Log page (keeps the selected calendar day). */
 function clearLogFilters() {
   document.getElementById('log-person').value = '';
   document.getElementById('log-loc').value = '';
   document.getElementById('log-time-from').value = '';
   document.getElementById('log-time-to').value = '';
+  document.getElementById('log-category').value = '';
   renderLogSheet();
 }
 
@@ -124,37 +124,16 @@ function renderLogSheet() {
   const body = document.getElementById('log-body');
   body.innerHTML = rows.length ? rows.map(e => {
     const p = PEOPLE[e.personId];
-    const selected = mergeMode && mergeSelection.has(p.userId);
     return `
-      <tr class="${selected ? 'log-row-selected' : ''}" onclick="onLogRowClick(event, '${p.userId}')">
+      <tr onclick="openPersonLog('${p.userId}')">
         <td><div class="avatar log-photo" style="width:52px;height:52px;font-size:16px;${e.snapshot ? photoCssUrl(e.snapshot) : photoCss(p)}">${p.initials}</div></td>
         <td>${personName(p)}</td>
         <td><span class="badge badge-${p.category}">${p.category}</span></td>
         <td class="mono">${to12h(e.time)}</td>
         <td>${e.location}</td>
-        <td class="log-merge-cell">
-          <button class="log-row-merge ${selected ? 'active' : ''}" title="Merge duplicates"
-                  onclick="event.stopPropagation(); enterMergeMode('${p.userId}')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <circle cx="6" cy="12" r="2.6"></circle>
-              <circle cx="18" cy="6" r="2.6"></circle>
-              <circle cx="18" cy="18" r="2.6"></circle>
-              <path d="M8.4 10.8 15.6 7.2"></path>
-              <path d="M8.4 13.2 15.6 16.8"></path>
-            </svg>
-          </button>
-        </td>
       </tr>`;
   }).join('')
-    : `<tr><td colspan="6" style="color:var(--text-muted)">No entries match these filters.</td></tr>`;
-}
-
-/* Row click: toggles merge selection while merging, otherwise opens the person log.
-   Mirrors the Report card behaviour so merge works the same way from either view. */
-function onLogRowClick(e, userId) {
-  if (mergeMode) { toggleMergeSelect(userId); return; }
-  openPersonLog(userId);
+    : `<tr><td colspan="5" style="color:var(--text-muted)">No entries match these filters.</td></tr>`;
 }
 
 /* ---------- Report page ---------- */

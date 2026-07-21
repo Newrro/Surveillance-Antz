@@ -199,19 +199,3 @@ function peopleInside() {
   out.sort((a, b) => a.entry.time.localeCompare(b.entry.time));
   return out;
 }
-
-/* People who ENTERED the premises today = anyone with a sighting today (whether
-   or not they've since left). Returns [{ p, entry, last, trail }] sorted by entry
-   time — backs the clickable "No. of visits today" grid tile. */
-function peopleEnteredToday() {
-  const out = [];
-  Object.values(PEOPLE).forEach(p => {
-    const trail = p.history
-      .filter(h => h.date === TODAY)
-      .sort((a, b) => a.time.localeCompare(b.time));
-    if (!trail.length) return;
-    out.push({ p, entry: trail[0], last: trail[trail.length - 1], trail });
-  });
-  out.sort((a, b) => a.entry.time.localeCompare(b.entry.time));
-  return out;
-}

@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0b1410">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Antz Surveillance — Reports &amp; Logs</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tabler-icons/2.47.0/iconfont/tabler-icons.min.css">
+<link rel="stylesheet" href="styles/base.css">
+<link rel="stylesheet" href="styles/shell.css">
+<link rel="stylesheet" href="styles/login.css">
+<link rel="stylesheet" href="styles/grid.css">
+<link rel="stylesheet" href="styles/camera.css">
+<link rel="stylesheet" href="styles/panels.css">
+<link rel="stylesheet" href="styles/photo.css">
+<link rel="stylesheet" href="styles/report.css">
+<link rel="stylesheet" href="styles/person-log.css">
+<link rel="stylesheet" href="styles/responsive.css">
+</head>
+<body>
+
+<!-- Interactive HUD grid backdrop (brightens under the cursor) -->
+<div id="bg-fx"></div>
+
+<!-- ===================== LOGIN ===================== -->
+<div class="login-screen" id="view-login">
+  <div class="login-forest" aria-hidden="true"></div>
+  <div class="login-card">
+    <img class="login-logo" src="static/logo.png" alt="Antz Systems">
+    <h1 class="login-title">Reports &amp; Logs</h1>
+    <p class="login-sub">Sign in to the access console</p>
+    <div class="field">
+      <label>Username</label>
+      <input type="text" id="login-user" placeholder="Enter username" autocomplete="username">
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input type="password" id="login-pass" placeholder="Enter password" autocomplete="current-password">
+    </div>
+    <p class="login-error hidden" id="login-error">Incorrect operator ID or password.</p>
+    <button class="btn btn-primary btn-block" onclick="login()">Sign in</button>
+  </div>
+</div>
+
+<!-- ===================== APP SHELL ===================== -->
+<div class="app hidden" id="app-shell">
+
+  <nav class="nav">
+    <div class="nav-logo">S</div>
+    <button class="nav-item active" data-view="report" onclick="showView('report')" title="Report">
+      <span class="nav-ico"><i class="ti ti-chart-bar"></i></span><span class="nav-label">Report</span>
+    </button>
+    <button class="nav-item" data-view="log" onclick="showView('log')" title="Log">
+      <span class="nav-ico"><i class="ti ti-calendar-event"></i></span><span class="nav-label">Log</span>
+    </button>
+    <button class="nav-item" data-view="settings" onclick="showView('settings')" title="Settings">
+      <span class="nav-ico"><i class="ti ti-settings"></i></span><span class="nav-label">Settings</span>
+    </button>
+  </nav>
+
+  <div class="main">
+    <div class="topbar">
+      <div class="topbar-search">
+        <i class="ti ti-search"></i>
+        <input type="text" id="global-search" placeholder="Search…" oninput="onSearch(this.value)">
+      </div>
+      <div class="topbar-spacer"></div>
+      <div class="topbar-clock" id="clock">--:--:--</div>
+      <div class="topbar-operator">
+        <div class="avatar">A</div>
+        <span id="operator-name">admin</span>
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- ---------- Log ---------- -->
+      <section class="view hidden" id="view-log">
+        <div class="view-header">
+          <div>
+            <h1 class="view-title">Log</h1>
+            <p class="view-sub">Pick a day on the calendar · search a person or location to narrow it</p>
+          </div>
+        </div>
+
+        <div class="log-layout">
+          <!-- Left: month/year, calendar, then filters -->
+          <div class="log-controls">
+            <div class="log-monthyear">
+              <span class="log-my-label">Select month &amp; year</span>
+              <select id="log-month" onchange="onLogMonthYear()"></select>
+              <select id="log-year" onchange="onLogMonthYear()"></select>
+            </div>
+
+            <div class="cal">
+              <div class="cal-weekdays"><span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span></div>
+              <div class="cal-grid" id="log-cal"></div>
+            </div>
+
+            <div class="log-filters">
+              <div class="filter-field">
+                <label>Search person</label>
+                <input type="text" id="log-person" placeholder="Name or ID…" oninput="renderLogSheet()">
+              </div>
+              <div class="filter-field">
+                <label>Location</label>
+                <select id="log-loc" onchange="renderLogSheet()"></select>
+              </div>
+              <div class="filter-field">
+                <label>Time range</label>
+                <div class="time-range">
+                  <input type="time" id="log-time-from" onchange="renderLogSheet()">
+                  <span class="time-range-sep">to</span>
+                  <input type="time" id="log-time-to" onchange="renderLogSheet()">
+                </div>
+              </div>
+              <!-- Category is a toggle in the datasheet head; this hidden field
+                   still backs the filter renderLogSheet()/clearLogFilters() read. -->
+              <input type="hidden" id="log-category" value="">
+              <button class="btn btn-block" onclick="clearLogFilters()"><i class="ti ti-filter-off"></i> Clear all filters</button>
+            </div>
+          </div>
+
+          <!-- Right: datasheet only (fills the column) -->
+          <div class="log-sheet">
+            <div class="log-sheet-head">
+              <div>
+                <div class="log-sheet-date" id="log-sheet-date">—</div>
+                <div class="log-sheet-day" id="log-sheet-day">—</div>
+              </div>
+              <div class="log-cat-toggle">
+                <button class="log-cat-btn" id="log-cat-Employee" onclick="setLogCat('Employee')"><i class="ti ti-id-badge-2"></i> Employees</button>
+                <button class="log-cat-btn" id="log-cat-Visitor" onclick="setLogCat('Visitor')"><i class="ti ti-user"></i> Visitors</button>
+                <button class="log-cat-btn" id="log-cat-Unknown" onclick="setLogCat('Unknown')"><i class="ti ti-arrow-down"></i> Unknowns</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Photo</th><th>Name</th><th>Category</th><th>Time</th><th>Location</th></tr>
+                </thead>
+                <tbody id="log-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- Report ---------- -->
+      <section class="view" id="view-report">
+        <div class="view-header">
+          <div>
+            <h1 class="view-title">Report</h1>
+            <p class="view-sub" id="report-sub">Grouped by category · click anyone to open their full log</p>
+          </div>
+        </div>
+        <div id="report-groups"></div>
+      </section>
+
+      <!-- ---------- Settings ---------- -->
+      <section class="view hidden" id="view-settings">
+        <div class="view-header">
+          <div>
+            <h1 class="view-title">Settings</h1>
+            <p class="view-sub">Departments &amp; database maintenance</p>
+          </div>
+          <button class="btn" onclick="logout()"><i class="ti ti-logout"></i> Log out</button>
+        </div>
+
+        <div class="settings-section">
+          <h2>Departments</h2>
+          <p class="desc">Departments available when reclassifying visitors into employees.</p>
+          <div class="chip-list" id="dept-list"></div>
+          <div class="form-inline">
+            <div class="field"><label>New department</label><input type="text" id="dept-new" placeholder="e.g. Housekeeping"></div>
+            <button class="btn btn-primary" onclick="addDepartment()"><i class="ti ti-plus"></i> Add department</button>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h2>Add employee</h2>
+          <p class="desc">Register a person now by uploading one or more clear, front-facing face photos. The uploaded photo becomes their fixed profile picture (it never changes on its own), and the system remembers their face for recognition.</p>
+          <button class="btn btn-primary" onclick="openEnroll()"><i class="ti ti-user-plus"></i> Add employee</button>
+        </div>
+
+        <div class="settings-section">
+          <h2>Daily reset</h2>
+          <p class="desc">Clear all Unknowns (people not yet confirmed as Visitors). Confirmed Visitors and Employees are kept, so returning people are still recognised. Runs automatically every midnight.</p>
+          <button class="btn" id="clear-unknowns-btn" onclick="clearUnknowns()"><i class="ti ti-eraser"></i> Clear all unknowns</button>
+        </div>
+
+        <div class="settings-section">
+          <h2>Merge duplicate visitors</h2>
+          <p class="desc">The same person can enroll as several Visitor cards when their face was captured from different angles. This finds Visitors whose faces match (face only — never clothing) and folds them into one. Preview first; nothing changes until you apply.</p>
+          <button class="btn" id="consolidate-preview-btn" onclick="consolidatePreview()"><i class="ti ti-users-group"></i> Preview duplicates</button>
+          <button class="btn btn-primary" id="consolidate-apply-btn" onclick="consolidateApply()" style="display:none"><i class="ti ti-git-merge"></i> Apply merges</button>
+          <div id="consolidate-result" class="desc" style="margin-top:10px;white-space:pre-wrap"></div>
+        </div>
+
+        <div class="settings-section">
+          <h2>Danger zone</h2>
+          <p class="desc">Permanently delete every person, event and snapshot from the database. Cameras are kept. This cannot be undone.</p>
+          <button class="btn btn-danger" id="wipe-db-btn" onclick="deleteDatabase()"><i class="ti ti-trash"></i> Delete entire database</button>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<!-- ===================== Person log modal (Report / Log rows) ===================== -->
+<div class="modal-backdrop" id="plog-modal" onclick="closePersonLogIfBackdrop(event)">
+  <div class="modal modal-plog">
+    <div class="modal-head plog-head">
+      <div class="avatar plog-avatar-clickable" id="plog-avatar" onclick="openPersonPhoto()" title="View photo">--</div>
+      <div class="plog-who">
+        <div class="name" id="plog-name">—</div>
+        <div class="id" id="plog-id">—</div>
+      </div>
+      <span id="plog-badge"></span>
+      <button class="btn plog-rename" id="plog-rename" onclick="renameCurrentPerson()" title="Give this person a name">
+        <i class="ti ti-pencil"></i> Rename
+      </button>
+      <button class="btn plog-rename" id="plog-editprofile" onclick="openEditProfile()" title="Edit photo, name, employee ID and department" style="display:none">
+        <i class="ti ti-id-badge-2"></i> Edit profile
+      </button>
+      <span class="plog-promote" id="plog-promote"></span>
+      <button class="sidebar-close" onclick="closePersonLog()"><i class="ti ti-x"></i></button>
+    </div>
+
+    <div class="plog-body-grid">
+      <!-- LEFT: details · weekly report · month/year + day tiles -->
+      <div class="plog-left">
+        <div class="plog-card plog-details" id="plog-details"></div>
+
+        <div class="plog-card">
+          <div class="plog-card-title">Weekly report</div>
+          <div class="plog-chart" id="plog-chart"></div>
+          <div class="plog-hours" id="plog-hours"></div>
+        </div>
+
+        <div class="plog-card">
+          <div class="plog-monthyear">
+            <span class="plog-my-label">Month &amp; year</span>
+            <select id="plog-month" onchange="onPlogMonthYear()"></select>
+            <select id="plog-year" onchange="onPlogMonthYear()"></select>
+          </div>
+          <div class="plog-daygrid" id="plog-daygrid"></div>
+        </div>
+      </div>
+
+      <!-- RIGHT: date/day · time & location filters · movement log w/ photo -->
+      <div class="plog-right">
+        <div class="plog-right-head">
+          <div class="plog-sel-date" id="plog-sel-date">—</div>
+          <div class="plog-sel-day" id="plog-sel-day">—</div>
+        </div>
+        <div class="plog-filters">
+          <div class="filter-field">
+            <label>Time range</label>
+            <div class="time-range">
+              <input type="time" id="plog-time-from" onchange="renderPersonLog()">
+              <span class="time-range-sep">to</span>
+              <input type="time" id="plog-time-to" onchange="renderPersonLog()">
+            </div>
+          </div>
+          <div class="filter-field">
+            <label>Location</label>
+            <select id="plog-loc" onchange="renderPersonLog()"></select>
+          </div>
+          <button class="btn btn-block" onclick="clearPersonLogFilters()"><i class="ti ti-filter-off"></i> Clear all filters</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Time</th><th>Location</th><th>Photo</th></tr></thead>
+            <tbody id="plog-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== Sighting evidence popup =====================
+     ONE sighting = ONE evidence set: the Face, Full body and Full scene shown
+     always share a single filename stem (<stem>.jpg / _face.jpg / _full.jpg),
+     written by Part 1 from the same frame. A figure hides itself when its file
+     is absent (e.g. a faceless sighting shows no Face panel). -->
+<div class="modal-backdrop" id="photo-modal" onclick="closePersonPhotoIfBackdrop(event)">
+  <div class="photo-pop">
+    <button class="sidebar-close" onclick="closePersonPhoto()"><i class="ti ti-x"></i></button>
+    <div class="photo-imgs">
+      <figure class="photo-fig" id="photo-face-fig">
+        <img class="photo-img" id="photo-face-img" alt="face">
+        <figcaption>Face</figcaption>
+      </figure>
+      <figure class="photo-fig" id="photo-body-fig">
+        <img class="photo-img" id="photo-body-img" alt="full body">
+        <figcaption>Full body</figcaption>
+      </figure>
+      <figure class="photo-fig" id="photo-full-fig">
+        <img class="photo-img" id="photo-full-img" alt="full scene">
+        <figcaption>Full scene</figcaption>
+      </figure>
+    </div>
+    <div class="photo-name" id="photo-name">—</div>
+    <div class="photo-sub" id="photo-sub">—</div>
+  </div>
+</div>
+
+<!-- ===================== Enroll employee modal ===================== -->
+<div class="modal-backdrop" id="enroll-modal" onclick="closeEnrollIfBackdrop(event)">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Add employee</h3>
+      <button class="sidebar-close" onclick="closeEnroll()"><i class="ti ti-x"></i></button>
+    </div>
+    <p class="desc">Enter the person's details and upload one or more clear, front-facing face photos. More angles = more reliable recognition. The first photo becomes their fixed profile picture.</p>
+    <div class="field"><label>Name</label><input type="text" id="enroll-name" placeholder="e.g. Akash Kumar"></div>
+    <div class="field"><label>Employee ID</label><input type="text" id="enroll-empid" placeholder="e.g. E1042"></div>
+    <div class="field"><label>Department</label><input type="text" id="enroll-dept" placeholder="e.g. Security" list="enroll-dept-options"><datalist id="enroll-dept-options"></datalist></div>
+    <div class="field"><label>Email (optional)</label><input type="text" id="enroll-email" placeholder="name@company.com"></div>
+    <div class="field"><label>Face photo(s)</label><input type="file" id="enroll-files" accept="image/*" multiple></div>
+    <div id="enroll-preview" class="enroll-preview"></div>
+    <div id="enroll-status" class="desc"></div>
+    <div class="modal-actions">
+      <span style="flex:1"></span>
+      <button class="btn" onclick="closeEnroll()"><i class="ti ti-x"></i> Cancel</button>
+      <button class="btn btn-primary" id="enroll-submit" onclick="doEnrollEmployee()"><i class="ti ti-user-plus"></i> Add employee</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== Edit profile modal (Employees) ===================== -->
+<div class="modal-backdrop" id="editp-modal" onclick="closeEditProfileIfBackdrop(event)">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Edit profile</h3>
+      <button class="sidebar-close" onclick="closeEditProfile()"><i class="ti ti-x"></i></button>
+    </div>
+    <p class="desc">Update this employee's details. The profile photo only changes when you upload a new one here — captured camera frames never overwrite it.</p>
+    <div class="field"><label>Name</label><input type="text" id="editp-name"></div>
+    <div class="field"><label>Employee ID</label><input type="text" id="editp-empid"></div>
+    <div class="field"><label>Department</label><input type="text" id="editp-dept" list="editp-dept-options"><datalist id="editp-dept-options"></datalist></div>
+    <div class="field"><label>Email (optional)</label><input type="text" id="editp-email"></div>
+    <div class="field"><label>Profile photo</label><input type="file" id="editp-file" accept="image/*"></div>
+    <div id="editp-preview" class="enroll-preview"></div>
+    <div id="editp-status" class="desc"></div>
+    <div class="modal-actions">
+      <span style="flex:1"></span>
+      <button class="btn" onclick="closeEditProfile()"><i class="ti ti-x"></i> Cancel</button>
+      <button class="btn btn-primary" id="editp-submit" onclick="saveProfile()"><i class="ti ti-device-floppy"></i> Save changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== Merge selection bar (Report) — floating bottom dock ===================== -->
+<div class="merge-bar" id="merge-bar">
+  <span class="merge-bar-info"><b id="merge-bar-count">0</b> selected · tick 2+ records that are the same person</span>
+  <button class="btn btn-primary" id="merge-bar-go" onclick="mergePeople()" disabled><i class="ti ti-git-merge"></i> Merge into one</button>
+  <button class="btn" id="merge-cancel-btn" onclick="exitMergeMode()"><i class="ti ti-x"></i> Cancel</button>
+</div>
+
+<script src="data.js"></script>
+<script src="api.js"></script>
+<script src="app-core.js"></script>
+<script src="app-person.js"></script>
+<script src="app-admin.js"></script>
+<script src="app-log.js"></script>
+<script src="app-report.js"></script>
+<script src="app-boot.js"></script>
+</body>
+</html>

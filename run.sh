@@ -15,7 +15,7 @@
 #   ./run.sh stop       # stop all three
 #   ./run.sh restart    # stop then start
 #   ./run.sh status      # what's running + health
-#   ./run.sh logs [brain|ui|pipeline]   # tail a log (Ctrl-C to exit)
+#   ./run.sh logs [brain|ui|reports|ngrok|pipeline]   # tail a log (Ctrl-C to exit)
 #
 # Choose which cameras the pipeline runs (default: all in cameras.json):
 #   CAMERAS="LOCAL-STREAM"  ./run.sh start      # one camera
@@ -140,6 +140,33 @@ cmd_start() {
   log "Starting UI bridge (:8080)…"
   SENTINEL_PORT=8080 _start_one ui "$ROOT" "$LOGS/ui.log" \
     "$AI_PY" surveillance_UI/server.py
+  # ── Reports & Logs public site (:8090) + ngrok tunnel ──────────────────────
+  # Stand-alone Report/Log/Settings website (surveillance_UI_reports/) that
+  # reverse-proxies the Brain, so ONE ngrok tunnel exposes it all. Pure stdlib.
+  log "Starting Reports & Logs site (:${REPORTS_PORT:-8090})…"
+  REPORTS_PORT="${REPORTS_PORT:-8090}" _start_one reports "$ROOT" "$LOGS/reports.log" \
+    python3 surveillance_UI_reports/server.py
+  # Public tunnel — needs ngrok installed + authtoken configured once:
+  #   ngrok config add-authtoken <token>
+  # STATIC URL: default to the account's reserved free domain so the public URL
+  # NEVER changes across restarts (works from any network, every time). Override
+  # with e.g.  NGROK_DOMAIN=other.ngrok-free.app ./run.sh start  — or set it to
+  # empty (NGROK_DOMAIN= ./run.sh start) to fall back to a random ephemeral URL.
+  local NGROK_DOMAIN="${NGROK_DOMAIN-cheek-handler-unwired.ngrok-free.dev}"
+  if command -v ngrok >/dev/null 2>&1; then
+    local ng_arg=(); [[ -n "$NGROK_DOMAIN" ]] && ng_arg=(--url "$NGROK_DOMAIN")
+    _start_one ngrok "$ROOT" "$LOGS/ngrok.log" \
+      ngrok http "${REPORTS_PORT:-8090}" --log stdout "${ng_arg[@]}"
+    sleep 3
+    local pub_url
+    pub_url="$(curl -s http://localhost:4040/api/tunnels 2>/dev/null \
+      | grep -o '"public_url":"https:[^"]*' | head -1 | cut -d'"' -f4)"
+    if [[ -n "$pub_url" ]]; then ok "PUBLIC Reports & Logs URL:  $pub_url"
+    else warn "ngrok started but no URL yet — check http://localhost:4040 or $LOGS/ngrok.log"; fi
+  else
+    warn "ngrok not installed — Reports site is local-only (:${REPORTS_PORT:-8090})."
+    warn "Install: sudo snap install ngrok   then: ngrok config add-authtoken <token>"
+  fi
   log "Starting perception pipeline…"
   local cam_arg=(); [[ -n "$CAMERAS" ]] && cam_arg=(--cameras "$CAMERAS")
   # Offline-first model loading: every model (RT-DETR, AdaFace, OSNet) is already
@@ -159,10 +186,10 @@ cmd_start() {
   ok "All up.  Dashboard: http://localhost:8080   (admin / password123)   ·   API docs: http://localhost:8000/docs"
 }
 
-cmd_stop() { _stop_one dbprune; _stop_one prune; _stop_one pipeline; _stop_one ui; _stop_one brain; ok "All stopped (Postgres/Redis left running — they're OS services)."; }
+cmd_stop() { _stop_one ngrok; _stop_one reports; _stop_one dbprune; _stop_one prune; _stop_one pipeline; _stop_one ui; _stop_one brain; ok "All stopped (Postgres/Redis left running — they're OS services)."; }
 
 cmd_status() {
-  for n in brain ui pipeline prune dbprune; do
+  for n in brain ui reports ngrok pipeline prune dbprune; do
     if _alive "$n"; then ok "$n running (pid $(cat "$PIDS/$n.pid"))"; else warn "$n stopped"; fi
   done
   echo "--- Brain health ---"; curl -s http://localhost:8000/health 2>/dev/null || echo "(unreachable)"; echo

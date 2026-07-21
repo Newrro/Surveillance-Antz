@@ -34,7 +34,12 @@ class DetectionEventIn(BaseModel):
     detection_conf: float = Field(..., ge=0.0, le=1.0, description="Detection confidence 0.0–1.0")
     face_embedding: Optional[List[float]] = Field(None, description="512-dim face embedding")
     body_embedding: Optional[List[float]] = Field(None, description="512-dim body ReID embedding")
-    snapshot_path: Optional[str] = Field(None, description="Path/URL to the person snapshot")
+    snapshot_path: Optional[str] = Field(None, description="Path/URL to the person snapshot (legacy body alias)")
+    # Evidence triple — same frame, shared filename stem. Stored verbatim; the
+    # Brain never derives one companion path from another's name.
+    face_path: Optional[str] = Field(None, description="Path/URL to the aligned face crop")
+    body_path: Optional[str] = Field(None, description="Path/URL to the full-body crop")
+    full_frame_path: Optional[str] = Field(None, description="Path/URL to the full scene frame")
     clip_path: Optional[str] = Field(None, description="Path/URL to the short clip")
 
     @field_validator("face_embedding", "body_embedding")
@@ -73,6 +78,11 @@ class EventOut(BaseModel):
     matched_by: Optional[str] = None         # "face" | "body" | "none"
     similarity: Optional[float] = None
     snapshot: Optional[str] = None
+    # Evidence triple surfaced to the UI (Face / Full body / full-frame Scene).
+    face: Optional[str] = None
+    body: Optional[str] = None
+    full_frame: Optional[str] = None
+    full_frame_annotated: Optional[str] = None
     clip: Optional[str] = None
     duplicate: Optional[bool] = None
 
@@ -118,6 +128,7 @@ class EmployeePhotoIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     department: str = Field(..., min_length=1, max_length=64)
     email: Optional[str] = None
+    external_id: Optional[str] = Field(None, max_length=64, description="Human employee id")
     images: List[str] = Field(..., min_length=1, description="base64 JPEG/PNG (data URL ok)")
 
 
@@ -150,6 +161,7 @@ class EmployeeOut(BaseModel):
     name: str
     department: str
     email: Optional[str] = None
+    external_id: Optional[str] = None
     photo_path: Optional[str] = None
 
 
@@ -159,12 +171,31 @@ class EmployeeRecord(BaseModel):
     name: str
     department: str
     email: Optional[str] = None
+    external_id: Optional[str] = None
+    # Durable uploaded avatar (storage/profiles/<id>.jpg) if present — the fixed
+    # thumbnail the UI shows for this employee.
+    photo_path: Optional[str] = None
     hired_at: Optional[str] = None
 
 
 class EmployeeListResponse(BaseModel):
     count: int
     employees: List[EmployeeRecord]
+
+
+class EmployeeUpdateIn(BaseModel):
+    """Edit an existing employee's profile fields (all optional — only sent fields
+    change). `external_id` is the human employee id."""
+    name: Optional[str] = Field(None, min_length=1, max_length=128)
+    department: Optional[str] = Field(None, min_length=1, max_length=64)
+    external_id: Optional[str] = Field(None, max_length=64)
+    email: Optional[str] = None
+
+
+class IdentityPhotoIn(BaseModel):
+    """Set a person's fixed profile photo (base64 JPEG/PNG, data: URL ok). Pins the
+    avatar so the pipeline never overwrites it with a captured face."""
+    image: str = Field(..., min_length=1, description="base64 JPEG/PNG (data URL ok)")
 
 
 # ---------------------------------------------------------------------------

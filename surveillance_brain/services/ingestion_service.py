@@ -45,6 +45,9 @@ async def ingest(
     body_embedding: Optional[Sequence[float]] = None,
     detection_id: Optional[str] = None,
     snapshot_path: Optional[str] = None,
+    face_path: Optional[str] = None,
+    body_path: Optional[str] = None,
+    full_frame_path: Optional[str] = None,
     clip_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -133,6 +136,9 @@ async def ingest(
             matched_by=resolution.matched_by,
             similarity=resolution.similarity,
             snapshot_path=snapshot_path,
+            face_path=face_path,
+            body_path=body_path,
+            full_frame_path=full_frame_path,
             clip_path=clip_path,
         )
         event_db_id = row.id
@@ -168,6 +174,9 @@ async def ingest(
         matched_by=resolution.matched_by,
         similarity=resolution.similarity,
         snapshot_path=snapshot_path,
+        face_path=face_path,
+        body_path=body_path,
+        full_frame_path=full_frame_path,
         clip_path=clip_path,
         duplicate=duplicate,
     )
@@ -194,6 +203,9 @@ def _event_object(
     matched_by: MatchedBy,
     similarity: Optional[float],
     snapshot_path: Optional[str],
+    face_path: Optional[str],
+    body_path: Optional[str],
+    full_frame_path: Optional[str],
     clip_path: Optional[str],
     duplicate: bool,
 ) -> Dict[str, Any]:
@@ -212,6 +224,10 @@ def _event_object(
         "matched_by": matched_by.value,
         "similarity": similarity,
         "snapshot": snapshot_path,
+        # Evidence triple (same frame, shared stem) — surfaced to the UI popup.
+        "face": face_path,
+        "body": body_path,
+        "full_frame": full_frame_path,
         "profile": media_paths.profile_rel(identity_id),   # durable Tier-A photo (if any)
         "clip": clip_path,
         "duplicate": duplicate,

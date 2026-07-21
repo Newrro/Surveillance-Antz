@@ -37,7 +37,10 @@ function renderReport() {
             <span class="report-count">${people.length}</span>
             <button class="report-caret-btn ${open ? 'open' : ''}" onclick="toggleUnknownGroup()"
                     title="${open ? 'Hide' : 'Show'} unknown detections" aria-label="Toggle unknown detections">
-              <i class="ti ti-chevron-down"></i>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M6 9l6 6 6-6"></path>
+              </svg>
             </button>
           </div>
           ${open ? cards : ''}
@@ -71,7 +74,14 @@ function personCard(p) {
       <span class="person-card-check"><i class="ti ti-check"></i></span>
       <button class="person-card-merge" title="Merge duplicates"
               onclick="event.stopPropagation(); enterMergeMode('${p.userId}')">
-        <i class="ti ti-git-merge"></i>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="6" cy="12" r="2.6"></circle>
+          <circle cx="18" cy="6" r="2.6"></circle>
+          <circle cx="18" cy="18" r="2.6"></circle>
+          <path d="M8.4 10.8 15.6 7.2"></path>
+          <path d="M8.4 13.2 15.6 16.8"></path>
+        </svg>
       </button>
       <button class="person-card-del" title="Delete record"
               onclick="event.stopPropagation(); deletePerson('${p.userId}')">
@@ -116,6 +126,7 @@ function enterMergeMode(userId) {
   if (!mergeMode) { mergeMode = true; mergeSelection.clear(); }
   if (userId && PEOPLE[userId]) mergeSelection.add(userId);
   renderReport();
+  renderLogSheet();   // keep the Log datasheet's merge buttons/highlights in sync
   updateMergeBar();
 }
 
@@ -123,6 +134,7 @@ function toggleMergeSelect(userId) {
   if (mergeSelection.has(userId)) mergeSelection.delete(userId);
   else mergeSelection.add(userId);
   renderReport();
+  renderLogSheet();
   updateMergeBar();
 }
 
@@ -131,6 +143,7 @@ function exitMergeMode() {
   mergeSelection.clear();
   updateMergeBar();
   renderReport();
+  renderLogSheet();
 }
 
 /* Merge-only floating bar: show while selecting, update count, enable at 2+. */
@@ -281,8 +294,12 @@ function addOperator() {
 /* ---------- Settings: departments ---------- */
 function renderDepartments() {
   const list = document.getElementById('dept-list');
+  if (!DEPARTMENTS.length) {
+    list.innerHTML = '<span class="desc">No departments yet — add one below.</span>';
+    return;
+  }
   list.innerHTML = DEPARTMENTS.map((d, i) => `
-    <span class="chip">${d}<button class="chip-x" onclick="removeDepartment(${i})" title="Remove"><i class="ti ti-x"></i></button></span>
+    <span class="chip dept-chip"><button class="chip-x" onclick="removeDepartment(${i})" title="Delete department"><i class="ti ti-x"></i></button><span class="dept-name">${d}</span></span>
   `).join('');
 }
 function addDepartment() {
@@ -295,6 +312,9 @@ function addDepartment() {
   renderRecords(); // refresh department dropdown
 }
 function removeDepartment(i) {
+  const name = DEPARTMENTS[i];
+  if (name == null) return;
+  if (!confirm(`Delete department "${name}"? Existing employees keep their department label; it just won't be offered for new ones.`)) return;
   DEPARTMENTS.splice(i, 1);
   renderDepartments();
   renderRecords();

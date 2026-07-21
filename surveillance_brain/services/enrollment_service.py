@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from db.connection import get_session
 from db.models import IdentityType
 from repositories import embedding_repo, identity_repo
+from services import media_paths
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +46,11 @@ async def enroll_employee(
     email: Optional[str] = None,
     body_embedding: Optional[Sequence[float]] = None,
     photo_path: Optional[str] = None,
+    external_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Register a new employee and store their embeddings in Qdrant.
-    Returns {identity_id, label, name, department, email}.
+    Returns {identity_id, label, name, department, email, photo_path}.
     """
     async with get_session() as session:
         year = datetime.utcnow().year
@@ -64,6 +66,7 @@ async def enroll_employee(
             name=name,
             department=department,
             email=email,
+            external_id=external_id,
         )
         # Store embeddings AFTER the identity row exists so the Qdrant
         # payload's identity_id is valid.  (Qdrant write happens inside the
@@ -78,6 +81,14 @@ async def enroll_employee(
         )
         identity_id = identity.id
 
+    # Pin the uploaded photo as the durable, LOCKED profile avatar (storage/
+    # profiles/<id>.jpg). This is the fixed thumbnail the Report shows and the
+    # pipeline is forbidden from overwriting with a captured face.
+    durable = None
+    if photo_path:
+        src_abs = photo_path if os.path.isabs(photo_path) else os.path.join(_REPO_ROOT, photo_path)
+        durable = media_paths.write_profile_from_path(identity_id, src_abs)
+
     logger.info("Enrolled employee %s (%s) id=%d", name, label, identity_id)
     return {
         "identity_id": identity_id,
@@ -85,20 +96,16 @@ async def enroll_employee(
         "name": name,
         "department": department,
         "email": email,
-        "photo_path": photo_path,
+        "external_id": external_id,
+        "photo_path": durable or photo_path,
     }
 
 
-async def enroll_employee_from_images(
-    name: str,
-    department: str,
-    images_b64: Sequence[str],
-    email: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Enroll an employee from uploaded face PHOTO(S). Decodes the base64 images,
-    shells out to the AI venv's face extractor (the Brain has no ML model) to get
-    AdaFace embeddings, enrolls with the best face, and stores the rest as extra
-    gallery views. Raises ValueError if no clear face is found."""
+async def _embed_images_b64(images_b64: Sequence[str]) -> List[Dict[str, Any]]:
+    """Decode base64 photos, shell out to the AI venv's SCRFD+AdaFace extractor
+    (the Brain runs no ML model), and return the successful face results sorted
+    best-first. Each result has {embedding, quality, face_path, ...}. Raises
+    ValueError if no clear face is found in any image."""
     if not images_b64:
         raise ValueError("no images provided")
     stamp = int(time.time() * 1000)
@@ -129,13 +136,26 @@ async def enroll_employee_from_images(
         errs = "; ".join(r.get("error", "") for r in results) or "no face detected"
         raise ValueError(f"No clear face found in the photo(s): {errs}")
     good.sort(key=lambda r: r.get("quality", 0.0), reverse=True)   # best face leads
+    return good
 
+
+async def enroll_employee_from_images(
+    name: str,
+    department: str,
+    images_b64: Sequence[str],
+    email: Optional[str] = None,
+    external_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Enroll an employee from uploaded face PHOTO(S). Enrolls with the best face
+    and stores the rest as extra gallery views. Raises ValueError if no clear face."""
+    good = await _embed_images_b64(images_b64)
     best = good[0]
     face_path = best.get("face_path")
     rel_photo = os.path.relpath(face_path, _REPO_ROOT) if face_path else None
     result = await enroll_employee(
         name=name, department=department,
         face_embedding=best["embedding"], email=email, photo_path=rel_photo,
+        external_id=external_id,
     )
     for r in good[1:]:                                   # extra photos → extra views
         await embedding_repo.store_embeddings(
@@ -145,6 +165,52 @@ async def enroll_employee_from_images(
     logger.info("Enrolled employee %s (id=%d) from %d photo(s)",
                 result["label"], result["identity_id"], len(good))
     return result
+
+
+async def import_employee_from_images(
+    external_id: str,
+    name: str,
+    department: str,
+    images_b64: Sequence[str],
+    email: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Bulk-import path — CREATE or UPDATE an employee keyed by external_id (the
+    idempotency key). New id → enroll fresh. Existing id → append the new photos'
+    embeddings as extra gallery views, refresh name/department/email, and update the
+    durable locked profile from the best new face. Raises ValueError if no clear face.
+    Returns {identity_id, action: 'created'|'updated', external_id, name, photos_used}."""
+    good = await _embed_images_b64(images_b64)
+    best = good[0]
+    face_path = best.get("face_path")
+
+    existing = None
+    if external_id:
+        async with get_session() as session:
+            existing = await identity_repo.fetch_employee_by_external_id(session, external_id)
+
+    if existing is None:
+        rel_photo = os.path.relpath(face_path, _REPO_ROOT) if face_path else None
+        created = await enroll_employee(
+            name=name, department=department, face_embedding=best["embedding"],
+            email=email, photo_path=rel_photo, external_id=external_id,
+        )
+        identity_id, action = created["identity_id"], "created"
+        extras = good[1:]
+    else:
+        identity_id, action = existing.identity_id, "updated"
+        # Add the best new face too (existing already has prior embeddings).
+        await embedding_repo.store_embeddings(identity_id, face_embedding=best["embedding"], source="import")
+        await update_employee(identity_id, name=name, department=department, email=email)
+        media_paths.write_profile_from_path(identity_id, face_path)   # refresh locked avatar
+        extras = good[1:]
+
+    for r in extras:                                     # remaining photos → extra views
+        await embedding_repo.store_embeddings(identity_id, face_embedding=r["embedding"], source="import")
+
+    logger.info("Imported (%s) employee %s [%s] id=%d from %d photo(s)",
+                action, name, external_id, identity_id, len(good))
+    return {"identity_id": identity_id, "action": action, "external_id": external_id,
+            "name": name, "photos_used": len(good)}
 
 
 async def list_employees(limit: int = 500, offset: int = 0) -> List[Dict[str, Any]]:
@@ -161,6 +227,42 @@ async def list_employees(limit: int = 500, offset: int = 0) -> List[Dict[str, An
                 "name": e.name,
                 "department": e.department,
                 "email": e.email,
+                "external_id": e.external_id,
+                # Durable uploaded avatar (storage/profiles/<id>.jpg) if it exists —
+                # the fixed thumbnail the UI shows for this employee.
+                "photo_path": media_paths.profile_rel(e.identity_id),
                 "hired_at": e.hired_at.isoformat() if e.hired_at else None,
             })
     return out
+
+
+async def update_employee(
+    identity_id: int,
+    *,
+    name: Optional[str] = None,
+    department: Optional[str] = None,
+    external_id: Optional[str] = None,
+    email: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Edit an employee's profile fields. Returns the updated record (same shape as
+    list_employees rows). Raises ValueError if the identity isn't an employee or the
+    external_id clashes."""
+    async with get_session() as session:
+        emp = await identity_repo.update_employee(
+            session, identity_id,
+            name=name, department=department, external_id=external_id, email=email,
+        )
+        if emp is None:
+            raise ValueError(f"identity {identity_id} is not an employee")
+        identity = await identity_repo.fetch_identity_by_id(session, identity_id)
+        label = identity.display_label if identity else None
+    logger.info("Updated employee id=%d (%s)", identity_id, label)
+    return {
+        "identity_id": identity_id,
+        "label": label,
+        "name": emp.name,
+        "department": emp.department,
+        "email": emp.email,
+        "external_id": emp.external_id,
+        "photo_path": media_paths.profile_rel(identity_id),
+    }

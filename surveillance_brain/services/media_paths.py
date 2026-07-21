@@ -12,11 +12,16 @@ so we resolve existence against the repo root, not the Brain's cwd.
 """
 from __future__ import annotations
 
+import logging
 import os
+import shutil
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 # services/ -> surveillance_brain/ -> repo root
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_PROFILES_DIR = os.path.join(_REPO_ROOT, "storage", "profiles")
 
 
 def profile_rel(identity_id: Optional[int]) -> Optional[str]:
@@ -27,3 +32,61 @@ def profile_rel(identity_id: Optional[int]) -> Optional[str]:
         return None
     rel = f"storage/profiles/{identity_id}.jpg"
     return rel if os.path.exists(os.path.join(_REPO_ROOT, rel)) else None
+
+
+def _abs(identity_id: int) -> str:
+    return os.path.join(_PROFILES_DIR, f"{identity_id}.jpg")
+
+
+def lock_path(identity_id: int) -> str:
+    """Absolute path of the 'hands-off' marker for an identity's profile photo."""
+    return os.path.join(_PROFILES_DIR, f"{identity_id}.lock")
+
+
+def is_locked(identity_id: Optional[int]) -> bool:
+    """True when a manual/enrolled profile photo is pinned for this identity — the
+    pipeline must NOT overwrite it with a captured face. See
+    surveillance_AI/snapshots.py:save_profile_photo, which honours the same marker."""
+    if identity_id is None:
+        return False
+    return os.path.exists(lock_path(identity_id))
+
+
+def _lock(identity_id: int) -> None:
+    try:
+        with open(lock_path(identity_id), "w") as f:
+            f.write("manual")           # content is irrelevant — presence is the signal
+    except OSError as e:
+        logger.warning("could not write profile lock for id=%s: %s", identity_id, e)
+
+
+def write_profile_from_bytes(identity_id: int, data: bytes) -> Optional[str]:
+    """Write a MANUAL/enrolled profile photo to storage/profiles/<id>.jpg and pin it
+    with a lock marker so the pipeline never overwrites it. Returns the repo-relative
+    path, or None on failure. Best-effort; never raises."""
+    if identity_id is None or not data:
+        return None
+    try:
+        os.makedirs(_PROFILES_DIR, exist_ok=True)
+        with open(_abs(identity_id), "wb") as f:
+            f.write(data)
+        _lock(identity_id)
+        return f"storage/profiles/{identity_id}.jpg"
+    except OSError as e:
+        logger.warning("could not write profile photo for id=%s: %s", identity_id, e)
+        return None
+
+
+def write_profile_from_path(identity_id: int, src_abs: Optional[str]) -> Optional[str]:
+    """Copy an already-saved image (e.g. the enrollment face crop) into the durable
+    profile slot and pin it. Returns the repo-relative path, or None. Never raises."""
+    if identity_id is None or not src_abs or not os.path.exists(src_abs):
+        return None
+    try:
+        os.makedirs(_PROFILES_DIR, exist_ok=True)
+        shutil.copyfile(src_abs, _abs(identity_id))
+        _lock(identity_id)
+        return f"storage/profiles/{identity_id}.jpg"
+    except OSError as e:
+        logger.warning("could not copy profile photo for id=%s: %s", identity_id, e)
+        return None

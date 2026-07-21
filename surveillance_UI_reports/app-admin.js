@@ -1,4 +1,5 @@
-/* app-admin.js — split from the original app.js (rename/promote + settings admin actions (enroll/import/reset)).
+/* app-admin.js — Reports & Logs site (rename + promote from the person-log
+   modal). Same code as the main console minus the Settings-page admin actions.
    Plain <script> (globals shared across files); loaded in order by index.html. */
 
 async function renameCurrentPerson() {
@@ -24,7 +25,7 @@ async function renameCurrentPerson() {
     : (p.displayLabel ? p.displayLabel.slice(-2) : '??');
   document.getElementById('plog-name').textContent = personName(p);
   setAvatar(document.getElementById('plog-avatar'), p);
-  renderReport(); renderRecords();
+  renderReport();
   if (currentView === 'log') renderLog();
 }
 
@@ -77,103 +78,18 @@ async function promoteCurrentPerson() {
     p.initials = name.split(/\s+/).map(s => s[0]).slice(0, 2).join('').toUpperCase();
     if (department && !DEPARTMENTS.includes(department)) DEPARTMENTS.push(department);
     openPersonLog(plogPersonId);       // refresh the modal (badge, buttons, details)
-    renderReport(); renderRecords();
+    renderReport();
   } catch (e) {
     alert('Promote failed: ' + e.message);
   }
 }
 
-/* Settings → Daily reset: clear all Unknowns (unconfirmed people), keeping
-   confirmed Visitors + Employees. Same as the automatic midnight sweep. */
-async function clearUnknowns() {
-  if (!confirm('Clear all Unknowns? Confirmed Visitors and Employees are kept.')) return;
-  const btn = document.getElementById('clear-unknowns-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Clearing…'; }
-  try {
-    if (!BRAIN_ON) throw new Error('Brain not connected');
-    const r = await Brain.clearUnknowns({ user: AUTH.username, pass: AUTH.password });
-    await connectBrain();
-    renderGrid(); renderReport(); renderRecords();
-    if (currentView === 'log') renderLog();
-    alert(`Cleared ${r.removed ?? 0} unknown(s).`);
-  } catch (e) {
-    alert('Clear failed: ' + e.message);
-  } finally {
-    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-eraser"></i> Clear all unknowns'; }
-  }
-}
-
-/* Settings → Add employee(s) → bulk upload: preview then apply an XLSX/CSV/ZIP
-   roster. Two-step so nothing is written until a human sees the row-level plan.
-   external_id is the idempotency key — re-imports update, never duplicate. */
-function _readFileB64(file) {
-  return new Promise((res, rej) => {
-    const r = new FileReader();
-    r.onload = () => res(String(r.result).split(',', 2)[1] || '');   // strip data: prefix
-    r.onerror = rej;
-    r.readAsDataURL(file);
-  });
-}
-function _renderImportPreview(s) {
-  const box = document.getElementById('import-result');
-  const applyBtn = document.getElementById('import-apply-btn');
-  const rows = (s.rows || []).map((r, i) => {
-    const ok = !r.errors || !r.errors.length;
-    const badge = ok ? '<span style="color:var(--ok,#3fb950)">ready</span>'
-                     : `<span style="color:var(--danger,#f85149)">${r.errors.join('; ')}</span>`;
-    const photos = r.photos ? ` · ${r.photos} photo(s)` : '';
-    return `<div>#${i + 1} <b>${r.external_id || '—'}</b> ${r.name || ''}${photos} — ${badge}</div>`;
-  }).join('');
-  box.innerHTML = `<div style="margin-bottom:6px">${s.total_rows} row(s): `
-    + `${s.valid_rows} ready, ${s.error_rows} with errors.</div>` + rows;
-  if (applyBtn) applyBtn.style.display = s.valid_rows > 0 ? '' : 'none';
-}
-async function importPreview() {
-  const fileEl = document.getElementById('import-file');
-  const box = document.getElementById('import-result');
-  const file = fileEl && fileEl.files && fileEl.files[0];
-  if (!file) { box.textContent = 'Choose an XLSX/CSV/ZIP file first.'; return; }
-  const btn = document.getElementById('import-preview-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Previewing…'; }
-  try {
-    if (!BRAIN_ON) throw new Error('Brain not connected');
-    const b64 = await _readFileB64(file);
-    const s = await Brain.importEmployees({ user: AUTH.username, pass: AUTH.password }, file.name, b64, true);
-    _renderImportPreview(s);
-  } catch (e) {
-    box.textContent = 'Preview failed: ' + e.message;
-    const applyBtn = document.getElementById('import-apply-btn');
-    if (applyBtn) applyBtn.style.display = 'none';
-  } finally {
-    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-eye"></i> Preview'; }
-  }
-}
-async function importApply() {
-  const fileEl = document.getElementById('import-file');
-  const box = document.getElementById('import-result');
-  const file = fileEl && fileEl.files && fileEl.files[0];
-  if (!file) { box.textContent = 'Choose an XLSX/CSV/ZIP file first.'; return; }
-  if (!confirm('Import the previewed roster? Rows with an existing employee id are updated, not duplicated.')) return;
-  const btn = document.getElementById('import-apply-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
-  try {
-    if (!BRAIN_ON) throw new Error('Brain not connected');
-    const b64 = await _readFileB64(file);
-    const s = await Brain.importEmployees({ user: AUTH.username, pass: AUTH.password }, file.name, b64, false);
-    box.textContent = `Imported: ${s.created} created, ${s.updated} updated`
-      + (s.skipped ? `, ${s.skipped} skipped` : '') + '.';
-    await connectBrain(); renderGrid(); renderReport(); renderRecords();
-    if (currentView === 'log') renderLog();
-    if (btn) btn.style.display = 'none';
-  } catch (e) {
-    box.textContent = 'Import failed: ' + e.message;
-  } finally {
-    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-database-import"></i> Import'; }
-  }
-}
-
-/* Records → Enroll employee: upload face photo(s) → Brain embeds + enrolls. */
+/* ---------- Settings → Add employee: upload face photo(s) → Brain embeds + enrolls.
+   The uploaded photo becomes the employee's fixed, LOCKED profile picture. ---------- */
 let enrollFiles = [];
+function _readAsDataURL(file) {
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+}
 function openEnroll() {
   ['enroll-name', 'enroll-empid', 'enroll-dept', 'enroll-email'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('enroll-files').value = '';
@@ -192,9 +108,6 @@ function openEnroll() {
 }
 function closeEnroll() { document.getElementById('enroll-modal').classList.remove('open'); }
 function closeEnrollIfBackdrop(e) { if (e.target.id === 'enroll-modal') closeEnroll(); }
-function _readAsDataURL(file) {
-  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
-}
 async function doEnrollEmployee() {
   const name = document.getElementById('enroll-name').value.trim();
   const empId = document.getElementById('enroll-empid').value.trim();
@@ -211,7 +124,8 @@ async function doEnrollEmployee() {
       auth: { user: AUTH.username, pass: AUTH.password } });
     status.textContent = `Added ${r.name} (${r.label}) from ${r.photos_used || 1} photo(s).`;
     if (dept && !DEPARTMENTS.includes(dept)) DEPARTMENTS.push(dept);
-    await connectBrain(); renderRecords(); renderReport();
+    await connectBrain(); renderReport();          // auto-update the Report immediately
+    if (currentView === 'log') renderLog();
     setTimeout(closeEnroll, 1400);
   } catch (e) {
     status.textContent = 'Add failed: ' + e.message;
@@ -270,7 +184,7 @@ async function saveProfile() {
     if (dept && !DEPARTMENTS.includes(dept)) DEPARTMENTS.push(dept);
     status.textContent = 'Saved.';
     await connectBrain();                          // re-hydrate so the new photo/details show
-    renderReport(); renderRecords();
+    renderReport();
     if (currentView === 'log') renderLog();
     if (document.getElementById('plog-modal').classList.contains('open')) openPersonLog(plogPersonId);
     setTimeout(closeEditProfile, 800);
@@ -278,6 +192,95 @@ async function saveProfile() {
     status.textContent = 'Save failed: ' + e.message;
   } finally {
     btn.disabled = false; btn.innerHTML = '<i class="ti ti-device-floppy"></i> Save changes';
+  }
+}
+
+/* ---------- Settings: departments ---------- */
+function renderDepartments() {
+  const list = document.getElementById('dept-list');
+  if (!list) return;
+  list.innerHTML = DEPARTMENTS.map((d, i) => `
+    <span class="chip">${d}<button class="chip-x" onclick="removeDepartment(${i})" title="Remove"><i class="ti ti-x"></i></button></span>
+  `).join('');
+}
+function addDepartment() {
+  const input = document.getElementById('dept-new');
+  const val = input.value.trim();
+  if (!val) return;
+  if (!DEPARTMENTS.includes(val)) DEPARTMENTS.push(val);
+  input.value = '';
+  renderDepartments();
+}
+function removeDepartment(i) {
+  DEPARTMENTS.splice(i, 1);
+  renderDepartments();
+}
+
+/* Settings → Daily reset: clear all Unknowns (unconfirmed people), keeping
+   confirmed Visitors + Employees. Same as the automatic midnight sweep. */
+async function clearUnknowns() {
+  if (!confirm('Clear all Unknowns? Confirmed Visitors and Employees are kept.')) return;
+  const btn = document.getElementById('clear-unknowns-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Clearing…'; }
+  try {
+    if (!BRAIN_ON) throw new Error('Brain not connected');
+    const r = await Brain.clearUnknowns({ user: AUTH.username, pass: AUTH.password });
+    await connectBrain();
+    renderReport();
+    if (currentView === 'log') renderLog();
+    alert(`Cleared ${r.removed ?? 0} unknown(s).`);
+  } catch (e) {
+    alert('Clear failed: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-eraser"></i> Clear all unknowns'; }
+  }
+}
+
+/* Settings → Merge duplicate visitors: preview the face-centroid merge plan
+   (dry-run, safe) then optionally apply. Two-step so a human always sees which
+   Visitor cards will be folded together before anything changes. */
+function _renderConsolidatePlan(r) {
+  const box = document.getElementById('consolidate-result');
+  const applyBtn = document.getElementById('consolidate-apply-btn');
+  if (!r.duplicates_found) {
+    box.textContent = 'No duplicate visitors found — nothing to merge.';
+    if (applyBtn) applyBtn.style.display = 'none';
+    return;
+  }
+  const lines = r.merges.map(m =>
+    `• keep ${m.keep_label} ← merge ${m.merged_labels.join(', ')}  (face sim ${m.similarity})`);
+  box.textContent = `Found ${r.duplicates_found} duplicate(s) in ${r.clusters} cluster(s):\n` + lines.join('\n');
+  if (applyBtn) applyBtn.style.display = '';   // reveal Apply now that there's a plan
+}
+async function consolidatePreview() {
+  const btn = document.getElementById('consolidate-preview-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Scanning…'; }
+  try {
+    if (!BRAIN_ON) throw new Error('Brain not connected');
+    _renderConsolidatePlan(await Brain.consolidate({ user: AUTH.username, pass: AUTH.password }, false));
+  } catch (e) {
+    document.getElementById('consolidate-result').textContent = 'Preview failed: ' + e.message;
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-users-group"></i> Preview duplicates'; }
+  }
+}
+async function consolidateApply() {
+  if (!confirm('Merge the previewed duplicate Visitors? This rewrites their sightings onto one id and cannot be undone.')) return;
+  const btn = document.getElementById('consolidate-apply-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Merging…'; }
+  try {
+    if (!BRAIN_ON) throw new Error('Brain not connected');
+    const r = await Brain.consolidate({ user: AUTH.username, pass: AUTH.password }, true);
+    await connectBrain();
+    renderReport();
+    if (currentView === 'log') renderLog();
+    document.getElementById('consolidate-result').textContent =
+      `Merged ${r.duplicates_found} duplicate(s) into ${r.clusters} identity(ies).`;
+    btn.style.display = 'none';
+  } catch (e) {
+    document.getElementById('consolidate-result').textContent = 'Merge failed: ' + e.message;
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-git-merge"></i> Apply merges'; }
   }
 }
 
@@ -291,7 +294,7 @@ async function deleteDatabase() {
     if (!BRAIN_ON) throw new Error('Brain not connected');
     await Brain.resetDatabase({ user: AUTH.username, pass: AUTH.password });
     await connectBrain();                 // re-hydrate the now-empty DB
-    renderGrid(); renderReport(); renderRecords();
+    renderReport();
     if (currentView === 'log') renderLog();
     alert('Database deleted. Starting fresh.');
   } catch (e) {
@@ -300,7 +303,3 @@ async function deleteDatabase() {
     if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-trash"></i> Delete entire database'; }
   }
 }
-
-/* ---------- Track: people currently inside + auto-track simulation ---------- */
-
-/* TRACK button (topbar): list everyone currently inside, newest sighting first. */

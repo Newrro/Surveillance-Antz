@@ -37,6 +37,12 @@ def save_profile_photo(identity_id, face_path=None, snap_path=None):
     Best-effort — copies from the already-saved snapshot files; never raises."""
     if identity_id is None:
         return None
+    # A manual/enrolled photo is PINNED with a sibling '<id>.lock' marker (written by
+    # the Brain on enrollment or a profile-photo edit). Never overwrite it with a
+    # captured face — the chosen photo is the person's fixed avatar. Mirrors
+    # surveillance_brain/services/media_paths.py:is_locked.
+    if os.path.exists(os.path.join(PROFILES_DIR, f"{identity_id}.lock")):
+        return None
     try:
         os.makedirs(PROFILES_DIR, exist_ok=True)
         dst = os.path.join(PROFILES_DIR, f"{identity_id}.jpg")

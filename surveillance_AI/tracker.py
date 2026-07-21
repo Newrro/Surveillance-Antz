@@ -29,7 +29,7 @@ def _iou(a, b):
 class Track:
     __slots__ = ("id", "box", "hits", "misses",
                  "label", "color", "resolved", "last_resolve", "emitted",
-                 "snap_path", "face_path",
+                 "snap_path", "face_path", "frame_path",
                  "best_face_emb", "best_body_emb", "best_face_q", "emit_face_q", "probes",
                  "face_emb_sum", "face_w_sum", "emit_face_w", "best_shot_q")
 
@@ -45,6 +45,7 @@ class Track:
         self.emitted = False       # at least one /events POST sent for this track
         self.snap_path = None      # body-crop snapshot saved once per track (dedupe)
         self.face_path = None      # face-crop snapshot saved once per track
+        self.frame_path = None     # full-scene frame snapshot saved once per track
         # ── quality-weighted temporal face pooling (Part 2, Phase 3b) ──
         # A single "best shot" is still one noisy frame, so the SAME person's face
         # can enroll as several gallery entries that don't re-match (measured: one

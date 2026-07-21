@@ -1,18 +1,9 @@
-/* app-boot.js — page-load wiring. Loaded LAST so every function it
-   references (pollFeeds, tickClock, onFeedFullscreenChange) is defined.
-   Extracted verbatim from the original app.js top-level statements. */
-
-// 110 ms ≈ 9 fps effective (each poll waits for the previous via the in-flight
-// guard). The pipeline writes 12 fps previews to SHM; at the old 350 ms the grid
-// showed ~3 fps of them — the "laggy video" was the POLL RATE, not the pipeline.
-// Pure localhost HTTP + browser JPEG decode: zero GPU cost.
-setInterval(pollFeeds, 110);
+/* app-boot.js — page-load wiring for the Reports & Logs site. Loaded LAST so
+   every function it references is defined. No camera feed polling here — this
+   site has no live video. */
 
 setInterval(tickClock, 1000);
 tickClock();
-
-document.addEventListener('fullscreenchange', onFeedFullscreenChange);
-document.addEventListener('webkitfullscreenchange', onFeedFullscreenChange);
 
 /* ---------- Interactive background: brighten grid under the cursor ---------- */
 (function initBgFx() {

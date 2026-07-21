@@ -1,93 +1,52 @@
-/* app-core.js — split from the original app.js (bootstrap, feeds helpers, login/logout, nav, clock, view routing).
+/* app-core.js — Reports & Logs site (trimmed from the main console's app-core /
+   app-grid / app-track). Bootstrap, Brain wiring, login/logout, nav, clock,
+   view routing and the shared helpers the Log/Report/person-modal code uses.
    Plain <script> (globals shared across files); loaded in order by index.html. */
 
-/* ---------- Live camera source ----------
-   When served by server.py, the camera list + live status come from
-   /api/cameras. When opened as a plain file, we fall back to the static
-   CAMERAS array in data.js. */
+/* ---------- Camera name registry ----------
+   No live video on this site — /api/cameras only supplies id -> friendly name
+   so event locations render with the same labels as the main console. When the
+   server (or registry) is unavailable we fall back to the static CAMERAS list
+   in data.js. */
 let LIVE_CAMERAS = CAMERAS;
-let SERVED = false; // true once we know a backend is present (enables MJPEG feeds)
-let BRAIN_ON = false; // true once hydrated from the Brain (Part 2) API
-let CAM_NAME_BY_ID = {}; // camera id/uid -> friendly name, for location labels
+let BRAIN_ON = false;      // true once hydrated from the Brain (Part 2) API
+let CAM_NAME_BY_ID = {};   // camera id/uid -> friendly name, for location labels
 
 async function loadCameras() {
   try {
     const res = await fetch('/api/cameras', { cache: 'no-store' });
     if (res.ok) {
       const cams = await res.json();
-      if (Array.isArray(cams) && cams.length) {
-        LIVE_CAMERAS = cams;
-        SERVED = true;
-      }
+      if (Array.isArray(cams) && cams.length) LIVE_CAMERAS = cams;
     }
-  } catch (e) {
-    /* file:// or server down — keep the static fallback list, no live video */
-  }
+  } catch (e) { /* server down — keep the static fallback list */ }
   CAM_NAME_BY_ID = {};
   LIVE_CAMERAS.forEach(c => { CAM_NAME_BY_ID[c.id] = c.name; });
 }
 
-/* Try to back the whole UI with the Brain (Part 2). On success, PEOPLE +
-   DETECTIONS are replaced with real data and we stream new events over WS /live.
+/* Back the site with the Brain (Part 2). On success, PEOPLE is replaced with
+   real data and api.js keeps it fresh by polling (no WS through the proxy).
    On any failure we leave the mock data.js content untouched. */
 async function connectBrain() {
   if (typeof Brain === 'undefined') return;
   try {
     BRAIN_ON = await Brain.hydrate(CAM_NAME_BY_ID);
-    if (BRAIN_ON) Brain.connectLive(onLiveEvent);
+    if (BRAIN_ON) Brain.connectLive(onLiveRefresh);
   } catch (e) {
     console.warn('[Brain] connect failed, staying on mock data:', e.message);
     BRAIN_ON = false;
   }
 }
 
-/* A new detection arrived over WS /live — fold it into PEOPLE + DETECTIONS and
-   refresh the views that show people/activity. */
+/* api.js re-hydrated the roster — repaint whichever view is on screen. */
 let liveRefreshQueued = false;
-function onLiveEvent(evt) {
-  Brain.applyLiveEvent(evt, CAM_NAME_BY_ID);
-  // Coalesce bursts into one repaint per animation frame.
+function onLiveRefresh() {
   if (liveRefreshQueued) return;
   liveRefreshQueued = true;
   requestAnimationFrame(() => {
     liveRefreshQueued = false;
-    updateGridBadges();   // NOT renderGrid — never recreate the feed <img> (flicker)
     if (currentView === 'log') renderLog();
     if (currentView === 'report') renderReport();
-    if (currentView === 'records') renderRecords();
-  });
-}
-
-/* Live camera feed as a POLLED STILL (not an infinite MJPEG stream).
-   An MJPEG <img src="/stream/..."> holds one HTTP connection open forever; with
-   many cameras that exhausts the browser's ~6-per-origin limit and the page
-   (on reload) or its photos can never fetch — the tab "reloads forever". We poll
-   a single JPEG per tile instead: short, reused connections that always release.
-   The pipeline writes an annotated frame per camera to shared memory; server.py
-   serves the latest at /snapshot/<id>. pollFeeds() refreshes only VISIBLE feeds. */
-function feedImg(camId, cls) {
-  if (!SERVED) return '';
-  return `<img class="${cls}" alt="" data-cam="${camId}" data-feed>`;
-}
-
-function pollFeeds() {
-  document.querySelectorAll('img[data-feed]').forEach(img => {
-    if (!img.isConnected || img.offsetParent === null) return;  // hidden view — skip
-    if (img.dataset.loading === '1') return;                    // fetch in flight — don't pile up
-    img.dataset.loading = '1';
-    fetch(`/snapshot/${encodeURIComponent(img.dataset.cam)}?t=${Date.now()}`, { cache: 'no-store' })
-      .then(r => r.ok ? r.blob() : Promise.reject(new Error(r.status)))
-      .then(blob => {
-        // Swap to a decoded local blob only AFTER it loads, so a failed poll
-        // keeps the last good frame (no blank flash). Revoke the previous blob.
-        const url = URL.createObjectURL(blob);
-        const prev = img.dataset.blob;
-        img.onload = () => { if (prev) URL.revokeObjectURL(prev); };
-        img.src = url;
-        img.dataset.blob = url;
-      })
-      .catch(() => { /* keep last good frame */ })
-      .finally(() => { img.dataset.loading = '0'; });
   });
 }
 
@@ -115,6 +74,28 @@ function setAvatar(el, p) {
   el.style.backgroundPosition = 'center';
 }
 
+/* ---------- Shared date/time helpers (same as the main console) ---------- */
+const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const WEEKDAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+let logYear, logMonth, logDay;   // selected month/year (0-indexed month) + selected day-of-month
+let logInit = false;
+
+/* "HH:MM" (24h) -> minutes since midnight, or null if blank/invalid. */
+function hhmmToMin(t) {
+  if (!t) return null;
+  const [h, m] = t.split(':').map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return null;
+  return h * 60 + m;
+}
+
+/* "HH:MM" (24h) -> "h:MM AM/PM" for display. */
+function to12h(t) {
+  const [h, m] = t.split(':').map(Number);
+  const period = h < 12 ? 'AM' : 'PM';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${String(m).padStart(2, '0')} ${period}`;
+}
+
 /* ---------- Auth ---------- */
 /* The single valid operator. Real deployments should verify against the Brain,
    not a client-side constant — this gates the prototype only. */
@@ -137,12 +118,10 @@ async function login() {
   document.querySelector('#app-shell .avatar').textContent = initialsFromUsername(u);
   await loadCameras();
   await connectBrain();
-  renderGrid();
   renderLog();
   renderReport();
-  renderRecords();
   renderDepartments();
-  showView('grid');
+  showView('report');
   playNavAnimation();
 }
 
@@ -176,18 +155,16 @@ function tickClock() {
 }
 
 /* ---------- View routing + context-aware search ---------- */
-let currentView = 'grid';
+let currentView = 'report';
 const SEARCH_PLACEHOLDER = {
-  grid:    'Search for a camera…',
-  log:     'Search a person (name or ID)…',
-  report:  "Search a person, or 'visitor' / 'unknown'…",
-  records: 'Search by name or employee ID…',
+  log:    'Search a person (name or ID)…',
+  report: "Search a person, or 'visitor' / 'unknown'…",
 };
 
 function showView(name) {
-  // Merge/select mode is shared by Report and Log (both offer a merge action);
-  // leaving BOTH of those drops it so the floating bar can't linger elsewhere.
-  if (name !== 'report' && name !== 'log' && mergeMode) exitMergeMode();
+  // Leaving the Report view drops merge/select mode so the floating bar can't
+  // linger over another view.
+  if (name !== 'report' && mergeMode) exitMergeMode();
   document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
   document.getElementById('view-' + name).classList.remove('hidden');
   document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
@@ -204,22 +181,12 @@ function showView(name) {
   const topSearch = document.querySelector('.topbar-search');
   if (topSearch) topSearch.style.visibility = (name === 'log') ? 'hidden' : 'visible';
 
-  // Log is a Report-only action — its top-bar button shows only on the Report view.
-  const topActions = document.querySelector('.topbar-actions');
-  if (topActions) topActions.style.display = (name === 'report') ? '' : 'none';
-
   // Reset each view's own filter as we arrive, so search starts clean.
-  if (name === 'grid') filterGrid('');
   if (name === 'log') renderLog();
   if (name === 'report') { reportSearch = ''; renderReport(); }
-  if (name === 'records') { const r = document.getElementById('records-search'); if (r) r.value = ''; renderRecords(); }
 }
 
 function onSearch(val) {
   const v = val.trim();
-  if (currentView === 'grid') filterGrid(v);
-  else if (currentView === 'report') { reportSearch = v; renderReport(); }
-  else if (currentView === 'records') { document.getElementById('records-search').value = v; renderRecords(); }
+  if (currentView === 'report') { reportSearch = v; renderReport(); }
 }
-
-/* ---------- Live grid ---------- */

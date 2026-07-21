@@ -29,6 +29,7 @@ from .visitors import (
 from .employees import (
     next_employee_seq,
     insert_employee,
+    update_employee,
     delete_employee,
     fetch_employee,
     list_employees,
@@ -47,8 +48,8 @@ __all__ = [
     "create_identity", "update_identity_type_and_label",
     "next_visitor_seq", "insert_visitor", "delete_visitor", "fetch_visitor",
     "get_visitor_flags", "set_visitor_flags", "confirm_visitor", "is_confirmed_visitor",
-    "next_employee_seq", "insert_employee", "delete_employee", "fetch_employee",
-    "list_employees", "fetch_employee_by_external_id",
+    "next_employee_seq", "insert_employee", "update_employee", "delete_employee",
+    "fetch_employee", "list_employees", "fetch_employee_by_external_id",
     "get_name_for_identity",
     "next_unknown_seq", "insert_unknown_case", "fetch_unknown_case_by_track",
     "find_identity_by_query", "search_identities",

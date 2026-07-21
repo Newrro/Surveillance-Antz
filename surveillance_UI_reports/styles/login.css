@@ -1,0 +1,286 @@
+/* styles/login.css — section split from the original styles.css (cascade order preserved). */
+/* ---------- Login ---------- */
+.login-screen {
+  position: relative; overflow: hidden;
+  height: 100vh;
+  display: flex; align-items: center; justify-content: flex-end;
+  padding: 0 max(6vw, 24px);
+  background: #0B1410;
+}
+/* Full-screen forest backdrop */
+.login-forest {
+  position: absolute; inset: 0; z-index: 0;
+  background: url('../static/logo-bg.jpg') center / cover no-repeat;
+}
+/* soft darkening toward the panel side so the glass card stays legible */
+.login-forest::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg, rgba(6, 14, 10, 0) 45%, rgba(6, 14, 10, 0.4) 100%);
+}
+
+/* ── CCTV surveillance-wall background ─────────────────────────── */
+.cctv-bg { position: absolute; inset: 0; z-index: 0; }
+.cctv-grid {
+  position: absolute; inset: 0;
+  display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr);
+  gap: 16px; padding: 16px;
+  opacity: 0.55;
+}
+.cctv-cam {
+  position: relative; overflow: hidden;
+  border: 1px solid rgba(70, 114, 53, 0.3);
+  border-radius: 6px;
+  background:
+    linear-gradient(135deg, rgba(70, 114, 53, 0.10), transparent 55%),
+    radial-gradient(circle at 30% 20%, rgba(70, 114, 53, 0.08), transparent 50%),
+    #FFFFFF;
+  box-shadow: inset 0 0 40px rgba(70, 114, 53, 0.05);
+}
+/* corner brackets */
+.cctv-cam::before, .cctv-cam::after {
+  content: ''; position: absolute; width: 18px; height: 18px;
+  border: 2px solid rgba(70, 114, 53, 0.6);
+}
+.cctv-cam::before { top: 8px; left: 8px; border-right: none; border-bottom: none; }
+.cctv-cam::after  { bottom: 8px; right: 8px; border-left: none; border-top: none; }
+/* faint moving scan-noise */
+.cctv-noise {
+  position: absolute; inset: 0;
+  background: repeating-linear-gradient(0deg, rgba(70,114,53,0.05) 0 1px, transparent 1px 3px);
+  animation: cctv-flicker 4s steps(12) infinite;
+}
+.cctv-scanline {
+  position: absolute; left: 0; right: 0; height: 40px;
+  background: linear-gradient(180deg, transparent, rgba(70, 114, 53, 0.18), transparent);
+  animation: cctv-scan 5s linear infinite;
+}
+.cctv-cam:nth-child(2) .cctv-scanline { animation-delay: -1.6s; }
+.cctv-cam:nth-child(3) .cctv-scanline { animation-delay: -3.2s; }
+.cctv-cam:nth-child(4) .cctv-scanline { animation-delay: -2.4s; }
+.cctv-cam:nth-child(5) .cctv-scanline { animation-delay: -0.8s; }
+.cctv-cam:nth-child(6) .cctv-scanline { animation-delay: -4s; }
+.cctv-top {
+  position: absolute; top: 8px; left: 30px; right: 8px;
+  display: flex; align-items: center; gap: 7px;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em;
+  color: #467235; text-shadow: 0 0 6px rgba(255,255,255,0.8);
+}
+.cctv-rec {
+  width: 7px; height: 7px; border-radius: 50%; background: #ff3b3b;
+  box-shadow: 0 0 8px #ff3b3b; animation: cctv-rec 1.4s ease-in-out infinite;
+}
+.cctv-time {
+  position: absolute; bottom: 8px; left: 8px;
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.1em;
+  color: #d92d20; text-shadow: 0 0 6px rgba(255,255,255,0.8);
+}
+/* global sweep across the whole wall */
+.cctv-sweep {
+  position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(70, 114, 53, 0.10), transparent);
+  width: 40%; animation: cctv-sweep 7s linear infinite;
+}
+.cctv-vignette {
+  position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(circle at 50% 45%, transparent 25%, rgba(255, 253, 208, 0.9) 100%);
+}
+/* cursor spotlight — indigo glow that follows the pointer across the wall */
+.cctv-spot {
+  position: absolute; inset: 0; pointer-events: none;
+  background:
+    radial-gradient(circle 220px at var(--mx) var(--my), rgba(70, 114, 53, 0.16), rgba(70, 114, 53, 0.05) 45%, transparent 72%);
+}
+@keyframes cctv-scan   { 0% { top: -40px; } 100% { top: 100%; } }
+@keyframes cctv-sweep  { 0% { left: -40%; } 100% { left: 100%; } }
+@keyframes cctv-rec    { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+@keyframes cctv-flicker{ 0%, 100% { opacity: 0.9; } 50% { opacity: 0.6; } }
+
+.login-card {
+  position: relative; z-index: 1;
+  width: 380px; max-width: 100%;
+  background: rgba(16, 24, 20, 0.55);          /* dark translucent glass */
+  backdrop-filter: blur(18px) saturate(120%);
+  -webkit-backdrop-filter: blur(18px) saturate(120%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
+  padding: 34px 32px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+.login-card .field { margin-bottom: 16px; }
+.login-card .field label { color: rgba(255, 255, 255, 0.85); }
+.login-card .field input {
+  height: 44px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 10px;
+  color: #ffffff;
+  font-size: 14px;
+}
+.login-card .field input::placeholder { color: rgba(255, 255, 255, 0.4); }
+.login-card .field input:focus {
+  border-color: #22C55E;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.22);
+}
+/* Green sign-in button — scoped to login so the rest of the app stays indigo */
+.login-card .btn-primary {
+  height: 46px;
+  margin-top: 10px;
+  background: linear-gradient(135deg, #16A34A, #22C55E);
+  border: none; border-radius: 10px;
+  font-size: 14px;
+  box-shadow: 0 6px 20px rgba(22, 163, 74, 0.4);
+}
+.login-card .btn-primary:hover {
+  filter: brightness(1.07);
+  box-shadow: 0 8px 26px rgba(22, 163, 74, 0.55);
+}
+.login-error { color: var(--danger); font-size: 13px; margin: 0 0 12px; text-align: center; }
+
+/* Brain glyph at the top of the card */
+.login-brain { text-align: center; margin: 2px 0 16px; }
+.login-brain .ti {
+  font-size: 46px; color: var(--accent); line-height: 1;
+  filter: drop-shadow(0 0 10px rgba(70, 114, 53, 0.35));
+}
+
+/* Icon tucked inside an input */
+.input-icon { position: relative; }
+.input-icon .ti {
+  position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  font-size: 15px; color: var(--text-muted); pointer-events: none;
+}
+.login-card .input-icon input { padding-left: 32px; }
+
+/* Footer tagline */
+.login-foot {
+  text-align: center; margin: 16px 0 0;
+  font-size: 12px; letter-spacing: 0.04em; color: var(--accent);
+}
+/* ── Biometric fingerprint scanner ─────────────────────────────── */
+.fp-scanner {
+  position: relative;
+  width: 110px; height: 110px;
+  margin: 4px auto 18px;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+  border-radius: 8px;
+}
+.fp-icon {
+  font-size: 78px; color: #467235; line-height: 1;
+  filter: drop-shadow(0 0 8px rgba(70, 114, 53, 0.7));
+  animation: fp-pulse 2.4s ease-in-out infinite;
+}
+/* Corner-bracket frame around the print */
+.fp-frame {
+  position: absolute; inset: 6px;
+  border: 1px solid rgba(70, 114, 53, 0.25);
+  border-radius: 6px;
+  box-shadow: inset 0 0 12px rgba(70, 114, 53, 0.12);
+}
+.fp-frame::before, .fp-frame::after {
+  content: ''; position: absolute; width: 16px; height: 16px;
+  border: 2px solid #467235;
+}
+.fp-frame::before { top: -1px; left: -1px; border-right: none; border-bottom: none; }
+.fp-frame::after  { bottom: -1px; right: -1px; border-left: none; border-top: none; }
+/* Sweeping scan line */
+.fp-scanline {
+  position: absolute; left: 6px; right: 6px; height: 2px;
+  background: linear-gradient(90deg, transparent, #7FB069, transparent);
+  box-shadow: 0 0 10px 2px rgba(127, 176, 105, 0.8);
+  animation: fp-scan 2.2s ease-in-out infinite;
+}
+@keyframes fp-scan {
+  0%   { top: 8px;   opacity: 0; }
+  10%  { opacity: 1; }
+  50%  { top: 96px;  opacity: 1; }
+  90%  { opacity: 1; }
+  100% { top: 8px;   opacity: 0; }
+}
+@keyframes fp-pulse {
+  0%, 100% { filter: drop-shadow(0 0 6px rgba(70, 114, 53, 0.5)); }
+  50%      { filter: drop-shadow(0 0 14px rgba(70, 114, 53, 0.95)); }
+}
+/* Loading bar under the scanner */
+.fp-loading { margin: 0 auto 20px; max-width: 240px; }
+.fp-loading-row {
+  display: flex; justify-content: space-between;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em;
+  color: #5A8B42; margin-bottom: 5px;
+}
+.fp-bar {
+  height: 4px; border-radius: 2px;
+  background: rgba(70, 114, 53, 0.15);
+  border: 1px solid rgba(70, 114, 53, 0.25);
+  overflow: hidden;
+}
+.fp-bar-fill {
+  height: 100%; width: 30%; border-radius: 2px;
+  background: linear-gradient(90deg, #467235, #7FB069);
+  box-shadow: 0 0 8px rgba(127, 176, 105, 0.8);
+  animation: fp-load 2.2s ease-in-out infinite;
+}
+@keyframes fp-load {
+  0%   { width: 6%; }
+  50%  { width: 88%; }
+  100% { width: 6%; }
+}
+/* Brand logo mark — transparent white art on the glass panel */
+.login-logo {
+  display: block;
+  width: 150px;
+  max-width: 60%;
+  height: auto;
+  margin: 0 0 20px;
+}
+.login-title {
+  font-size: 24px; font-weight: 700;
+  color: #ffffff;
+  margin: 0 0 4px;
+}
+.login-sub {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.6);
+  margin: 0 0 24px;
+}
+.field { margin-bottom: 14px; }
+.field label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+.field input, .field select {
+  width: 100%;
+  box-sizing: border-box;
+  height: 40px;                 /* Role select matches the Username/Password inputs */
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 10px;
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  font-family: inherit;
+}
+.field input:focus, .field select:focus { border-color: var(--accent); box-shadow: var(--glow); }
+
+/* Cyan focus glow for every app input/select */
+input:focus, select:focus, textarea:focus { box-shadow: var(--glow); }
+.btn {
+  border: none; border-radius: var(--radius-sm);
+  padding: 9px 16px;
+  font-size: 13px; font-weight: 500;
+  background: var(--bg-3);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.08s, background 0.15s;
+}
+.btn:hover { border-color: var(--accent); box-shadow: var(--glow); }
+.btn:active { transform: translateY(1px); }
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent-2), var(--accent));
+  color: #ffffff; font-weight: 600;
+  border-color: transparent;
+  box-shadow: 0 0 14px rgba(70, 114, 53, 0.35);
+}
+.btn-primary:hover { box-shadow: 0 0 22px rgba(70, 114, 53, 0.6); filter: brightness(1.08); }
+.btn-danger { background: var(--danger-dim); color: var(--danger); border-color: var(--danger); }
+.btn-danger:hover { background: var(--danger); color: #ffffff; box-shadow: 0 0 16px rgba(255, 93, 106, 0.5); }
+.btn-block { width: 100%; }
+

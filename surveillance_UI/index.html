@@ -46,16 +46,32 @@
   <nav class="nav">
     <div class="nav-logo">S</div>
     <button class="nav-item active" data-view="grid" onclick="showView('grid')" title="Grid">
-      <span class="nav-ico"><i class="ti ti-layout-grid"></i></span><span class="nav-label">Grid</span>
-    </button>
-    <button class="nav-item" data-view="log" onclick="showView('log')" title="Log">
-      <span class="nav-ico"><i class="ti ti-calendar-event"></i></span><span class="nav-label">Log</span>
+      <span class="nav-ico">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="4" y="4" width="6.5" height="6.5" rx="1.8"></rect>
+          <rect x="13.5" y="4" width="6.5" height="6.5" rx="1.8"></rect>
+          <rect x="4" y="13.5" width="6.5" height="6.5" rx="1.8"></rect>
+          <rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.8"></rect>
+        </svg>
+      </span><span class="nav-label">Grid</span>
     </button>
     <button class="nav-item" data-view="report" onclick="showView('report')" title="Report">
-      <span class="nav-ico"><i class="ti ti-chart-bar"></i></span><span class="nav-label">Report</span>
+      <span class="nav-ico">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 20h16"></path>
+          <path d="M7.5 20v-4.5"></path>
+          <path d="M12 20v-9"></path>
+          <path d="M16.5 20v-13"></path>
+        </svg>
+      </span><span class="nav-label">Report</span>
     </button>
     <button class="nav-item" data-view="settings" onclick="showView('settings')" title="Settings">
-      <span class="nav-ico"><i class="ti ti-settings"></i></span><span class="nav-label">Settings</span>
+      <span class="nav-ico">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </span><span class="nav-label">Settings</span>
     </button>
   </nav>
 
@@ -65,8 +81,16 @@
         <i class="ti ti-search"></i>
         <input type="text" id="global-search" placeholder="Search…" oninput="onSearch(this.value)">
       </div>
-      <div class="topbar-TRACK">
-        <button class="btn btn-primary" onclick="openTrackInside()"><i class="ti ti-route"></i> TRACK</button>
+      <div class="topbar-actions" style="display:none">
+        <button class="btn" onclick="showView('log')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="4" y="5" width="16" height="16" rx="2.5"></rect>
+            <path d="M4 9.5h16"></path>
+            <path d="M8 3v4"></path>
+            <path d="M16 3v4"></path>
+          </svg>
+          Log
+        </button>
       </div>
       <div class="topbar-spacer"></div>
       <div class="topbar-clock" id="clock">--:--:--</div>
@@ -87,20 +111,22 @@
               <p class="view-sub">All camera feeds · click a tile to open</p>
             </div>
             <div class="grid-stats">
-              <div class="inside-stat">
+              <button class="inside-stat" type="button" onclick="openVisitsToday()" title="Show everyone who entered today">
                 <span class="inside-num" id="visits-count">0</span>
                 <div class="inside-meta">
                   <div class="inside-title">No. of visits today</div>
                   <div class="inside-sub">people who entered the premises</div>
                 </div>
-              </div>
-              <div class="inside-stat">
+                <i class="ti ti-chevron-right inside-stat-caret"></i>
+              </button>
+              <button class="inside-stat" type="button" onclick="openInside()" title="Show everyone currently inside">
                 <span class="inside-num" id="inside-count">0</span>
                 <div class="inside-meta">
                   <div class="inside-title">Currently inside</div>
                   <div class="inside-sub">personnel who haven't exited</div>
                 </div>
-              </div>
+                <i class="ti ti-chevron-right inside-stat-caret"></i>
+              </button>
             </div>
           </div>
         </div>
@@ -161,9 +187,9 @@
                   <input type="time" id="log-time-to" onchange="renderLogSheet()">
                 </div>
               </div>
-              <!-- Category is now a toggle in the datasheet head; this hidden field
-                   still backs the filter renderLogSheet()/clearLogFilters() read. -->
-              <input type="hidden" id="log-category" value="">
+              <!-- Category is a toggle in the datasheet head; this hidden field backs the
+                   filter. Defaults to Employee so the Log opens on the employee list. -->
+              <input type="hidden" id="log-category" value="Employee">
               <button class="btn btn-block" onclick="clearLogFilters()"><i class="ti ti-filter-off"></i> Clear all filters</button>
             </div>
           </div>
@@ -181,11 +207,8 @@
                 <button class="log-cat-btn" id="log-cat-Unknown" onclick="setLogCat('Unknown')"><i class="ti ti-arrow-down"></i> Unknowns</button>
               </div>
             </div>
-            <div class="table-wrap">
+            <div class="table-wrap log-list">
               <table>
-                <thead>
-                  <tr><th>Photo</th><th>Name</th><th>Category</th><th>Time</th><th>Location</th></tr>
-                </thead>
                 <tbody id="log-body"></tbody>
               </table>
             </div>
@@ -225,64 +248,106 @@
         <div class="view-header">
           <div>
             <h1 class="view-title">Settings</h1>
-            <p class="view-sub">Reclassification, departments &amp; database</p>
+            <p class="view-sub">Departments, employees &amp; database</p>
           </div>
           <button class="btn" onclick="logout()"><i class="ti ti-logout"></i> Log out</button>
         </div>
 
-        <div class="settings-section">
-          <h2>Departments</h2>
-          <p class="desc">Departments available when registering or reclassifying employees.</p>
-          <div class="chip-list" id="dept-list"></div>
-          <div class="form-inline">
-            <div class="field"><label>New department</label><input type="text" id="dept-new" placeholder="e.g. Housekeeping"></div>
-            <button class="btn btn-primary" onclick="addDepartment()"><i class="ti ti-plus"></i> Add department</button>
+        <div class="settings-grid">
+
+          <div class="settings-card">
+            <div class="settings-card-head">
+              <div class="settings-card-icon"><i class="ti ti-layout-grid"></i></div>
+              <div class="settings-card-title">
+                <h2>Departments</h2>
+                <p class="desc">Departments available when registering or reclassifying employees.</p>
+              </div>
+            </div>
+            <div class="settings-card-body">
+              <div class="chip-list" id="dept-list"></div>
+              <div class="form-inline">
+                <div class="field"><label>New department</label><input type="text" id="dept-new" placeholder="e.g. Housekeeping"></div>
+                <button class="btn btn-primary" onclick="addDepartment()"><i class="ti ti-plus"></i> Add department</button>
+              </div>
+            </div>
           </div>
-        </div>
 
-        <div class="settings-section">
-          <h2>Bulk employee import</h2>
-          <p class="desc">Upload an XLSX/CSV roster, or a ZIP with the roster plus photos named by
-            employee id (e.g. <code>E1042_1.jpg</code>). Columns: <b>external_id</b> (required, the
-            idempotency key — re-imports update, never duplicate), <b>name</b> (required),
-            department, email, photo. You always get a preview before anything is written.</p>
-          <div class="form-inline">
-            <div class="field"><label>Roster / bundle</label>
-              <input type="file" id="import-file" accept=".csv,.xlsx,.zip"></div>
-            <button class="btn" id="import-preview-btn" onclick="importPreview()"><i class="ti ti-eye"></i> Preview</button>
-            <button class="btn btn-primary" id="import-apply-btn" onclick="importApply()" style="display:none"><i class="ti ti-database-import"></i> Import</button>
+          <div class="settings-card span-2">
+            <div class="settings-card-head">
+              <div class="settings-card-icon"><i class="ti ti-git-merge"></i></div>
+              <div class="settings-card-title">
+                <h2>Unknown-case link review</h2>
+                <p class="desc">Suggested links between Unknown cases seen on the <b>same camera</b> within a
+                  short window, whose body similarity is plausible but below the automatic bar. Each suggestion
+                  shows the score, time gap and both parties' evidence — nothing is merged without your approval,
+                  and every approval is audited and undoable.</p>
+              </div>
+            </div>
+            <div class="settings-card-body">
+              <button class="btn" onclick="loadSuggestedLinks()"><i class="ti ti-refresh"></i> Load suggestions</button>
+              <div id="review-links" class="desc" style="margin-top:10px;max-height:280px;overflow:auto"></div>
+            </div>
           </div>
-          <div id="import-result" class="desc" style="margin-top:10px;max-height:260px;overflow:auto"></div>
-        </div>
 
-        <div class="settings-section">
-          <h2>Unknown-case link review</h2>
-          <p class="desc">Suggested links between Unknown cases seen on the <b>same camera</b> within a
-            short window, whose body similarity is plausible but below the automatic bar. Each suggestion
-            shows the score, time gap and both parties' evidence — nothing is merged without your approval,
-            and every approval is audited and undoable.</p>
-          <button class="btn" onclick="loadSuggestedLinks()"><i class="ti ti-refresh"></i> Load suggestions</button>
-          <div id="review-links" class="desc" style="margin-top:10px;max-height:280px;overflow:auto"></div>
-        </div>
+          <div class="settings-card">
+            <div class="settings-card-head">
+              <div class="settings-card-icon"><i class="ti ti-user-plus"></i></div>
+              <div class="settings-card-title">
+                <h2>Add employee(s)</h2>
+                <p class="desc">Register one person now, or bulk-import a whole roster.</p>
+              </div>
+            </div>
+            <div class="settings-card-body">
+              <div class="settings-subsection">
+                <h3>Add a single employee</h3>
+                <p class="desc">Enter their name, employee id and department, then upload one or more
+                  clear, front-facing face photos. The system extracts the face and remembers this person.</p>
+                <button class="btn btn-primary" onclick="openEnroll()"><i class="ti ti-user-plus"></i> Add employee</button>
+              </div>
 
-        <div class="settings-section">
-          <h2>Daily reset</h2>
-          <p class="desc">Clear all Unknowns (people not yet confirmed as Visitors). Confirmed Visitors and Employees are kept, so returning people are still recognised. Runs automatically every midnight.</p>
-          <button class="btn" id="clear-unknowns-btn" onclick="clearUnknowns()"><i class="ti ti-eraser"></i> Clear all unknowns</button>
-        </div>
+              <div class="settings-subsection">
+                <h3>Add many (XLSX / CSV / ZIP)</h3>
+                <p class="desc">Upload an XLSX/CSV roster, or a ZIP with the roster plus photos named by
+                  employee id (e.g. <code>E1042_1.jpg</code>). Columns: <b>external_id</b> (employee id,
+                  required — the idempotency key, re-imports update, never duplicate), <b>name</b> (required),
+                  department, email. You always get a preview before anything is written.</p>
+                <div class="form-inline">
+                  <div class="field"><label>Roster / bundle</label>
+                    <input type="file" id="import-file" accept=".csv,.xlsx,.zip"></div>
+                  <button class="btn" id="import-preview-btn" onclick="importPreview()"><i class="ti ti-eye"></i> Preview</button>
+                  <button class="btn btn-primary" id="import-apply-btn" onclick="importApply()" style="display:none"><i class="ti ti-database-import"></i> Import</button>
+                </div>
+                <div id="import-result" class="desc" style="margin-top:10px;max-height:260px;overflow:auto"></div>
+              </div>
+            </div>
+          </div>
 
-        <div class="settings-section">
-          <h2>Merge duplicate visitors</h2>
-          <p class="desc">The same person can enroll as several Visitor cards when their face was captured from different angles. This finds Visitors whose faces match (face only — never clothing) and folds them into one. Preview first; nothing changes until you apply.</p>
-          <button class="btn" id="consolidate-preview-btn" onclick="consolidatePreview()"><i class="ti ti-users-group"></i> Preview duplicates</button>
-          <button class="btn btn-primary" id="consolidate-apply-btn" onclick="consolidateApply()" style="display:none"><i class="ti ti-git-merge"></i> Apply merges</button>
-          <div id="consolidate-result" class="desc" style="margin-top:10px;white-space:pre-wrap"></div>
-        </div>
+          <div class="settings-card">
+            <div class="settings-card-head">
+              <div class="settings-card-icon"><i class="ti ti-calendar-repeat"></i></div>
+              <div class="settings-card-title">
+                <h2>Daily reset</h2>
+                <p class="desc">Clear all Unknowns (people not yet confirmed as Visitors). Confirmed Visitors and Employees are kept, so returning people are still recognised. Runs automatically every midnight.</p>
+              </div>
+            </div>
+            <div class="settings-card-body">
+              <button class="btn" id="clear-unknowns-btn" onclick="clearUnknowns()"><i class="ti ti-eraser"></i> Clear all unknowns</button>
+            </div>
+          </div>
 
-        <div class="settings-section">
-          <h2>Danger zone</h2>
-          <p class="desc">Permanently delete every person, event and snapshot from the database. Cameras are kept. This cannot be undone.</p>
-          <button class="btn btn-danger" id="wipe-db-btn" onclick="deleteDatabase()"><i class="ti ti-trash"></i> Delete entire database</button>
+          <div class="settings-card danger">
+            <div class="settings-card-head">
+              <div class="settings-card-icon"><i class="ti ti-alert-triangle"></i></div>
+              <div class="settings-card-title">
+                <h2>Danger zone</h2>
+                <p class="desc">Permanently delete every person, event and snapshot from the database. Cameras are kept. This cannot be undone.</p>
+              </div>
+            </div>
+            <div class="settings-card-body">
+              <button class="btn btn-danger" id="wipe-db-btn" onclick="deleteDatabase()"><i class="ti ti-trash"></i> Delete entire database</button>
+            </div>
+          </div>
+
         </div>
       </section>
 
@@ -327,9 +392,12 @@
       <button class="btn plog-rename" id="plog-rename" onclick="renameCurrentPerson()" title="Give this person a name">
         <i class="ti ti-pencil"></i> Rename
       </button>
+      <button class="btn plog-rename" id="plog-editprofile" onclick="openEditProfile()" title="Edit photo, name, employee ID and department" style="display:none">
+        <i class="ti ti-id-badge-2"></i> Edit profile
+      </button>
       <button class="btn" onclick="mergeCurrentPersonInto()"
               title="Merge this record into another person (search by id or name — all combinations work)">
-        <i class="ti ti-git-merge"></i> Merge into…
+        <i class="ti ti-share"></i> Merge into…
       </button>
       <button class="btn" onclick="eraseCurrentPersonPermanently()"
               title="PERMANENT erase (audited). The normal per-sighting delete is the hide button on each row.">
@@ -381,9 +449,9 @@
           </div>
           <button class="btn btn-block" onclick="clearPersonLogFilters()"><i class="ti ti-filter-off"></i> Clear all filters</button>
         </div>
-        <div class="table-wrap">
+        <div class="table-wrap plog-log-table">
           <table>
-            <thead><tr><th>Time</th><th>Location</th><th>Photo</th></tr></thead>
+            <thead><tr><th>Time</th><th>Location</th><th>Photo</th><th>Actions</th></tr></thead>
             <tbody id="plog-body"></tbody>
           </table>
         </div>
@@ -403,20 +471,24 @@
     <button class="sidebar-close" onclick="closePersonPhoto()"><i class="ti ti-x"></i></button>
     <div class="photo-imgs">
       <figure class="photo-fig" id="photo-face-fig">
-        <img class="photo-img" id="photo-face-img" alt="face">
+        <img class="photo-img" id="photo-face-img" alt="face" title="Open full size" onclick="openRawFrame(this)">
         <figcaption>Face</figcaption>
       </figure>
       <figure class="photo-fig" id="photo-body-fig">
-        <img class="photo-img" id="photo-body-img" alt="full body">
+        <img class="photo-img" id="photo-body-img" alt="full body" title="Open full size" onclick="openRawFrame(this)">
         <figcaption>Full body</figcaption>
       </figure>
-      <figure class="photo-fig" id="photo-full-fig">
-        <img class="photo-img" id="photo-full-img" alt="full scene">
-        <figcaption>Full scene</figcaption>
+      <figure class="photo-fig photo-fig-video" id="photo-video-fig">
+        <video class="photo-video" id="photo-video" controls playsinline preload="metadata"></video>
+        <img class="photo-img" id="photo-video-img" alt="scene" title="Open full size" onclick="openRawFrame(this)">
+        <figcaption id="photo-video-cap">Video</figcaption>
       </figure>
     </div>
     <div class="photo-name" id="photo-name">—</div>
     <div class="photo-sub" id="photo-sub">—</div>
+    <div class="photo-nav-hint" id="photo-nav-hint" style="display:none">
+      <i class="ti ti-arrow-up"></i><i class="ti ti-arrow-down"></i> Use the arrow keys to move between sightings
+    </div>
   </div>
 </div>
 
@@ -424,12 +496,13 @@
 <div class="modal-backdrop" id="enroll-modal" onclick="closeEnrollIfBackdrop(event)">
   <div class="modal">
     <div class="modal-head">
-      <h3>Enroll employee</h3>
+      <h3>Add employee</h3>
       <button class="sidebar-close" onclick="closeEnroll()"><i class="ti ti-x"></i></button>
     </div>
-    <p class="desc">Upload one or more clear, front-facing face photos. More angles = more reliable recognition. The system extracts the face and remembers this person.</p>
+    <p class="desc">Enter the person's details and upload one or more clear, front-facing face photos. More angles = more reliable recognition. The system extracts the face and remembers this person.</p>
     <div class="field"><label>Name</label><input type="text" id="enroll-name" placeholder="e.g. Akash Kumar"></div>
-    <div class="field"><label>Department</label><input type="text" id="enroll-dept" placeholder="e.g. Security"></div>
+    <div class="field"><label>Employee ID</label><input type="text" id="enroll-empid" placeholder="e.g. E1042"></div>
+    <div class="field"><label>Department</label><input type="text" id="enroll-dept" placeholder="e.g. Security" list="enroll-dept-options"><datalist id="enroll-dept-options"></datalist></div>
     <div class="field"><label>Email (optional)</label><input type="text" id="enroll-email" placeholder="name@company.com"></div>
     <div class="field"><label>Face photo(s)</label><input type="file" id="enroll-files" accept="image/*" multiple></div>
     <div id="enroll-preview" class="enroll-preview"></div>
@@ -437,7 +510,30 @@
     <div class="modal-actions">
       <span style="flex:1"></span>
       <button class="btn" onclick="closeEnroll()"><i class="ti ti-x"></i> Cancel</button>
-      <button class="btn btn-primary" id="enroll-submit" onclick="doEnrollEmployee()"><i class="ti ti-user-plus"></i> Enroll</button>
+      <button class="btn btn-primary" id="enroll-submit" onclick="doEnrollEmployee()"><i class="ti ti-user-plus"></i> Add employee</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== Edit profile modal (Employees) ===================== -->
+<div class="modal-backdrop" id="editp-modal" onclick="closeEditProfileIfBackdrop(event)">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Edit profile</h3>
+      <button class="sidebar-close" onclick="closeEditProfile()"><i class="ti ti-x"></i></button>
+    </div>
+    <p class="desc">Update this employee's details. The profile photo only changes when you upload a new one here — captured camera frames never overwrite it.</p>
+    <div class="field"><label>Name</label><input type="text" id="editp-name"></div>
+    <div class="field"><label>Employee ID</label><input type="text" id="editp-empid"></div>
+    <div class="field"><label>Department</label><input type="text" id="editp-dept" list="editp-dept-options"><datalist id="editp-dept-options"></datalist></div>
+    <div class="field"><label>Email (optional)</label><input type="text" id="editp-email"></div>
+    <div class="field"><label>Profile photo</label><input type="file" id="editp-file" accept="image/*"></div>
+    <div id="editp-preview" class="enroll-preview"></div>
+    <div id="editp-status" class="desc"></div>
+    <div class="modal-actions">
+      <span style="flex:1"></span>
+      <button class="btn" onclick="closeEditProfile()"><i class="ti ti-x"></i> Cancel</button>
+      <button class="btn btn-primary" id="editp-submit" onclick="saveProfile()"><i class="ti ti-device-floppy"></i> Save changes</button>
     </div>
   </div>
 </div>
@@ -511,11 +607,24 @@
   </div>
 </div>
 
+<!-- ===================== Grid stat popup (visits today / currently inside) ===================== -->
+<div class="modal-backdrop" id="stat-modal" onclick="closeStatModalIfBackdrop(event)">
+  <div class="modal modal-stat">
+    <div class="modal-head">
+      <h3 id="stat-title">—</h3>
+      <span class="track-count" id="stat-count">0</span>
+      <button class="sidebar-close" onclick="closeStatModal()"><i class="ti ti-x"></i></button>
+    </div>
+    <p class="desc" id="stat-sub">—</p>
+    <div class="stat-people" id="stat-grid"></div>
+  </div>
+</div>
+
 <!-- ===================== Merge selection bar (Report) — floating bottom dock ===================== -->
 <div class="merge-bar" id="merge-bar">
-  <span class="merge-bar-info"><b id="merge-bar-count">0</b> selected · tick 2+ records that are the same person</span>
-  <button class="btn btn-primary" id="merge-bar-go" onclick="mergePeople()" disabled><i class="ti ti-git-merge"></i> Merge into one</button>
-  <button class="btn" id="merge-cancel-btn" onclick="exitMergeMode()"><i class="ti ti-x"></i> Cancel</button>
+  <span class="merge-bar-info"><b id="merge-bar-count">0</b> selected · pick the records to merge together</span>
+  <button class="btn btn-primary" id="merge-bar-go" onclick="mergePeople()" disabled><i class="ti ti-share"></i> Merge into one</button>
+  <button class="btn" onclick="exitMergeMode()"><i class="ti ti-x"></i> Cancel</button>
 </div>
 
 <script src="data.js"></script>

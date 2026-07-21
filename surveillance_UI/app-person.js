@@ -33,18 +33,12 @@ function openPersonLogFromSidebar() {
 /* ---------- Person log modal (Report + sidebar) ---------- */
 let plogPersonId = null;
 let plogYear, plogMonth, plogDay;   // selected day inside the modal (month 0-indexed)
+let plogRows = [];                  // the currently-shown sighting rows (index → evidence)
+let photoRowIndex = -1;             // which plogRows entry the evidence popup is showing
 
 function openPersonLog(userId) {
   plogPersonId = userId;
   const p = PEOPLE[userId];
-  // First open of a person: pull their FULL history, then re-render this modal.
-  // The first pass renders instantly from the roster summary (correct name/photo/
-  // count); the day grid, chart and records fill in once history arrives.
-  if (p && !p.historyLoaded && typeof Brain !== 'undefined' && Brain.loadPersonHistory) {
-    Brain.loadPersonHistory(userId, CAM_NAME_BY_ID).then(() => {
-      if (plogPersonId === userId) openPersonLog(userId);
-    });
-  }
   setAvatar(document.getElementById('plog-avatar'), p);
   document.getElementById('plog-name').textContent = personName(p);
   document.getElementById('plog-id').textContent = p.employeeId ? `${p.userId} · ${p.employeeId}` : p.userId;
@@ -53,22 +47,10 @@ function openPersonLog(userId) {
   // Rename only Visitors/Employees (not Unknowns); "Make employee" only for Visitors.
   const renameBtn = document.getElementById('plog-rename');
   if (renameBtn) renameBtn.style.display = (p.category === 'Unknown') ? 'none' : '';
+  // "Edit profile" (photo / name / employee-id / department) — Employees only.
+  const editBtn = document.getElementById('plog-editprofile');
+  if (editBtn) editBtn.style.display = (p.category === 'Employee') ? '' : 'none';
   renderPlogPromote(p);   // inline "Make employee" control (Visitors only)
-
-  // Details of the person
-  const rows = [];
-  if (p.category === 'Employee') {
-    rows.push(['Employee ID', p.employeeId], ['Department', p.department]);
-  }
-  rows.push(['Category', p.category]);
-  if (p.gender) rows.push(['Gender', p.gender]);
-  if (p.age)    rows.push(['Age', String(p.age)]);
-  if (p.height) rows.push(['Height', p.height]);
-  if (p.features) rows.push(['Features', p.features]);
-  rows.push(['Total sightings', String(p.sightingCount ?? p.history.length)]);
-  document.getElementById('plog-details').innerHTML =
-    `<div class="plog-card-title">Details of the person</div>` +
-    rows.map(([k, v]) => `<div class="kv"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('');
 
   // Default the selected day to the person's most recent sighting (else today).
   const dates = p.history.map(h => h.date).sort();
@@ -108,10 +90,29 @@ function selectPlogDay(d) {
   renderPersonLog();
 }
 
+/* Person details card — Employee id, department, category, gender, and the
+   number of sightings on the CURRENTLY SELECTED day (updates as the day changes). */
+function renderPlogDetails(p) {
+  const dateStr = isoDate(plogYear, plogMonth, plogDay);
+  const dayCount = p.history.filter(h => h.date === dateStr).length;
+  const rows = [];
+  if (p.category === 'Employee') {
+    rows.push(['Employee ID', p.employeeId || '—'], ['Department', p.department || '—']);
+  }
+  rows.push(['Category', p.category]);
+  rows.push(['Gender', p.gender || '—']);
+  rows.push(['Sightings this day', String(dayCount)]);
+  document.getElementById('plog-details').innerHTML =
+    `<div class="plog-card-title">Details of the person</div>` +
+    rows.map(([k, v]) => `<div class="kv"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('');
+}
+
 /* Left column: weekly presence chart, hours-inside summary, and day tiles. */
 function renderPlogSide() {
   const p = PEOPLE[plogPersonId];
   if (!p) return;
+
+  renderPlogDetails(p);   // details reflect the selected day's sighting count
 
   // Selected-day heading (shown on the right).
   const dateStr = isoDate(plogYear, plogMonth, plogDay);
@@ -195,7 +196,7 @@ function renderPersonLog() {
   const toMin   = hhmmToMin(document.getElementById('plog-time-to').value);
   const loc     = document.getElementById('plog-loc').value;
 
-  const rows = p.history
+  plogRows = p.history
     .filter(h => h.date === dateStr)
     .filter(h => !loc || h.location === loc)
     .filter(h => fromMin === null || hhmmToMin(h.time) >= fromMin)
@@ -203,23 +204,48 @@ function renderPersonLog() {
     .sort((a, b) => a.time.localeCompare(b.time));
 
   const body = document.getElementById('plog-body');
-  body.innerHTML = rows.length ? rows.map(h => `
+  body.innerHTML = plogRows.length ? plogRows.map((h, i) => {
+    // The row thumbnail shows the captured FACE crop (falls back to the person's
+    // photo, then initials). Clicking it opens the full evidence for THIS sighting.
+    const faceUrl = h.face || (h.snapshot ? h.snapshot.replace(/\.jpg(\?.*)?$/i, '_face.jpg') : '');
+    const thumbCss = faceUrl ? photoCssUrl(faceUrl) : photoCss(p);
+    const canAct = h.event_id != null;
+    return `
     <tr>
       <td class="mono">${to12h(h.time)}</td>
       <td>${h.location}</td>
       <td>
+        <div class="avatar plog-face-thumb" title="Click to view evidence · ${h.location}"
+             onclick="openPersonPhoto(${i})" style="${thumbCss}">${p.initials}</div>
+      </td>
+      <td>
         <div class="plog-row-actions">
-          <div class="plog-cap" title="Click to enlarge · ${h.location}" style="cursor:pointer"
-               onclick="openPersonPhoto('${h.snapshot || ''}')">
-            <div class="avatar" style="width:30px;height:30px;font-size:11px;${h.snapshot ? photoCssUrl(h.snapshot) : photoCss(p)}">${p.initials}</div>
-            <i class="ti ti-camera"></i>
-          </div>
-          ${h.event_id != null ? `<button class="plog-del-btn" title="Delete this sighting"
-                onclick="deleteSightingRow(${h.event_id})"><i class="ti ti-trash"></i></button>` : ''}
+          <button class="plog-act-btn plog-act-del" title="Delete this sighting" ${canAct ? '' : 'disabled'}
+                  onclick="deleteSightingRow(${h.event_id})"><i class="ti ti-trash"></i> Delete</button>
+          <button class="plog-act-btn plog-act-unknown" title="Detach this sighting into a new Unknown case" ${canAct ? '' : 'disabled'}
+                  onclick="makeSightingUnknown(${h.event_id})"><i class="ti ti-help-circle"></i> Make unknown</button>
         </div>
       </td>
-    </tr>`).join('')
-    : `<tr><td colspan="3" style="color:var(--text-muted)">No sightings on this day for these filters.</td></tr>`;
+    </tr>`;
+  }).join('')
+    : `<tr><td colspan="4" style="color:var(--text-muted)">No sightings on this day for these filters.</td></tr>`;
+}
+
+/* Detach one sighting into a brand-new Unknown case (removes it from this person). */
+async function makeSightingUnknown(eventId) {
+  if (!confirm('Make this sighting an Unknown? It is detached from this person into a new Unknown case. This can be undone by re-merging.')) return;
+  try {
+    if (!BRAIN_ON) throw new Error('Brain not connected');
+    await Brain.splitCase({ user: AUTH.username, pass: AUTH.password }, [eventId]);
+    await connectBrain();                       // re-hydrate so the row moves out
+    const p = PEOPLE[plogPersonId];
+    if (p) { renderPlogSide(); renderPersonLog(); }
+    else closePersonLog();                       // that was their last sighting
+    renderReport(); renderRecords();
+    if (currentView === 'log') renderLog();
+  } catch (e) {
+    alert('Make unknown failed: ' + e.message);
+  }
 }
 
 /* Delete one sighting (detection_event) from a person's log, then refresh. */
@@ -264,62 +290,112 @@ function _probeInto(imgEl, figEl, url) {
   probe.src = url;
 }
 
-/* Enlarged photo popup.
-   CRITICAL invariant: the Face, Full body and Full scene shown are ALWAYS the
-   same sighting — one filename stem, one frame, one person. Part 1 now writes the
-   triple <stem>.jpg / <stem>_face.jpg / <stem>_full.jpg atomically from the same
-   frame, so deriving the face/scene from the SHOWN body's stem can never mix two
-   people. We never substitute a face from a different sighting (that was the old
-   "face of A on the body of B" bug). When no specific sighting is clicked we pick
-   the most recent sighting that actually HAS a face and show its whole triple. */
-function _showTriple(bodyUrl) {
-  const bodyFig = document.getElementById('photo-body-fig');
+/* Evidence popup for ONE sighting: the captured Face and Full body share a single
+   frame (same stem — the face can never belong to a different person than the body),
+   and below them the recorded Video (clip) of that moment spans both. When a clip is
+   absent we fall back to the still full-scene frame. Each panel opens full-size on
+   click / the video plays inline — so they can be inspected individually. */
+function _showEvidence(sighting) {
+  const faceImg = document.getElementById('photo-face-img');
+  const faceFig = document.getElementById('photo-face-fig');
   const bodyImg = document.getElementById('photo-body-img');
-  if (!bodyUrl) {
-    bodyFig.style.display = 'none';
-    _probeInto(document.getElementById('photo-face-img'), document.getElementById('photo-face-fig'), '');
-    _probeInto(document.getElementById('photo-full-img'), document.getElementById('photo-full-fig'), '');
-    return;
+  const bodyFig = document.getElementById('photo-body-fig');
+  const vFig = document.getElementById('photo-video-fig');
+  const vid = document.getElementById('photo-video');
+  const vImg = document.getElementById('photo-video-img');
+  const vCap = document.getElementById('photo-video-cap');
+
+  const body  = sighting && (sighting.body || sighting.snapshot);
+  const clip  = sighting && sighting.clip;
+  // Prefer the EXPLICIT evidence paths from the API. For legacy sightings that
+  // predate those columns (face/full_frame NULL) the pipeline still wrote the
+  // companion crops next to the body with a shared stem
+  // (<stem>.jpg / _face.jpg / _full.jpg), so derive them as a fallback. Any
+  // derived file that doesn't exist is hidden by _probeInto's onerror.
+  const stem  = body ? body.replace(/\.jpg(\?.*)?$/i, '') : null;
+  const face  = (sighting && sighting.face) || (stem ? stem + '_face.jpg' : null);
+  const scene = (sighting && (sighting.full_frame_annotated || sighting.full_frame))
+              || (stem ? stem + '_full.jpg' : null);
+
+  _probeInto(faceImg, faceFig, face);
+  _probeInto(bodyImg, bodyFig, body);
+
+  // Bottom frame: prefer the recorded clip (a real video), else the still scene.
+  try { vid.pause(); } catch (e) {}
+  if (clip) {
+    vImg.style.display = 'none';
+    vid.src = clip; vid.style.display = '';
+    vCap.textContent = 'Video';
+    vFig.style.display = '';
+  } else if (scene) {
+    vid.removeAttribute('src'); vid.style.display = 'none';
+    vImg.style.display = '';
+    _probeInto(vImg, vFig, scene);
+    vCap.textContent = 'Scene';
+  } else {
+    vid.removeAttribute('src'); vid.style.display = 'none';
+    vImg.style.display = 'none'; vFig.style.display = 'none';
   }
-  const stem = bodyUrl.replace(/\.jpg(\?.*)?$/i, '');
-  bodyImg.src = bodyUrl; bodyFig.style.display = '';
-  _probeInto(document.getElementById('photo-face-img'),
-             document.getElementById('photo-face-fig'), stem + '_face.jpg');
-  _probeInto(document.getElementById('photo-full-img'),
-             document.getElementById('photo-full-fig'), stem + '_full.jpg');
 }
 
-function openPersonPhoto(snapshotOverride) {
+/* Open one evidence frame full-size in its own tab (individual access). */
+function openRawFrame(el) {
+  const src = (el && (el.currentSrc || el.src)) || '';
+  if (src) window.open(src, '_blank');
+}
+
+function openPersonPhoto(rowIndex) {
   const p = PEOPLE[plogPersonId];
   if (!p) return;
-  document.getElementById('photo-name').textContent = personName(p);
-  document.getElementById('photo-sub').textContent =
-    p.employeeId ? `${p.userId} · ${p.employeeId}` : p.userId;
   document.getElementById('photo-modal').classList.add('open');
 
-  // A clicked sighting is honored EXACTLY (even if it has no face) — never mixed.
-  if (snapshotOverride) { _showTriple(snapshotOverride); return; }
+  let sighting = null;
+  if (typeof rowIndex === 'number' && plogRows[rowIndex]) {
+    sighting = plogRows[rowIndex];                       // the exact clicked sighting
+    photoRowIndex = rowIndex;
+  } else {
+    // Header avatar: newest sighting that HAS a face, else the newest sighting.
+    const rev = [...p.history].reverse();
+    sighting = rev.find(h => h.face) || rev[0] || null;
+    // If that sighting is one of the currently-listed rows, arrow keys can walk
+    // from it; otherwise navigation starts from the top of the list.
+    photoRowIndex = sighting ? plogRows.indexOf(sighting) : -1;
+  }
 
-  // No specific sighting: show the most recent one that HAS a saved face, so the
-  // face and body still belong to the same frame. Fall back to the newest body
-  // (face hidden) when the person has no face on file at all.
-  const bodies = [...new Set([
-    ...p.history.map(h => h.snapshot).filter(Boolean).slice().reverse(),
-    p.photo,
-  ].filter(Boolean))];
-  if (!bodies.length) { _showTriple(''); return; }
-  let i = 0;
-  const pick = () => {
-    if (i >= bodies.length) { _showTriple(bodies[0]); return; }  // none has a face
-    const bodyUrl = bodies[i++];
-    const probe = new Image();
-    probe.onload = () => _showTriple(bodyUrl);       // this sighting has a face
-    probe.onerror = pick;                            // try an older sighting
-    probe.src = bodyUrl.replace(/\.jpg(\?.*)?$/i, '_face.jpg');
-  };
-  pick();
+  document.getElementById('photo-name').textContent = personName(p);
+  const idSub = p.employeeId ? `${p.userId} · ${p.employeeId}` : p.userId;
+  document.getElementById('photo-sub').textContent = (sighting && sighting.time)
+    ? `${idSub} · ${to12h(sighting.time)}${sighting.location ? ' · ' + sighting.location : ''}`
+    : idSub;
+
+  // Show the keyboard hint only when there's more than one sighting to move between.
+  const hint = document.getElementById('photo-nav-hint');
+  if (hint) hint.style.display = (photoRowIndex >= 0 && plogRows.length > 1) ? '' : 'none';
+
+  _showEvidence(sighting);
 }
-function closePersonPhoto() { document.getElementById('photo-modal').classList.remove('open'); }
+
+/* Walk to the previous/next sighting in the currently-shown log with the arrow keys
+   (Down = next/later, Up = previous/earlier). Clamps at both ends of the list. */
+function navigatePhoto(delta) {
+  if (photoRowIndex < 0 || !plogRows.length) return;
+  const next = Math.min(plogRows.length - 1, Math.max(0, photoRowIndex + delta));
+  if (next !== photoRowIndex) openPersonPhoto(next);
+}
+
+/* While the evidence popup is open, Up/Down move between this person's sightings. */
+document.addEventListener('keydown', (e) => {
+  const modal = document.getElementById('photo-modal');
+  if (!modal || !modal.classList.contains('open')) return;
+  if (e.key === 'ArrowDown')      { e.preventDefault(); navigatePhoto(1); }
+  else if (e.key === 'ArrowUp')   { e.preventDefault(); navigatePhoto(-1); }
+});
+
+function closePersonPhoto() {
+  const vid = document.getElementById('photo-video');
+  try { vid.pause(); } catch (e) {}
+  document.getElementById('photo-modal').classList.remove('open');
+}
 function closePersonPhotoIfBackdrop(e) { if (e.target.id === 'photo-modal') closePersonPhoto(); }
 
 /* Rename the person currently open in the log modal. Keeps their id + VIS/EMP

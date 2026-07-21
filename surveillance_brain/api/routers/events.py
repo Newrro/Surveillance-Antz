@@ -74,6 +74,9 @@ async def ingest_event(
             body_embedding=payload.body_embedding,
             detection_id=payload.detection_id,
             snapshot_path=payload.snapshot_path,
+            face_path=payload.face_path,
+            body_path=payload.body_path,
+            full_frame_path=payload.full_frame_path,
             clip_path=payload.clip_path,
         )
         await session.commit()

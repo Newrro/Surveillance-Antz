@@ -49,6 +49,49 @@ function updateGridBadges() {
   });
 }
 
+/* ---------- Grid stat tiles → thumbnails popup ----------
+   "No. of visits today" lists everyone who entered today; "Currently inside"
+   lists those whose last sighting today isn't at a gate. Each thumbnail is the
+   person's avatar (employees show their uploaded photo); clicking opens the log. */
+function _renderStatPeople(list, mode) {
+  document.getElementById('stat-count').textContent = list.length;
+  const grid = document.getElementById('stat-grid');
+  if (!list.length) {
+    grid.innerHTML = `<p class="desc" style="grid-column:1/-1">Nobody yet today.</p>`;
+    return;
+  }
+  grid.innerHTML = list.map(({ p, entry, last }) => {
+    const meta = mode === 'inside'
+      ? `Inside since ${to12h(entry.time)} · last at ${last.location}`
+      : `Entered ${to12h(entry.time)} · ${entry.location}`;
+    return `
+      <button class="stat-person" type="button" onclick="closeStatModal(); openPersonLog('${p.userId}')">
+        <div class="avatar stat-person-photo" style="${photoCss(p)}">${p.initials}</div>
+        <div class="stat-person-info">
+          <div class="stat-person-name">${personName(p)}</div>
+          <div class="stat-person-sub"><span class="badge badge-${p.category}">${p.category}</span></div>
+          <div class="stat-person-meta">${meta}</div>
+        </div>
+      </button>`;
+  }).join('');
+}
+function openVisitsToday() {
+  document.getElementById('stat-title').textContent = 'Visits today';
+  document.getElementById('stat-sub').textContent =
+    'Everyone who entered the premises today. Click anyone to open their log.';
+  _renderStatPeople(peopleEnteredToday(), 'visits');
+  document.getElementById('stat-modal').classList.add('open');
+}
+function openInside() {
+  document.getElementById('stat-title').textContent = 'Currently inside';
+  document.getElementById('stat-sub').textContent =
+    "Personnel who entered today and haven't exited through a gate. Click anyone to open their log.";
+  _renderStatPeople(peopleInside(), 'inside');
+  document.getElementById('stat-modal').classList.add('open');
+}
+function closeStatModal() { document.getElementById('stat-modal').classList.remove('open'); }
+function closeStatModalIfBackdrop(e) { if (e.target.id === 'stat-modal') closeStatModal(); }
+
 function filterGrid(q) {
   const query = (q || '').toLowerCase();
   document.querySelectorAll('#camera-grid .tile-wrap').forEach(w => {
@@ -228,9 +271,9 @@ function showViewRaw(name) {
   document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
   document.getElementById('view-' + name).classList.remove('hidden');
   currentView = name;
-  // TRACK belongs to the live grid only — the camera view isn't the grid.
-  const topTrack = document.querySelector('.topbar-TRACK');
-  if (topTrack) topTrack.style.display = (name === 'grid') ? '' : 'none';
+  // Log button is Report-only; the camera view is not the Report view.
+  const topActions = document.querySelector('.topbar-actions');
+  if (topActions) topActions.style.display = 'none';
 }
 
 /* ---------- Person sidebar (from a camera detection) ---------- */

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
 from api.auth import require_admin
 from api.schemas import (
@@ -21,6 +21,7 @@ from api.schemas import (
     EmployeeOut,
     EmployeePhotoIn,
     EmployeeRecord,
+    EmployeeUpdateIn,
 )
 from services import enrollment_service
 
@@ -90,7 +91,7 @@ async def enroll_employee_photo(
     try:
         result = await enrollment_service.enroll_employee_from_images(
             name=body.name, department=body.department,
-            images_b64=body.images, email=body.email,
+            images_b64=body.images, email=body.email, external_id=body.external_id,
         )
         return EmployeeOut(**result)
     except ValueError as e:
@@ -100,4 +101,35 @@ async def enroll_employee_photo(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Photo enrollment failed: {e}",
+        )
+
+
+@router.post(
+    "/{identity_id}",
+    response_model=EmployeeOut,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_admin)],
+    summary="Edit an employee's profile fields (admin only)",
+)
+async def update_employee(
+    body: EmployeeUpdateIn,
+    identity_id: int = Path(..., ge=1),
+    _: str = Depends(require_admin),
+) -> EmployeeOut:
+    """Patch name / department / employee-id (external_id) / email for an existing
+    employee. The profile PHOTO is changed separately via POST /identities/{id}/photo."""
+    try:
+        result = await enrollment_service.update_employee(
+            identity_id,
+            name=body.name, department=body.department,
+            external_id=body.external_id, email=body.email,
+        )
+        return EmployeeOut(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Employee update failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Update failed: {e}",
         )

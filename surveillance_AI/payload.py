@@ -30,13 +30,20 @@ def utc_now_iso():
 _RUN_EPOCH = int(time.time()) % 1_000_000
 
 
-def build_payload(camera_uid, score, face_embedding, body_embedding, snapshot_path, stamp_ms, idx):
+def build_payload(camera_uid, score, face_embedding, body_embedding, snapshot_path, stamp_ms, idx,
+                  face_path=None, full_frame_path=None):
     """Part 1 → Part 2 detection payload (contracts/part1_to_part2.event.schema.json).
 
     `idx` is the tracker's track id. detection_id is STABLE per track (no
     timestamp) so every emit of the same person shares one id — the Brain can
     dedup repeat Unknown sightings on it, group them into one 'Unknown person'
-    card, and keep a track's identity sticky across re-emits."""
+    card, and keep a track's identity sticky across re-emits.
+
+    The evidence TRIPLE (face / body / full scene) was written from the SAME frame
+    with a shared filename stem, so the three panels the UI shows are always the
+    same person at the same instant. `snapshot_path` is the body crop (kept as the
+    legacy single-photo alias); `face_path` and `full_frame_path` are its paired
+    companions — passed EXPLICITLY so the Brain never derives one from another."""
     return {
         "detection_id": f"{camera_uid}-r{_RUN_EPOCH}-t{idx}",
         "camera_id": camera_uid,
@@ -45,5 +52,8 @@ def build_payload(camera_uid, score, face_embedding, body_embedding, snapshot_pa
         "face_embedding": [float(x) for x in face_embedding] if face_embedding is not None else None,
         "body_embedding": [float(x) for x in body_embedding] if body_embedding is not None else None,
         "snapshot_path": snapshot_path,
+        "face_path": face_path,
+        "body_path": snapshot_path,                   # body crop == the legacy snapshot
+        "full_frame_path": full_frame_path,
         "clip_path": None,                            # short-clip capture: TODO
     }

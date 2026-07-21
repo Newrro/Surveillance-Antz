@@ -314,7 +314,7 @@ def main():
                         if t.snap_path is None:
                             t.probes += 1
                             t.snap_path = save_snapshot(uid, fallback, stamp_ms, t.id)
-                            save_frame_snapshot(uid, frame, box, stamp_ms, t.id)
+                            t.frame_path = save_frame_snapshot(uid, frame, box, stamp_ms, t.id)
             return False
         with _stream_ctx(lo_stream):
             crop = crop_person(frame, box)                  # RAW crop → snapshots (nice photo)
@@ -363,7 +363,7 @@ def main():
                 t.best_face_emb, t.best_body_emb, t.best_face_q = face_emb, body_emb, face_q
                 t.snap_path = save_snapshot(uid, crop, stamp_ms, t.id)          # body
                 t.face_path = save_face_snapshot(uid, face_crop, stamp_ms, t.id)  # paired face
-                save_frame_snapshot(uid, frame, box, stamp_ms, t.id)           # paired scene
+                t.frame_path = save_frame_snapshot(uid, frame, box, stamp_ms, t.id)  # paired scene
             elif t.best_face_q <= 0.0:
                 # No usable face on this track yet — keep the SHARPEST body + scene so
                 # an Unknown still gets a clean picture, upgraded as sharper/bigger
@@ -374,7 +374,7 @@ def main():
                 if body_q > t.best_shot_q:
                     t.best_shot_q = body_q
                     t.snap_path = save_snapshot(uid, crop, stamp_ms, t.id)
-                    save_frame_snapshot(uid, frame, box, stamp_ms, t.id)
+                    t.frame_path = save_frame_snapshot(uid, frame, box, stamp_ms, t.id)
                     t.face_path = None
             # Decide whether to (re-)emit. Emit a FIRST label as soon as we've pooled
             # a few good faces (snappy — a poor single face enrolls a bad gallery entry
@@ -395,6 +395,7 @@ def main():
             emit_face = _pooled_face(t.face_emb_sum, t.face_w_sum)
             emit_body = t.best_body_emb
             snap, emit_q = t.snap_path, t.best_face_q
+            face_snap, frame_snap = t.face_path, t.frame_path   # paired evidence triple
             t.emitted = True
             t.emit_face_w = t.face_w_sum
             t.emit_face_q = t.best_face_q
@@ -402,7 +403,8 @@ def main():
         disp = color = None
         locked = False
         if args.emit:
-            payload = build_payload(uid, box[4], emit_face, emit_body, snap, stamp_ms, t.id)
+            payload = build_payload(uid, box[4], emit_face, emit_body, snap, stamp_ms, t.id,
+                                    face_path=face_snap, full_frame_path=frame_snap)
             try:
                 j = session.post(f"{args.brain_url}/events", json=payload, timeout=10).json()
                 disp, color = _display_from_brain(j)
@@ -442,7 +444,8 @@ def main():
             return                       # never a stable person (flicker/noise) — no spurious row
         emit_face = _pooled_face(t.face_emb_sum, t.face_w_sum)   # usually None at this point
         stamp_ms = int(time.time() * 1000)
-        payload = build_payload(uid, t.box[4], emit_face, t.best_body_emb, t.snap_path, stamp_ms, t.id)
+        payload = build_payload(uid, t.box[4], emit_face, t.best_body_emb, t.snap_path, stamp_ms, t.id,
+                                face_path=t.face_path, full_frame_path=t.frame_path)
         try:
             j = session.post(f"{args.brain_url}/events", json=payload, timeout=10).json()
             t.emitted = True

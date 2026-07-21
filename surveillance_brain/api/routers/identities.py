@@ -13,18 +13,21 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import base64
+
 from api.auth import require_admin
 from api.schemas import (
     ConversionResponse,
     DeleteIdentitiesRequest,
     EventOut,
+    IdentityPhotoIn,
     MergeRequest,
     NameRequest,
     PromoteRequest,
     RosterResponse,
 )
 from db.connection import get_db, get_session
-from services import conversion_service, dedup_service, log_service
+from services import conversion_service, dedup_service, log_service, media_paths
 
 logger = logging.getLogger(__name__)
 
@@ -200,3 +203,26 @@ async def set_name(identity_id: int, body: NameRequest) -> dict:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Rename failed: {e}",
         )
+
+
+@router.post(
+    "/{identity_id}/photo",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_admin)],
+    summary="Set a person's fixed profile photo (pins it; pipeline won't overwrite)",
+)
+async def set_photo(identity_id: int, body: IdentityPhotoIn, _: str = Depends(require_admin)) -> dict:
+    """Replace the durable profile avatar (storage/profiles/<id>.jpg) with an uploaded
+    image and LOCK it, so the pipeline never overwrites it with a captured face. Works
+    for employees and visitors alike (manual thumbnail choice)."""
+    try:
+        raw = base64.b64decode(body.image.split(",", 1)[-1])   # tolerate data: URL prefix
+    except Exception:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid base64 image")
+    profile = media_paths.write_profile_from_bytes(identity_id, raw)
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="could not write profile photo",
+        )
+    return {"identity_id": identity_id, "profile": profile}

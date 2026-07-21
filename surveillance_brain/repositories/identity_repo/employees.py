@@ -58,6 +58,36 @@ async def fetch_employee(session: AsyncSession, identity_id: int) -> Optional[Em
     return await session.get(Employee, identity_id)
 
 
+async def update_employee(
+    session: AsyncSession,
+    identity_id: int,
+    *,
+    name: Optional[str] = None,
+    department: Optional[str] = None,
+    email: Optional[str] = None,
+    external_id: Optional[str] = None,
+) -> Optional[Employee]:
+    """Patch an employee's editable fields (only the ones passed non-None). Returns
+    the updated row, or None if the identity isn't an employee. Raises ValueError on
+    an external_id that already belongs to a different employee (unique constraint)."""
+    emp = await session.get(Employee, identity_id)
+    if emp is None:
+        return None
+    if external_id is not None and external_id != emp.external_id:
+        clash = await fetch_employee_by_external_id(session, external_id)
+        if clash is not None and clash.identity_id != identity_id:
+            raise ValueError(f"employee id {external_id!r} is already in use")
+        emp.external_id = external_id
+    if name is not None:
+        emp.name = name
+    if department is not None:
+        emp.department = department
+    if email is not None:
+        emp.email = email
+    await session.flush()
+    return emp
+
+
 async def list_employees(session: AsyncSession, limit: int = 500, offset: int = 0) -> List[Employee]:
     """All employees — GET /employees."""
     stmt = select(Employee).order_by(Employee.year.desc(), Employee.employee_seq.desc()).limit(limit).offset(offset)

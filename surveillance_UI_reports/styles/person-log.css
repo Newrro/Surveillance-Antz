@@ -42,27 +42,6 @@
 .plog-card-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-secondary); margin-bottom: 10px; }
 .plog-details .kv { padding: 5px 0; font-size: 12.5px; }
 
-/* Movement-log table: bigger FACE thumbnail + a dedicated actions column. */
-.plog-log-table td { vertical-align: middle; }
-.plog-face-thumb {
-  width: 64px; height: 64px; border-radius: var(--radius-sm);
-  font-size: 16px; cursor: pointer; flex-shrink: 0;
-  transition: box-shadow 0.15s, transform 0.1s;
-}
-.plog-face-thumb:hover { box-shadow: var(--glow); transform: scale(1.04); }
-.plog-log-table .plog-row-actions { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
-.plog-act-btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 6px 10px; font: inherit; font-size: 12px; font-weight: 500;
-  border-radius: var(--radius-sm); border: 1px solid var(--border);
-  background: var(--bg-2); color: var(--text-secondary); cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-.plog-act-btn i { font-size: 14px; }
-.plog-act-del:hover { background: var(--danger); color: #ffffff; border-color: var(--danger); }
-.plog-act-unknown:hover { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
-.plog-act-btn:disabled { opacity: 0.4; cursor: default; }
-
 /* Weekly report chart */
 .plog-chart { position: relative; }
 .plog-svg { width: 100%; height: 128px; display: block; }
@@ -176,57 +155,25 @@
   display: flex; flex-direction: column;    /* so the table fills the panel */
   min-height: 0; overflow: hidden;          /* contain the scroll to the table below */
 }
-.log-sheet-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
+.log-sheet-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin-bottom: 14px; }
 /* Category toggle next to the datasheet date (replaces the old dropdown) */
 .log-cat-toggle {
   display: inline-flex; gap: 4px; padding: 4px;
-  background: var(--bg-2); border: 1px solid var(--border); border-radius: 999px;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
 .log-cat-btn {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 7px 15px; border: none; border-radius: 999px;
+  padding: 6px 14px; border: none; border-radius: 10px;
   background: none; color: var(--text-secondary); cursor: pointer;
   font: inherit; font-size: 12.5px; font-weight: 500;
-  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
 .log-cat-btn i { font-size: 15px; }
 .log-cat-btn:hover { color: var(--text-primary); }
-.log-cat-btn.active {
-  background: var(--accent); color: #06210a; font-weight: 600;
-}
-.log-cat-btn.active i { color: #06210a; }
+.log-cat-btn.active { background: var(--accent); color: #06210a; }
 .log-sheet-date { font-size: 16px; font-weight: 600; font-family: var(--font-mono); }
 .log-sheet-day { font-size: 12.5px; color: var(--text-secondary); margin-top: 2px; }
-
-/* Datasheet rendered as a spacious, header-less list (flush inside the panel) */
-.log-sheet .table-wrap {
-  box-shadow: none; border: none; background: none; border-radius: 0;
-  flex: 1; min-height: 0; overflow-y: auto;
-}
-.log-list td { padding: 13px 14px; vertical-align: middle; }
-.log-list td:nth-child(2) { font-weight: 600; font-size: 13.5px; }
-.log-list td:nth-child(5) { color: var(--text-secondary); }
-.log-list tbody tr:first-child td { border-top: none; }
-
-/* Per-row merge button — mirrors the Report card's merge action, docked at the
-   end of the row next to the location. Enters the same selection/merge flow. */
-.log-merge-cell { width: 1%; white-space: nowrap; text-align: right; }
-.log-row-merge {
-  width: 30px; height: 30px; padding: 0;
-  display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 50%; border: 1px solid var(--border);
-  background: rgba(0, 0, 0, 0.28); color: var(--text-muted); cursor: pointer;
-  opacity: 0.55; transition: opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
-}
-.log-row-merge svg { width: 16px; height: 16px; display: block; }
-.log-list tbody tr:hover .log-row-merge { opacity: 1; }
-.log-row-merge:hover, .log-row-merge.active {
-  background: var(--accent); color: #06210a; border-color: var(--accent);
-  box-shadow: var(--glow); opacity: 1;
-}
-/* Selected row while merging (all rows of the picked person light up) */
-.log-list tbody tr.log-row-selected { background: var(--accent-dim); }
-.log-list tbody tr.log-row-selected td { box-shadow: inset 3px 0 0 var(--accent); }
+.log-sheet .table-wrap { box-shadow: none; flex: 1; min-height: 0; overflow-y: auto; }
 
 @media (max-width: 940px) { .log-layout { grid-template-columns: 1fr; min-height: 0; } }
 

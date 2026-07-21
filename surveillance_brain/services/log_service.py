@@ -49,6 +49,10 @@ def _enriched_stmt():
             DetectionEvent.detection_conf,
             DetectionEvent.matched_by,
             DetectionEvent.similarity,
+            DetectionEvent.face_path,
+            DetectionEvent.body_path,
+            DetectionEvent.full_frame_path,
+            DetectionEvent.full_frame_annotated_path,
             DetectionEvent.snapshot_path,
             DetectionEvent.clip_path,
             DetectionEvent.identity_id,
@@ -82,6 +86,13 @@ def _row_to_event(r: Any) -> Dict[str, Any]:
         "confidence": r.detection_conf,
         "matched_by": r.matched_by.value if r.matched_by else None,
         "similarity": r.similarity,
+        # One immutable evidence set per sighting — EXPLICIT paths only (the UI's
+        # evidence popup shows Face + Full body + full-frame Scene from these).
+        # Never derive a companion file from another file's name.
+        "face": r.face_path,
+        "body": r.body_path,
+        "full_frame": r.full_frame_path,
+        "full_frame_annotated": r.full_frame_annotated_path,
         "snapshot": r.snapshot_path,
         "profile": media_paths.profile_rel(r.identity_id),   # durable Tier-A photo (if any)
         "clip": r.clip_path,

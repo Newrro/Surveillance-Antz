@@ -41,14 +41,13 @@ const Brain = (() => {
     if (typeof window !== 'undefined' && window.BRAIN_URL) {
       return String(window.BRAIN_URL).replace(/\/$/, '');
     }
-    // Default: the Brain is on the SAME host that served this page, on :8000.
-    // This makes LAN access work out of the box — open http://<host>:8080 from
-    // any computer and it talks to http://<host>:8000, no ?brain= needed.
+    // Default: the SAME-ORIGIN /brain reverse proxy served by this site's
+    // server.py. Everything (UI + Brain API + snapshots) goes through the ONE
+    // public URL, so a single free ngrok tunnel exposes the whole site.
     // (Only falls back to localhost for file:// where there's no host.)
     try {
       if (typeof location !== 'undefined' && location.hostname) {
-        const proto = location.protocol === 'https:' ? 'https' : 'http';
-        return `${proto}://${location.hostname}:8000`;
+        return '/brain';
       }
     } catch (_) { /* no location — fall through */ }
     return 'http://localhost:8000';
@@ -129,20 +128,27 @@ const Brain = (() => {
     return evt.camera || evt.zone_id || (evt.camera_id != null ? `Camera ${evt.camera_id}` : 'Unknown location');
   }
 
-  // A photo URL for a detected person's CARD avatar. Prefer a FACE over a body:
-  //   1. profile — the durable Tier-A avatar, which the pipeline builds from the
-  //      aligned FACE crop (body only fills an empty slot) — so this is a face.
-  //   2. face    — the per-sighting aligned face crop.
-  //   3. snapshot/body — last resort (faceless people).
-  // The person-log evidence popup still shows the full face+body+scene triple
-  // from history; this only picks the single thumbnail for the grid card.
-  // Falls back to a live camera still, then null (UI shows initials).
-  function photoFor(evt) {
-    const pick = evt.profile || evt.face || evt.snapshot;
-    if (pick) {
-      if (/^https?:\/\//i.test(pick)) return pick;    // already a full URL
-      return '/' + String(pick).replace(/^\/+/, '');  // 'storage/..' -> '/storage/..' (server.py serves it)
+  // A photo URL for a detected person. Preference order:
+  //   1. the DURABLE per-identity profile photo (Tier A) — the Brain sends
+  //      `profile` only when storage/profiles/<id>.jpg actually exists. This is
+  //      never pruned, so a face never disappears from the Report/Records.
+  //   2. the per-sighting snapshot crop (may age out under the media pruner).
+  //   3. a live still from the camera they were seen on (server.py /snapshot).
+  // Returns null when none are available (UI falls back to initials).
+  function resolveStoragePath(p) {
+    if (/^https?:\/\//i.test(p)) return p;            // already a full URL
+    const url = '/' + String(p).replace(/^\/+/, '');  // 'storage/..' -> '/storage/..'
+    // A profile photo keeps the SAME filename when manually re-uploaded, so bust the
+    // browser cache after an edit (window.__photoBust is bumped by saveProfile).
+    if (/storage\/profiles\//.test(url) && typeof window !== 'undefined' && window.__photoBust) {
+      return url + '?v=' + window.__photoBust;
     }
+    return url;
+  }
+  function photoFor(evt) {
+    if (evt.profile) return resolveStoragePath(evt.profile);   // durable FACE (never pruned)
+    if (evt.face) return resolveStoragePath(evt.face);         // per-sighting face crop
+    if (evt.snapshot) return resolveStoragePath(evt.snapshot); // body crop (faceless fallback)
     const camUid = evt.camera || null;                // fallback: live camera still
     if (camUid) return `/snapshot/${encodeURIComponent(camUid)}`;
     return null;
@@ -179,8 +185,8 @@ const Brain = (() => {
     // Photo = the person's NEWEST snapshot (works for both the initial hydrate,
     // which arrives newest-first, and live events that arrive later). Keeping the
     // newest also makes the derived <stem>_face.jpg most likely to exist.
-    // EXCEPTION: an employee's enrolled/uploaded photo is their fixed avatar —
-    // never overwrite it with a captured sighting frame.
+    // EXCEPTION: a manually-set/enrolled photo is the person's FIXED avatar — never
+    // overwrite it with a captured sighting frame (employees; manual visitor photos).
     const photo = photoFor(evt);
     if (photo && !p._enrolledPhoto && (!p._photoTime || (evt.time && evt.time > p._photoTime))) {
       p.photo = photo;
@@ -213,15 +219,19 @@ const Brain = (() => {
 
   /* ---------- hydrate: fill PEOPLE / DETECTIONS from the Brain ---------- */
   async function hydrate(camNameById) {
+    state._camNames = camNameById || state._camNames || {};
     if (!(await health())) return false;
 
-    // Pull a generous window of recent events (newest-first per the Brain).
-    let events = [];
+    // Pull ONE aggregated row per person (their latest sighting + first_seen +
+    // sighting_count). Bounded by HEADCOUNT, not event volume — so the whole
+    // history never has to live in the browser. Each person's full history is
+    // lazy-loaded from /person/{id} the moment their card/modal is opened.
+    let roster = [];
     try {
-      const resp = await getJSON('/events?limit=2000');
-      events = (resp && resp.events) || [];
+      const resp = await getJSON('/identities/roster');
+      roster = (resp && resp.people) || [];
     } catch (e) {
-      console.warn('[Brain] /events failed:', e.message);
+      console.warn('[Brain] /identities/roster failed:', e.message);
       return false;
     }
 
@@ -247,41 +257,24 @@ const Brain = (() => {
         department: emp.department || null, features: '—', height: '—', gender: '—', age: '—',
         registeredDate: emp.hired_at ? emp.hired_at.slice(0, 10) : null, history: [],
       };
-      // The employee's avatar is the photo the USER UPLOADED at enrollment — a
-      // stable, chosen image. Flagged so live sightings never overwrite it. The
-      // filename is stable across edits, so cache-bust when a photo was just changed.
+      // The employee's avatar is the UPLOADED enrollment photo (durable, LOCKED).
+      // Flag it so a captured sighting never overwrites the chosen thumbnail, and
+      // set it now so a NEVER-seen employee still shows their photo (not initials).
       if (emp.photo_path) {
-        const pp = emp.photo_path;
-        let url = /^https?:\/\//i.test(pp) ? pp : '/' + String(pp).replace(/^\/+/, '');
-        if (typeof window !== 'undefined' && window.__photoBust) url += '?v=' + window.__photoBust;
-        PEOPLE[key].photo = url;
+        PEOPLE[key].photo = resolveStoragePath(emp.photo_path);
         PEOPLE[key]._enrolledPhoto = true;
       }
       if (emp.department && !DEPARTMENTS.includes(emp.department)) DEPARTMENTS.push(emp.department);
     });
 
-    // Fold every event into the people registry + history.
-    events.forEach(evt => {
-      const { person } = upsertPerson(PEOPLE, evt, camNameById);
-      if (person.department && !DEPARTMENTS.includes(person.department)) DEPARTMENTS.push(person.department);
-    });
-
-    // The /events window above is capped (limit=2000), so anyone last seen
-    // outside it would be missing — making the headcount undercount vs the
-    // Reports site. Fold in the FULL roster (one row per identity, complete):
-    // people already built from a live event keep their richer history; the
-    // rest are seeded from their latest sighting (lazy-expanded when opened).
-    // This is what makes both UIs agree on the Visitor/Unknown totals.
-    let roster = [];
-    try {
-      const rr = await getJSON('/identities/roster');
-      roster = (rr && rr.people) || [];
-    } catch (_) { /* non-fatal — keep the event-based people */ }
+    // Fold each person's roster row (their LATEST sighting) into the registry via
+    // the SAME path as a live event, so photo/location/category all resolve
+    // identically. history holds just that one sighting until it's lazy-loaded.
     roster.forEach(row => {
-      if (PEOPLE[personKey(row)]) return;      // already have it (richer, event-based)
       const { person } = upsertPerson(PEOPLE, row, camNameById);
-      if (row.sighting_count != null) person.sightingCount = row.sighting_count;
-      if (row.first_seen) person.firstSeen = row.first_seen;
+      person.sightingCount = row.sighting_count ?? person.history.length;
+      person.firstSeen = row.first_seen || null;
+      person.historyLoaded = false;   // full history not fetched yet
       if (person.department && !DEPARTMENTS.includes(person.department)) DEPARTMENTS.push(person.department);
     });
 
@@ -289,36 +282,73 @@ const Brain = (() => {
     Object.keys(DETECTIONS).forEach(k => delete DETECTIONS[k]);
 
     state.connected = true;
-    console.info(`[Brain] hydrated ${Object.keys(PEOPLE).length} people (${events.length} events + ${roster.length} roster rows) @ ${BASE}`);
+    console.info(`[Brain] hydrated ${Object.keys(PEOPLE).length} people from ${roster.length} roster rows @ ${BASE}`);
     return true;
   }
 
-  /* ---------- live WS stream ---------- */
+  /* ---------- lazy per-person history (fetched when a card/modal opens) ----------
+     The roster gives each person only their latest sighting. The first time a
+     person is opened we pull their FULL history from /person/{id} and fold every
+     sighting in through upsertPerson (same dedupe/photo/evidence logic). Unknowns
+     have no identity_id, so their single roster sighting is all there is. */
+  async function loadPersonHistory(userId, camNameById) {
+    const p = PEOPLE[userId];
+    if (!p || p.historyLoaded) return p || null;
+    if (p.identityId == null) { p.historyLoaded = true; return p; }  // Unknown → one sighting only
+    let prof;
+    try {
+      prof = await getJSON(`/person/${p.identityId}`);
+    } catch (e) {
+      console.warn('[Brain] /person failed:', e.message);
+      return p;                       // keep the single-sighting summary
+    }
+    const hist = (prof && prof.history) || [];
+    p.history = [];                   // rebuild from the authoritative full history
+    p._photoTime = null;
+    hist.forEach(h => {
+      upsertPerson(PEOPLE, {
+        identity_id: p.identityId, person_id: p.displayLabel,
+        label: p.category, name: p.name,
+        camera: h.camera, camera_id: h.camera_id, time: h.time,
+        event_id: h.event_id, detection_id: h.detection_id, track_uuid: h.track_uuid,
+        confidence: h.confidence, similarity: h.similarity, matched_by: h.matched_by,
+        face: h.face, body: h.body,
+        full_frame: h.full_frame, full_frame_annotated: h.full_frame_annotated,
+        snapshot: h.snapshot, clip: h.clip, profile: prof.profile || null,
+      }, camNameById);
+    });
+    // Keep the roster's TRUE total (the profile history is capped at 100 recent
+    // rows, so history.length would under-report a very frequent person).
+    if (p.sightingCount == null) p.sightingCount = p.history.length;
+    p.historyLoaded = true;
+    return p;
+  }
+
+  /* ---------- live updates ----------
+     The main console streams events over WS /live. This site is served through
+     a plain-HTTP reverse proxy (one ngrok tunnel), which can't carry the
+     WebSocket — so we POLL instead: re-hydrate the roster every few seconds and
+     tell the caller so the current view re-renders. Same data, slight delay. */
+  const POLL_MS = 15000;
   function connectLive(onEvent) {
     state.onLiveEvent = onEvent;
-    try {
-      const ws = new WebSocket(`${WS_BASE}/live`);
-      state.ws = ws;
-      ws.onmessage = (msg) => {
-        let data;
-        try { data = JSON.parse(msg.data); } catch (_) { return; }
-        if (!data || data.type !== 'event') return;      // ignore the {type:'connected'} greeting
-        if (data.duplicate) return;                       // suppressed by the Brain's dedup guard
-        if (typeof state.onLiveEvent === 'function') state.onLiveEvent(data);
-      };
-      ws.onclose = () => {
-        // Reconnect after a short delay; the Brain restarts / network blips.
-        if (state.connected) setTimeout(() => connectLive(state.onLiveEvent), 3000);
-      };
-      ws.onerror = () => { try { ws.close(); } catch (_) { /* noop */ } };
-    } catch (e) {
-      console.warn('[Brain] live WS unavailable:', e.message);
-    }
+    if (state._pollTimer) clearInterval(state._pollTimer);
+    state._pollTimer = setInterval(async () => {
+      try {
+        const ok = await hydrate(state._camNames || {});
+        if (ok && typeof state.onLiveEvent === 'function') state.onLiveEvent(null);
+      } catch (_) { /* Brain briefly unreachable — keep last data */ }
+    }, POLL_MS);
   }
 
   /* Fold one live event into PEOPLE + DETECTIONS and hand the caller the person key. */
   function applyLiveEvent(evt, camNameById) {
     const { key, person, loc } = upsertPerson(PEOPLE, evt, camNameById);
+    // Keep the roster summary fields coherent for live arrivals. A brand-new
+    // person gets initialised; once a person's full history is loaded the count
+    // tracks history directly (a fresh person hasn't been lazy-loaded yet).
+    if (person.sightingCount == null) { person.sightingCount = person.history.length; person.historyLoaded = false; }
+    else if (person.historyLoaded) { person.sightingCount = person.history.length; }
     // Surface the person on the camera's live overlay. The Brain event has no
     // pixel box, so we place a centered marker; Part 1 can later send real boxes.
     const camId = evt.camera || (evt.camera_id != null ? String(evt.camera_id) : null);
@@ -549,7 +579,7 @@ const Brain = (() => {
   return {
     get base() { return state.base; },
     get connected() { return state.connected; },
-    health, hydrate, connectLive, applyLiveEvent, enrollEmployee, findLive, resetDatabase, setName, promoteToEmployee, clearUnknowns, consolidate, mergeIdentities, deleteIdentities, enrollEmployeePhoto, updateEmployee, setProfilePhoto, attendance, deleteSighting,
+    health, hydrate, loadPersonHistory, connectLive, applyLiveEvent, enrollEmployee, findLive, resetDatabase, setName, promoteToEmployee, clearUnknowns, consolidate, mergeIdentities, deleteIdentities, enrollEmployeePhoto, updateEmployee, setProfilePhoto, attendance, deleteSighting,
     searchIdentities, hideSightings, reassignSightings, splitCase, unmerge, importEmployees, importStatus,
     // exposed for reuse/testing
     _map: { splitTime, locationFor, personKey, upsertPerson },

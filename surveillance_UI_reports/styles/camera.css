@@ -1,0 +1,158 @@
+/* styles/camera.css — section split from the original styles.css (cascade order preserved). */
+/* ---------- Individual camera view ---------- */
+.camera-view { display: flex; gap: 20px; align-items: flex-start; }
+.feed-frame {
+  position: relative;
+  flex: 1;
+  aspect-ratio: 16 / 9;
+  background: linear-gradient(160deg, #171B22, #0E1116);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.feed-frame::before {
+  content: '';
+  position: absolute; inset: 0;
+  background: repeating-linear-gradient(0deg, rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 1px, transparent 1px, transparent 3px);
+  pointer-events: none;
+}
+.feed-label { position: absolute; top: 14px; left: 14px; font-size: 13px; font-weight: 500; background: rgba(10,12,15,0.6); padding: 4px 10px; border-radius: var(--radius-sm); }
+.feed-time { position: absolute; bottom: 14px; right: 14px; font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); background: rgba(10,12,15,0.6); padding: 4px 9px; border-radius: var(--radius-sm); }
+
+/* Click-to-fullscreen affordance on camera feeds */
+.feed-frame { cursor: pointer; }
+.feed-fs {
+  position: absolute; bottom: 14px; left: 14px; z-index: 6;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px;
+  background: rgba(10,12,15,0.62); color: #d7ecca;
+  border: 1px solid rgba(255,255,255,0.16); border-radius: var(--radius-sm);
+  opacity: 0.5; transition: opacity 0.15s, border-color 0.15s, box-shadow 0.15s, color 0.15s;
+}
+.feed-frame:hover .feed-fs, .feed-fs:focus-visible { opacity: 1; }
+.feed-fs:hover { border-color: var(--accent); box-shadow: var(--glow); color: #fff; }
+.feed-fs i { font-size: 16px; }
+
+/* Fullscreen state — fill the screen edge to edge.
+   Standard and -webkit- pseudos are kept in separate rules on purpose: a
+   comma-joined list would be dropped entirely by a browser that knows only one. */
+.feed-frame:fullscreen {
+  width: 100vw; height: 100vh; aspect-ratio: auto;
+  border: none; border-radius: 0; background: #000;
+}
+.feed-frame:-webkit-full-screen {
+  width: 100vw; height: 100vh; aspect-ratio: auto;
+  border: none; border-radius: 0; background: #000;
+}
+.feed-frame:fullscreen .feed-video { object-fit: contain; }
+.feed-frame:-webkit-full-screen .feed-video { object-fit: contain; }
+.feed-frame:fullscreen .feed-fs { opacity: 1; }
+.feed-frame:-webkit-full-screen .feed-fs { opacity: 1; }
+
+/* ── X-Ray: detected-people panel on the camera feed (normal + fullscreen) ── */
+.xray-btn {
+  position: absolute; top: 14px; right: 14px; z-index: 7;
+  display: inline-flex;
+  align-items: center; gap: 7px;
+  padding: 8px 13px; border-radius: var(--radius-sm);
+  background: rgba(10, 12, 15, 0.62); color: #d7ecca;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  font-family: var(--font-mono); font-size: 12px; font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer;
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  transition: border-color 0.15s, box-shadow 0.15s, color 0.15s;
+}
+.xray-btn i { font-size: 16px; }
+.xray-btn:hover,
+.xray-btn.active { border-color: var(--accent); box-shadow: var(--glow); color: #fff; }
+.xray-count {
+  background: var(--accent); color: var(--on-accent);
+  border-radius: 20px; padding: 1px 7px; font-size: 11px; font-weight: 700;
+}
+
+.xray-panel {
+  position: absolute; top: 58px; right: 14px; z-index: 7;
+  width: 328px; max-width: calc(100vw - 28px); max-height: 74vh; overflow-y: auto;
+  display: none;                 /* toggled open via JS */
+  background: rgba(12, 18, 16, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--radius);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.55);
+  -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
+  padding: 6px;
+}
+.xray-panel.open { display: block; }
+.xray-panel-head {
+  display: flex; justify-content: space-between; align-items: center;
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--text-secondary);
+  padding: 8px 10px 10px;
+}
+.xray-panel-head span { color: var(--accent); font-weight: 700; }
+
+.xray-item { border-top: 1px solid rgba(255, 255, 255, 0.09); }
+.xray-item:first-child { border-top: none; }
+.xray-item-head {
+  width: 100%; display: flex; align-items: center; gap: 10px;
+  background: none; border: none; padding: 10px; border-radius: var(--radius-sm);
+  color: var(--text-primary); text-align: left; cursor: pointer;
+}
+.xray-item-head:hover { background: rgba(255, 255, 255, 0.06); }
+.xray-item-who { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.xray-item-name { font-size: 13.5px; font-weight: 600; }
+.xray-item-id { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+.xray-caret { color: var(--text-muted); font-size: 16px; transition: transform 0.18s; }
+.xray-item.open .xray-caret { transform: rotate(180deg); }
+.xray-item-body { display: none; padding: 2px 12px 12px; }
+.xray-item.open .xray-item-body { display: block; }
+.xray-item-body .kv { border-color: rgba(255, 255, 255, 0.08); }
+.xray-log-btn { margin-top: 10px; }
+.xray-empty {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  color: var(--text-muted); font-size: 13px; padding: 22px 10px;
+}
+.detbox-live {
+  position: absolute;
+  border: 1.5px solid var(--accent);
+  border-radius: 8px;
+  pointer-events: none;
+}
+.detbox-live.category-Visitor { border-color: var(--warn); }
+.detbox-live.category-Unknown { border-color: var(--danger); }
+.detbox-live .tag {
+  position: absolute; top: -20px; left: -1.5px;
+  font-size: 10px; font-family: var(--font-mono);
+  background: var(--accent); color: #ffffff; font-weight: 600;
+  padding: 2px 6px; border-radius: 6px; white-space: nowrap;
+}
+.detbox-live.category-Visitor .tag { background: var(--warn); color: #ffffff; }
+.detbox-live.category-Unknown .tag { background: var(--danger); color: #ffffff; }
+
+.side-panel {
+  width: 260px; flex-shrink: 0;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+.side-panel h3 { font-size: 13px; font-weight: 500; margin: 0 0 12px; color: var(--text-secondary); }
+.person-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px; border-radius: var(--radius-sm);
+  cursor: pointer;
+  margin-bottom: 4px;
+}
+.person-row:hover { background: var(--bg-2); }
+.person-row .avatar { font-size: 11px; }
+.person-row-meta { display: flex; flex-direction: column; }
+.person-row-meta .name { font-size: 13px; }
+.person-row-meta .cat { font-size: 11px; color: var(--text-muted); }
+
+.badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 500; }
+.badge-Employee { background: var(--accent-dim); color: var(--accent); }
+.badge-Visitor { background: var(--warn-dim); color: var(--warn); }
+.badge-Unknown { background: var(--danger-dim); color: var(--danger); }
+.badge-Verified { background: var(--accent-dim); color: var(--accent); }
+.badge-Reviewed { background: var(--bg-3); color: var(--text-secondary); }
+.badge-Flagged { background: var(--danger-dim); color: var(--danger); }
+

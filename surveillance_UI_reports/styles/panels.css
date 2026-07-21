@@ -96,82 +96,11 @@ td.mono { font-family: var(--font-mono); font-size: 12.5px; color: var(--text-se
 .record-card-head .dept { font-size: 11.5px; color: var(--text-muted); }
 .record-card .kv { padding: 5px 0; font-size: 12px; }
 
-/* ---------- Settings (card / thumbnail grid) ---------- */
-.settings-grid {
-  display: grid;
-  /* 6-col base: top row = three cards (span 2 each), bottom row = two cards
-     (span 3 each) — both rows fill the full width. */
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 18px;
-  align-items: stretch;
-}
-.settings-card {
-  grid-column: span 2;                 /* default: three per row */
-  display: flex; flex-direction: column;
-  background: var(--bg-1);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 20px;
-  box-shadow: var(--shadow);
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.12s;
-}
-.settings-card:hover { border-color: var(--border-strong); box-shadow: 0 10px 36px rgba(0, 0, 0, 0.36); }
-.settings-card.span-half { grid-column: span 3; }   /* two per row */
-.settings-card.span-2 { grid-column: 1 / -1; }       /* full width */
-
-.settings-card-head { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 16px; }
-.settings-card-icon {
-  flex-shrink: 0;
-  width: 46px; height: 46px;
-  border-radius: 14px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 22px;
-  color: var(--accent);
-  background: var(--accent-dim);
-  border: 1px solid rgba(147, 197, 114, 0.35);
-  box-shadow: inset 0 0 14px rgba(147, 197, 114, 0.16);
-}
-.settings-card-title { min-width: 0; flex: 1; }
-.settings-card-title h2 { font-size: 15px; font-weight: 600; margin: 2px 0 5px; }
-.settings-card .desc { font-size: 12.5px; color: var(--text-secondary); margin: 0; }
-.settings-card-body { margin-top: 4px; }
-
-/* Departments listed one below another, each row with a tiny leading delete cross */
-#dept-list { flex-direction: column; align-items: stretch; gap: 8px; margin-bottom: 14px; }
-#dept-list .dept-chip {
-  justify-content: flex-start;
-  gap: 8px;
-  padding: 8px 12px;
-  border-radius: var(--radius-sm);
-}
-#dept-list .dept-chip .dept-name { flex: 1; }
-#dept-list .dept-chip .chip-x { flex-shrink: 0; }
-#dept-list .dept-chip .chip-x i { font-size: 15px; }
-
-/* Danger-zone accent */
-.settings-card.danger { border-color: rgba(255, 107, 107, 0.32); }
-.settings-card.danger:hover { border-color: rgba(255, 107, 107, 0.5); }
-.settings-card.danger .settings-card-icon {
-  color: var(--danger);
-  background: var(--danger-dim);
-  border-color: rgba(255, 107, 107, 0.4);
-  box-shadow: inset 0 0 14px rgba(255, 107, 107, 0.16);
-}
-
+/* ---------- Settings ---------- */
+.settings-section { margin-bottom: 28px; }
+.settings-section h2 { font-size: 14px; font-weight: 500; margin: 0 0 4px; }
+.settings-section .desc { font-size: 12.5px; color: var(--text-secondary); margin: 0 0 14px; }
 .settings-row-actions { display: flex; gap: 8px; }
-
-@media (max-width: 900px) {
-  .settings-grid { grid-template-columns: minmax(0, 1fr); }
-  .settings-card,
-  .settings-card.span-half,
-  .settings-card.span-2 { grid-column: auto; }
-}
-
-/* A titled block inside a settings section (e.g. single-add vs bulk upload). */
-.settings-subsection { padding: 14px 0 2px; border-top: 1px solid var(--border); margin-top: 14px; }
-.settings-subsection:first-of-type { border-top: none; margin-top: 0; padding-top: 0; }
-.settings-subsection h3 { font-size: 12.5px; font-weight: 600; margin: 0 0 4px; color: var(--text-primary); }
-.settings-subsection .desc { margin: 0 0 12px; }
 
 .form-inline { display: flex; gap: 10px; align-items: flex-end; margin-top: 14px; flex-wrap: wrap; }
 .form-inline .field { margin-bottom: 0; min-width: 160px; flex: 1; }
@@ -179,3 +108,4 @@ td.mono { font-family: var(--font-mono); font-size: 12.5px; color: var(--text-se
   background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
   color: var(--text-primary); font-size: 12.5px; padding: 7px 10px; font-family: inherit;
 }
+

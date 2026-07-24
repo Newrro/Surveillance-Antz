@@ -14,7 +14,13 @@ function openPersonLog(userId) {
   // count); the day grid, chart and records fill in once history arrives.
   if (p && !p.historyLoaded && typeof Brain !== 'undefined' && Brain.loadPersonHistory) {
     Brain.loadPersonHistory(userId, CAM_NAME_BY_ID).then(() => {
-      if (plogPersonId === userId) openPersonLog(userId);
+      // Only re-render if this person's modal is STILL open. Without the open
+      // check, closing the modal before the async history load returned would
+      // pop it right back open ("keeps opening again and again").
+      if (plogPersonId === userId &&
+          document.getElementById('plog-modal').classList.contains('open')) {
+        openPersonLog(userId);
+      }
     });
   }
   setAvatar(document.getElementById('plog-avatar'), p);
@@ -22,12 +28,17 @@ function openPersonLog(userId) {
   document.getElementById('plog-id').textContent = p.employeeId ? `${p.userId} · ${p.employeeId}` : p.userId;
   document.getElementById('plog-badge').innerHTML = `<span class="badge badge-${p.category}">${p.category}</span>`;
 
-  // Rename only Visitors/Employees (not Unknowns); "Make employee" only for Visitors.
+  // Rename is available for ANY identified person, including Unknowns (naming an
+  // Unknown recognises them → promotes to Visitor). Only records with a real
+  // identity_id can be renamed server-side.
   const renameBtn = document.getElementById('plog-rename');
-  if (renameBtn) renameBtn.style.display = (p.category === 'Unknown') ? 'none' : '';
+  if (renameBtn) renameBtn.style.display = (p.identityId != null) ? '' : 'none';
   // "Edit profile" (photo / name / employee-id / department) — Employees only.
   const editBtn = document.getElementById('plog-editprofile');
   if (editBtn) editBtn.style.display = (p.category === 'Employee') ? '' : 'none';
+  // "Erase" — delete this person and ALL their data. Any real identity.
+  const eraseBtn = document.getElementById('plog-erase');
+  if (eraseBtn) eraseBtn.style.display = (p.identityId != null) ? '' : 'none';
   renderPlogPromote(p);   // inline "Make employee" control (Visitors only)
 
   // Details of the person
@@ -175,7 +186,7 @@ function renderPersonLog() {
     .filter(h => !loc || h.location === loc)
     .filter(h => fromMin === null || hhmmToMin(h.time) >= fromMin)
     .filter(h => toMin   === null || hhmmToMin(h.time) <= toMin)
-    .sort((a, b) => a.time.localeCompare(b.time));
+    .sort((a, b) => b.time.localeCompare(a.time)); // most recent first
 
   const body = document.getElementById('plog-body');
   body.innerHTML = rows.length ? rows.map(h => `
@@ -197,22 +208,31 @@ function renderPersonLog() {
     : `<tr><td colspan="3" style="color:var(--text-muted)">No sightings on this day for these filters.</td></tr>`;
 }
 
-/* Delete one sighting (detection_event) from a person's log, then refresh. */
+/* Delete ONE sighting (a single detection_event) from a person's log — that one
+   piece of evidence only; the person and every OTHER sighting are kept. */
 async function deleteSightingRow(eventId) {
-  if (!confirm('Delete this sighting from the log? (the person is kept)')) return;
+  if (!confirm('Delete this one sighting from the log? The person and their other sightings are kept.')) return;
+  const who = plogPersonId;
   try {
     if (!BRAIN_ON) throw new Error('Brain not connected');
     await Brain.deleteSighting({ user: AUTH.username, pass: AUTH.password }, [eventId]);
-    await connectBrain();                       // re-hydrate so the row is gone
-    const p = PEOPLE[plogPersonId];
-    if (p) {
+    // Reload THIS person's FULL history so only the deleted row disappears. A blanket
+    // connectBrain() re-hydrate would collapse them back to the 1-row roster summary,
+    // which looked like the whole log had been wiped.
+    const p = PEOPLE[who];
+    if (p && p.identityId != null) {
+      p.historyLoaded = false;
+      await Brain.loadPersonHistory(who, CAM_NAME_BY_ID);
+    }
+    const p2 = PEOPLE[who];
+    if (p2 && p2.history && p2.history.length) {
       renderPlogSide();
-      renderPlogChart(p, isoDate(plogYear, plogMonth, plogDay));
+      renderPlogChart(p2, isoDate(plogYear, plogMonth, plogDay));
       renderPersonLog();
     } else {
-      closePersonLog();                         // that was their last sighting
+      closePersonLog();                         // that was their only/last sighting
     }
-    renderReport();
+    renderReport();                             // keep the Report list in step
     if (currentView === 'log') renderLog();
   } catch (e) {
     alert('Delete sighting failed: ' + e.message);
@@ -225,7 +245,10 @@ function clearPersonLogFilters() {
   document.getElementById('plog-loc').value = '';
   renderPersonLog();
 }
-function closePersonLog() { document.getElementById('plog-modal').classList.remove('open'); }
+function closePersonLog() {
+  plogPersonId = null;   // stop any in-flight history load from re-opening the modal
+  document.getElementById('plog-modal').classList.remove('open');
+}
 function closePersonLogIfBackdrop(e) { if (e.target.id === 'plog-modal') closePersonLog(); }
 
 /* Load <url> into <imgEl> only if it actually exists; otherwise hide <figEl>.

@@ -202,6 +202,7 @@
                 <div class="log-sheet-day" id="log-sheet-day">—</div>
               </div>
               <div class="log-cat-toggle">
+                <button class="log-cat-btn" id="log-cat-all" onclick="setLogCat('')"><i class="ti ti-list"></i> All</button>
                 <button class="log-cat-btn" id="log-cat-Employee" onclick="setLogCat('Employee')"><i class="ti ti-id-badge-2"></i> Employees</button>
                 <button class="log-cat-btn" id="log-cat-Visitor" onclick="setLogCat('Visitor')"><i class="ti ti-user"></i> Visitors</button>
                 <button class="log-cat-btn" id="log-cat-Unknown" onclick="setLogCat('Unknown')"><i class="ti ti-arrow-down"></i> Unknowns</button>
@@ -221,9 +222,15 @@
         <div class="view-header">
           <div>
             <h1 class="view-title">Report</h1>
-            <p class="view-sub" id="report-sub">Grouped by category · click anyone to open their full log</p>
+            <p class="view-sub" id="report-sub">Pick a category · click anyone to open their full log</p>
           </div>
         </div>
+        <div class="log-cat-toggle report-cat-toggle">
+          <button class="log-cat-btn" id="report-cat-Employee" onclick="setReportCat('Employee')"><i class="ti ti-id-badge-2"></i> Employees</button>
+          <button class="log-cat-btn" id="report-cat-Visitor" onclick="setReportCat('Visitor')"><i class="ti ti-user"></i> Visitors</button>
+          <button class="log-cat-btn" id="report-cat-Unknown" onclick="setReportCat('Unknown')"><i class="ti ti-help-circle"></i> Unknowns</button>
+        </div>
+        <div class="az-rail" id="az-rail" aria-label="Jump to employees by first letter"></div>
         <div id="report-groups"></div>
       </section>
 
@@ -272,24 +279,20 @@
             </div>
           </div>
 
-          <div class="settings-card span-2">
+          <div class="settings-card">
             <div class="settings-card-head">
-              <div class="settings-card-icon"><i class="ti ti-git-merge"></i></div>
+              <div class="settings-card-icon"><i class="ti ti-calendar-repeat"></i></div>
               <div class="settings-card-title">
-                <h2>Unknown-case link review</h2>
-                <p class="desc">Suggested links between Unknown cases seen on the <b>same camera</b> within a
-                  short window, whose body similarity is plausible but below the automatic bar. Each suggestion
-                  shows the score, time gap and both parties' evidence — nothing is merged without your approval,
-                  and every approval is audited and undoable.</p>
+                <h2>Daily reset</h2>
+                <p class="desc">Clear all Unknowns (people not yet confirmed as Visitors). Confirmed Visitors and Employees are kept, so returning people are still recognised. Runs automatically every midnight.</p>
               </div>
             </div>
             <div class="settings-card-body">
-              <button class="btn" onclick="loadSuggestedLinks()"><i class="ti ti-refresh"></i> Load suggestions</button>
-              <div id="review-links" class="desc" style="margin-top:10px;max-height:280px;overflow:auto"></div>
+              <button class="btn" id="clear-unknowns-btn" onclick="clearUnknowns()"><i class="ti ti-eraser"></i> Clear all unknowns</button>
             </div>
           </div>
 
-          <div class="settings-card">
+          <div class="settings-card span-2">
             <div class="settings-card-head">
               <div class="settings-card-icon"><i class="ti ti-user-plus"></i></div>
               <div class="settings-card-title">
@@ -322,20 +325,24 @@
             </div>
           </div>
 
-          <div class="settings-card">
+          <div class="settings-card span-2">
             <div class="settings-card-head">
-              <div class="settings-card-icon"><i class="ti ti-calendar-repeat"></i></div>
+              <div class="settings-card-icon"><i class="ti ti-git-merge"></i></div>
               <div class="settings-card-title">
-                <h2>Daily reset</h2>
-                <p class="desc">Clear all Unknowns (people not yet confirmed as Visitors). Confirmed Visitors and Employees are kept, so returning people are still recognised. Runs automatically every midnight.</p>
+                <h2>Unknown-case link review</h2>
+                <p class="desc">Suggested links between Unknown cases seen on the <b>same camera</b> within a
+                  short window, whose body similarity is plausible but below the automatic bar. Each suggestion
+                  shows the score, time gap and both parties' evidence — nothing is merged without your approval,
+                  and every approval is audited and undoable.</p>
               </div>
             </div>
             <div class="settings-card-body">
-              <button class="btn" id="clear-unknowns-btn" onclick="clearUnknowns()"><i class="ti ti-eraser"></i> Clear all unknowns</button>
+              <button class="btn" onclick="loadSuggestedLinks()"><i class="ti ti-refresh"></i> Load suggestions</button>
+              <div id="review-links" class="desc" style="margin-top:10px;max-height:280px;overflow:auto"></div>
             </div>
           </div>
 
-          <div class="settings-card danger">
+          <div class="settings-card danger span-2">
             <div class="settings-card-head">
               <div class="settings-card-icon"><i class="ti ti-alert-triangle"></i></div>
               <div class="settings-card-title">
@@ -433,6 +440,7 @@
         <div class="plog-right-head">
           <div class="plog-sel-date" id="plog-sel-date">—</div>
           <div class="plog-sel-day" id="plog-sel-day">—</div>
+          <button class="btn plog-showall" id="plog-showall" onclick="showAllPlogDays()" style="display:none;margin-left:auto"><i class="ti ti-calendar-off"></i> Show all days</button>
         </div>
         <div class="plog-filters">
           <div class="filter-field">
@@ -451,7 +459,7 @@
         </div>
         <div class="table-wrap plog-log-table">
           <table>
-            <thead><tr><th>Time</th><th>Location</th><th>Photo</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Date / time</th><th>Location</th><th>Photo</th><th>Actions</th></tr></thead>
             <tbody id="plog-body"></tbody>
           </table>
         </div>
@@ -512,6 +520,19 @@
       <button class="btn" onclick="closeEnroll()"><i class="ti ti-x"></i> Cancel</button>
       <button class="btn btn-primary" id="enroll-submit" onclick="doEnrollEmployee()"><i class="ti ti-user-plus"></i> Add employee</button>
     </div>
+  </div>
+</div>
+
+<!-- ===================== Merge into employee (searchable) ===================== -->
+<div class="modal-backdrop" id="mergeinto-modal" onclick="closeMergeIntoIfBackdrop(event)">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Merge into employee</h3>
+      <button class="sidebar-close" onclick="closeMergeInto()"><i class="ti ti-x"></i></button>
+    </div>
+    <p class="desc" id="mergeinto-sub">Search an employee; this person's sightings move under them.</p>
+    <div class="field"><input type="text" id="mergeinto-search" placeholder="Search employee name or ID…" oninput="renderMergeIntoList(this.value)" autocomplete="off"></div>
+    <div id="mergeinto-list" class="mergeinto-list"></div>
   </div>
 </div>
 

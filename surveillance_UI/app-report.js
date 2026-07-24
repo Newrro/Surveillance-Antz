@@ -2,7 +2,6 @@
    Plain <script> (globals shared across files); loaded in order by index.html. */
 
 let reportSearch = '';
-const REPORT_GROUPS = ['Employee', 'Visitor', 'Unknown'];
 
 /* Most recent sighting across a person's whole history (for the "Last seen" line). */
 function lastSeen(p) {
@@ -10,52 +9,82 @@ function lastSeen(p) {
   return p.history.reduce((a, b) => (a.date + a.time) >= (b.date + b.time) ? a : b);
 }
 
-let unknownOpen = false;   // the Unknown group is a dropdown — collapsed by default
-function toggleUnknownGroup() { unknownOpen = !unknownOpen; renderReport(); }
+/* The Report shows ONE category at a time, chosen by the toggle below the title
+   (Employees | Visitors | Unknowns), just like the Log's category tabs.
+   Employees is the default. */
+let reportCat = 'Employee';
+function setReportCat(cat) {
+  reportCat = cat;
+  syncReportCatButtons();
+  renderReport();
+}
+function syncReportCatButtons() {
+  ['Employee', 'Visitor', 'Unknown'].forEach(c => {
+    const btn = document.getElementById('report-cat-' + c);
+    if (btn) btn.classList.toggle('active', c === reportCat);
+  });
+}
 
 function renderReport() {
+  syncReportCatButtons();
   const q = reportSearch.toLowerCase();
+  const cat = reportCat;
   const container = document.getElementById('report-groups');
-  container.innerHTML = REPORT_GROUPS.map(cat => {
-    let people = peopleByCategory(cat);
-    if (q) {
-      people = people.filter(p =>
-        (personName(p) + ' ' + p.userId + ' ' + (p.employeeId || '') + ' ' + p.category).toLowerCase().includes(q));
-    }
-    if (!people.length) return '';
 
-    const cards = `<div class="people-grid">${people.map(p => personCard(p)).join('')}</div>`;
+  let people = peopleByCategory(cat);
+  if (q) {
+    people = people.filter(p =>
+      (personName(p) + ' ' + p.userId + ' ' + (p.employeeId || '') + ' ' + p.category).toLowerCase().includes(q));
+  }
 
-    // Unknowns are hidden behind a dropdown so they don't flood the page — a search
-    // auto-expands them so matches are never hidden.
-    if (cat === 'Unknown') {
-      const open = unknownOpen || !!q;
-      return `
-        <div class="report-section">
-          <div class="report-head">
-            <span class="badge badge-${cat}">${cat}</span>
-            <span class="report-count">${people.length}</span>
-            <button class="report-caret-btn ${open ? 'open' : ''}" onclick="toggleUnknownGroup()"
-                    title="${open ? 'Hide' : 'Show'} unknown detections" aria-label="Toggle unknown detections">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
-                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M6 9l6 6 6-6"></path>
-              </svg>
-            </button>
-          </div>
-          ${open ? cards : ''}
-        </div>`;
-    }
+  // Order: Employees alphabetically by name; Visitors & Unknowns by their id
+  // number ascending (VIS-2026-0007 before -0042, etc.).
+  const numId = p => {
+    const m = String(p.displayLabel || p.userId || '').match(/(\d+)\s*$/);
+    return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
+  };
+  people = people.slice().sort(cat === 'Employee'
+    ? (a, b) => personName(a).localeCompare(personName(b), undefined, { sensitivity: 'base' })
+    : (a, b) => (numId(a) - numId(b)) || String(a.userId).localeCompare(String(b.userId)));
 
-    return `
-      <div class="report-section">
-        <div class="report-head">
-          <span class="badge badge-${cat}">${cat}</span>
-          <span class="report-count">${people.length}</span>
-        </div>
-        ${cards}
-      </div>`;
-  }).join('') || `<p style="color:var(--text-muted)">No people match this search.</p>`;
+  if (!people.length) {
+    const kind = cat.toLowerCase() + 's';
+    container.innerHTML = `<p style="color:var(--text-muted)">${q ? `No ${kind} match this search.` : `No ${kind} yet.`}</p>`;
+    renderAzIndex();
+    return;
+  }
+  container.innerHTML = `<div class="people-grid">${people.map(p => personCard(p)).join('')}</div>`;
+  renderAzIndex();
+}
+
+/* ---------- A–Z quick index (left rail) ----------
+   A vertical A–Z scrubber; clicking a letter scrolls to the first EMPLOYEE whose
+   name starts with it (employees are the alphabetised group). Letters with no
+   employee are dimmed. */
+function renderAzIndex() {
+  const rail = document.getElementById('az-rail');
+  if (!rail) return;
+  // The rail jumps to employees by first letter, so it's only useful on the
+  // Employees tab — hide it for Visitors / Unknowns.
+  if (reportCat !== 'Employee') { rail.style.display = 'none'; return; }
+  const present = new Set(
+    Object.values(PEOPLE)
+      .filter(p => p.category === 'Employee')
+      .map(p => (personName(p).trim()[0] || '').toUpperCase())
+      .filter(Boolean));
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+  rail.style.display = present.size ? '' : 'none';
+  rail.innerHTML = letters.map(ch => {
+    const on = present.has(ch);
+    return `<button class="az-letter${on ? '' : ' az-off'}" ${on ? '' : 'disabled'}
+              onclick="jumpToLetter('${ch}')">${ch}</button>`;
+  }).join('');
+}
+
+function jumpToLetter(ch) {
+  const card = document.querySelector(
+    `#report-groups .person-card[data-cat="Employee"][data-initial="${ch}"]`);
+  if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 function personCard(p) {
@@ -68,9 +97,12 @@ function personCard(p) {
   const cls = 'person-card'
     + (mergeMode ? ' selectable' : '')
     + (selected ? ' selected' : '');
-  // Keep the REAL snapshot avatar (photoCss) with the initials as fallback text.
+  const initial = (personName(p).trim()[0] || '#').toUpperCase();
+  // Avatar shows the photo; initials are only a fallback when there's no photo
+  // (so employees, who always have an enrolled photo, never show letters).
+  const avatarText = p.photo ? '' : p.initials;
   return `
-    <div class="${cls}" onclick="onPersonCardClick(event, '${p.userId}')">
+    <div class="${cls}" data-cat="${p.category}" data-initial="${initial}" onclick="onPersonCardClick(event, '${p.userId}')">
       <span class="person-card-check"><i class="ti ti-check"></i></span>
       <button class="person-card-merge" title="Merge duplicates"
               onclick="event.stopPropagation(); enterMergeMode('${p.userId}')">
@@ -94,7 +126,7 @@ function personCard(p) {
         </svg>
       </button>
       <div class="person-card-head">
-        <div class="avatar person-card-photo" style="${photoCss(p)}">${p.initials}</div>
+        <div class="avatar person-card-photo" style="${photoCss(p)}">${avatarText}</div>
         <div>
           <div class="name">${personName(p)}</div>
           <div class="sub">${sub}</div>
@@ -299,7 +331,7 @@ function renderDepartments() {
     return;
   }
   list.innerHTML = DEPARTMENTS.map((d, i) => `
-    <span class="chip dept-chip"><button class="chip-x" onclick="removeDepartment(${i})" title="Delete department"><i class="ti ti-x"></i></button><span class="dept-name">${d}</span></span>
+    <span class="chip dept-chip"><span class="dept-name">${d}</span><button class="chip-x" onclick="removeDepartment(${i})" title="Delete department" aria-label="Delete department">✕</button></span>
   `).join('');
 }
 function addDepartment() {

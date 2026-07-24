@@ -218,6 +218,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        # The HTML/JS/CSS change often (live edits) and are served over a mobile
+        # reverse-proxy that otherwise caches them hard — which left phones running
+        # STALE code (blank page after a fix). Force revalidation so every load
+        # picks up the current files.
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(body)
 

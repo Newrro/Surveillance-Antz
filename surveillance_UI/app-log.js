@@ -13,6 +13,8 @@ function syncLogCatButtons() {
     const btn = document.getElementById('log-cat-' + c);
     if (btn) btn.classList.toggle('active', c === cur);
   });
+  const allBtn = document.getElementById('log-cat-all');   // '' (cleared) === All
+  if (allBtn) allBtn.classList.toggle('active', cur === '');
 }
 
 const pad2 = n => String(n).padStart(2, '0');
@@ -119,7 +121,7 @@ function renderLogSheet() {
       const p = PEOPLE[e.personId];
       return (personName(p) + ' ' + p.userId + ' ' + (p.employeeId || '')).toLowerCase().includes(person);
     })
-    .sort((a, b) => a.time.localeCompare(b.time)); // earliest first
+    .sort((a, b) => b.time.localeCompare(a.time)); // most recent first
 
   const body = document.getElementById('log-body');
   body.innerHTML = rows.length ? rows.map(e => {

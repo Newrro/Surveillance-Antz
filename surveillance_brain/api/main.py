@@ -12,6 +12,7 @@ Wires up:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -22,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import config
 from api.routers import (
-    admin, attendance, employees, events, identities, live, logs, person, search,
+    admin, attendance, employees, events, identities, live, logs, person, search, stats,
 )
 from api.schemas import HealthResponse
 from db import vector_store
@@ -127,6 +128,7 @@ app.include_router(identities.router)
 app.include_router(logs.router)
 app.include_router(admin.router)
 app.include_router(attendance.router)
+app.include_router(stats.router)
 
 
 @app.get(
@@ -137,23 +139,30 @@ app.include_router(attendance.router)
     summary="Liveness probe — checks DB + Redis + Qdrant connectivity",
 )
 async def health() -> HealthResponse:
+    # Each dependency check is bounded by a short timeout. A dependency that HANGS
+    # (e.g. Qdrant's port unreachable, so the client blocks on connect) must not
+    # make /health itself hang — that turned a liveness probe into a 25s+ stall and
+    # left clients that gate on /health unable to connect at all.
+    async def _probe(coro):
+        await asyncio.wait_for(coro, timeout=2.5)
+
     db_status = "ok"
     redis_status = "ok"
     qdrant_status = "ok"
 
     try:
-        await init_db()
+        await _probe(init_db())
     except Exception as e:  # noqa: BLE001
         db_status = f"error: {e}"
 
     try:
         client = await presence_cache.get_client()
-        await client.ping()
+        await _probe(client.ping())
     except Exception as e:  # noqa: BLE001
         redis_status = f"error: {e}"
 
     try:
-        await vector_store.ping()
+        await _probe(vector_store.ping())
     except Exception as e:  # noqa: BLE001
         qdrant_status = f"error: {e}"
 

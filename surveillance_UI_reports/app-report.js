@@ -3,50 +3,56 @@
    Plain <script> (globals shared across files); loaded in order by index.html. */
 
 let reportSearch = '';
-const REPORT_GROUPS = ['Employee', 'Visitor', 'Unknown'];
-
 /* Most recent sighting across a person's whole history (for the "Last seen" line). */
 function lastSeen(p) {
   if (!p.history || !p.history.length) return null;
   return p.history.reduce((a, b) => (a.date + a.time) >= (b.date + b.time) ? a : b);
 }
 
-// Every category is a collapsible dropdown so you can close one and open another
-// (great on a phone). Employees/Visitors start open, Unknowns collapsed so they
-// don't flood the page; a search force-expands all so matches are never hidden.
-const groupOpen = { Employee: true, Visitor: true, Unknown: false };
-function toggleGroup(cat) { groupOpen[cat] = !groupOpen[cat]; renderReport(); }
-function toggleUnknownGroup() { toggleGroup('Unknown'); }   // back-compat alias
+/* The Report shows ONE category at a time, chosen by the toggle below the search
+   (Employees | Visitors | Unknowns — no "All"), just like the Log's category tabs.
+   Employees is the default. */
+let reportCat = 'Employee';
+function setReportCat(cat) {
+  reportCat = cat;
+  syncReportCatButtons();
+  renderReport();
+}
+function syncReportCatButtons() {
+  ['Employee', 'Visitor', 'Unknown'].forEach(c => {
+    const btn = document.getElementById('report-cat-' + c);
+    if (btn) btn.classList.toggle('active', c === reportCat);
+  });
+}
 
 function renderReport() {
+  syncReportCatButtons();
   const q = reportSearch.toLowerCase();
+  const cat = reportCat;
   const container = document.getElementById('report-groups');
-  container.innerHTML = REPORT_GROUPS.map(cat => {
-    let people = peopleByCategory(cat);
-    if (q) {
-      people = people.filter(p =>
-        (personName(p) + ' ' + p.userId + ' ' + (p.employeeId || '') + ' ' + p.category).toLowerCase().includes(q));
-    }
-    if (!people.length) return '';
 
-    const cards = `<div class="people-grid">${people.map(p => personCard(p)).join('')}</div>`;
-    const open = groupOpen[cat] || !!q;
-    // The whole header is a big tap target; the caret also toggles (stop the
-    // bubble so it doesn't double-fire).
-    return `
-      <div class="report-section">
-        <div class="report-head" onclick="toggleGroup('${cat}')" role="button" aria-expanded="${open}">
-          <span class="badge badge-${cat}">${cat}</span>
-          <span class="report-count">${people.length}</span>
-          <button class="report-caret-btn ${open ? 'open' : ''}"
-                  onclick="event.stopPropagation();toggleGroup('${cat}')"
-                  title="${open ? 'Hide' : 'Show'} ${cat}" aria-label="Toggle ${cat}">
-            <i class="ti ti-chevron-down"></i>
-          </button>
-        </div>
-        ${open ? cards : ''}
-      </div>`;
-  }).join('') || `<p style="color:var(--text-muted)">No people match this search.</p>`;
+  let people = peopleByCategory(cat);
+  if (q) {
+    people = people.filter(p =>
+      (personName(p) + ' ' + p.userId + ' ' + (p.employeeId || '') + ' ' + p.category).toLowerCase().includes(q));
+  }
+
+  // Employees alphabetically by name; Visitors & Unknowns by their id number
+  // ascending (VIS-2026-0007 before -0042, etc.).
+  const numId = p => {
+    const m = String(p.displayLabel || p.userId || '').match(/(\d+)\s*$/);
+    return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
+  };
+  people = people.slice().sort(cat === 'Employee'
+    ? (a, b) => personName(a).localeCompare(personName(b), undefined, { sensitivity: 'base' })
+    : (a, b) => (numId(a) - numId(b)) || String(a.userId).localeCompare(String(b.userId)));
+
+  if (!people.length) {
+    const kind = cat.toLowerCase() + 's';
+    container.innerHTML = `<p style="color:var(--text-muted)">${q ? `No ${kind} match this search.` : `No ${kind} yet.`}</p>`;
+    return;
+  }
+  container.innerHTML = `<div class="people-grid">${people.map(p => personCard(p)).join('')}</div>`;
 }
 
 function personCard(p) {
@@ -63,8 +69,8 @@ function personCard(p) {
   return `
     <div class="${cls}" onclick="onPersonCardClick(event, '${p.userId}')">
       <span class="person-card-check"><i class="ti ti-check"></i></span>
-      <button class="person-card-merge" title="Merge duplicates"
-              onclick="event.stopPropagation(); enterMergeMode('${p.userId}')">
+      <button class="person-card-merge" title="Merge this person into an employee"
+              onclick="event.stopPropagation(); openMergeInto('${p.userId}')">
         <i class="ti ti-git-merge"></i>
       </button>
       <button class="person-card-del" title="Delete record"
@@ -165,6 +171,76 @@ async function mergePeople() {
   } catch (e) {
     alert('Merge failed: ' + e.message);
     updateMergeBar();
+  }
+}
+
+/* ---------- Merge INTO an employee (searchable picker) ----------
+   A card's merge button opens a searchable list of ALL employees; picking one
+   folds THIS person (and their whole movement log) into that employee's identity
+   server-side. This is the fragmentation-cleanup path: "this stray visitor id is
+   really employee X → merge it into X". */
+let mergeIntoSource = null;   // userId of the record being merged away
+
+function openMergeInto(userId) {
+  const p = PEOPLE[userId];
+  if (!p) return;
+  if (p.identityId == null) { alert('This record has no identity to merge.'); return; }
+  mergeIntoSource = userId;
+  document.getElementById('mergeinto-title').textContent = `Merge ${personName(p)} into…`;
+  const search = document.getElementById('mergeinto-search');
+  if (search) search.value = '';
+  renderMergeIntoList('');
+  document.getElementById('mergeinto-modal').classList.add('open');
+  if (search) search.focus();
+}
+
+/* Render the employee list filtered by the search box (name / employee id / id). */
+function renderMergeIntoList(query) {
+  const q = (query || '').toLowerCase();
+  const src = PEOPLE[mergeIntoSource];
+  let emps = peopleByCategory('Employee')
+    .filter(e => e.identityId != null && (!src || e.userId !== src.userId));
+  if (q) emps = emps.filter(e =>
+    (personName(e) + ' ' + (e.employeeId || '') + ' ' + e.userId).toLowerCase().includes(q));
+  emps.sort((a, b) => personName(a).localeCompare(personName(b), undefined, { sensitivity: 'base' }));
+  const list = document.getElementById('mergeinto-list');
+  if (!list) return;
+  list.innerHTML = emps.length ? emps.map(e => `
+    <button class="mergeinto-item" type="button" onclick="doMergeInto('${e.userId}')">
+      <span class="avatar mergeinto-photo" style="${photoCss(e)}">${e.initials}</span>
+      <span class="mergeinto-who">
+        <span class="mergeinto-name">${personName(e)}</span>
+        <span class="mergeinto-sub">${e.employeeId || e.userId}</span>
+      </span>
+      <i class="ti ti-git-merge"></i>
+    </button>`).join('')
+    : `<p style="color:var(--text-muted);padding:12px">No employees match.</p>`;
+}
+
+function closeMergeInto() {
+  document.getElementById('mergeinto-modal').classList.remove('open');
+  mergeIntoSource = null;
+}
+function closeMergeIntoIfBackdrop(e) { if (e.target.id === 'mergeinto-modal') closeMergeInto(); }
+
+/* Fold the source record into the chosen employee (employee is the primary that
+   keeps its id, label, name and photo). */
+async function doMergeInto(targetUserId) {
+  const src = PEOPLE[mergeIntoSource];
+  const tgt = PEOPLE[targetUserId];
+  if (!src || !tgt || src.identityId == null || tgt.identityId == null) return;
+  if (!confirm(`Merge ${personName(src)} (${src.userId}) into ${personName(tgt)} (${tgt.employeeId || tgt.userId})?\n${personName(src)}'s sightings fold into ${personName(tgt)} and the ${src.userId} record is removed. This can't be undone.`)) return;
+  try {
+    if (!BRAIN_ON) throw new Error('Brain not connected');
+    await Brain.mergeIdentities({ user: AUTH.username, pass: AUTH.password },
+      tgt.identityId, [src.identityId]);
+    closeMergeInto();
+    await connectBrain();
+    renderReport();
+    if (currentView === 'log') renderLog();
+    alert(`Merged into ${personName(tgt)}.`);
+  } catch (e) {
+    alert('Merge failed: ' + e.message);
   }
 }
 

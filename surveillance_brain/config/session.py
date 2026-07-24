@@ -35,3 +35,13 @@ class _SessionCronSettings(BaseModel):
     RETENTION_DAYS: int = 7
     EVENT_RETENTION_DAYS: int = 365
     MEDIA_RETENTION_DAYS: int = 30
+
+    # ---- Occupancy counts (GET /stats/occupancy) ------------------------
+    # "Visits" counts a unique identity once if seen today on ANY camera.
+    # "Currently inside" = those same people who were seen on any camera within
+    # the last OCCUPANCY_INSIDE_MINUTES (anyone not seen for that long drops off).
+    # The ENTRY/EXIT camera lists are retained for reference but are no longer
+    # used by the counts (any-camera model, see occupancy_service).
+    OCCUPANCY_ENTRY_CAMERAS: str = "GATE-INSIDE-LEFT,FRONT-GATE-INSIDE-RIGHT,TURRET"
+    OCCUPANCY_EXIT_CAMERAS: str = "GATE-OUTSIDE-LEFT,TURRET"
+    OCCUPANCY_INSIDE_MINUTES: int = 60

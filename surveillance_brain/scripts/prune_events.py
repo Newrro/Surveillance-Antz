@@ -34,8 +34,11 @@ async def prune_once() -> int:
     async with get_session() as session:
         result = await session.execute(
             text(
+                # Employees' sightings are NEVER pruned (see workers/midnight_flush.py).
                 "DELETE FROM detection_events "
-                "WHERE detected_at < NOW() - make_interval(days => :days)"
+                "WHERE detected_at < NOW() - make_interval(days => :days) "
+                "AND NOT EXISTS (SELECT 1 FROM employees e "
+                "WHERE e.identity_id = detection_events.identity_id)"
             ),
             {"days": int(config.EVENT_RETENTION_DAYS)},
         )

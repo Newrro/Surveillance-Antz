@@ -34,11 +34,24 @@ async function connectBrain() {
   if (typeof Brain === 'undefined') return;
   try {
     BRAIN_ON = await Brain.hydrate(CAM_NAME_BY_ID);
-    if (BRAIN_ON) Brain.connectLive(onLiveEvent);
+    if (BRAIN_ON) {
+      Brain.connectLive(onLiveEvent);
+      refreshOccupancy();                                   // seed the grid counts
+      if (!window._occTimer) window._occTimer = setInterval(refreshOccupancy, 15000);
+    }
   } catch (e) {
     console.warn('[Brain] connect failed, staying on mock data:', e.message);
     BRAIN_ON = false;
   }
+}
+
+/* Pull authoritative visit/inside counts from the Brain and repaint the badges.
+   Cheap; polled every 15s and after live bursts. Falls back to client counts if
+   the endpoint is unavailable (old Brain not yet restarted). */
+async function refreshOccupancy() {
+  if (typeof Brain === 'undefined' || !Brain.occupancy) return;
+  const occ = await Brain.occupancy();
+  if (occ) { OCCUPANCY = occ; if (typeof updateGridBadges === 'function') updateGridBadges(); }
 }
 
 /* A new detection arrived over WS /live — fold it into PEOPLE + DETECTIONS and

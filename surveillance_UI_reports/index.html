@@ -3,22 +3,25 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <meta name="theme-color" content="#0b1410">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Antz Surveillance — Reports &amp; Logs</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tabler-icons/2.47.0/iconfont/tabler-icons.min.css">
-<link rel="stylesheet" href="styles/base.css">
-<link rel="stylesheet" href="styles/shell.css">
-<link rel="stylesheet" href="styles/login.css">
-<link rel="stylesheet" href="styles/grid.css">
-<link rel="stylesheet" href="styles/camera.css">
-<link rel="stylesheet" href="styles/panels.css">
-<link rel="stylesheet" href="styles/photo.css">
-<link rel="stylesheet" href="styles/report.css">
-<link rel="stylesheet" href="styles/person-log.css">
-<link rel="stylesheet" href="styles/responsive.css">
+<link rel="stylesheet" href="styles/base.css?v=3">
+<link rel="stylesheet" href="styles/shell.css?v=3">
+<link rel="stylesheet" href="styles/login.css?v=3">
+<link rel="stylesheet" href="styles/grid.css?v=3">
+<link rel="stylesheet" href="styles/camera.css?v=3">
+<link rel="stylesheet" href="styles/panels.css?v=3">
+<link rel="stylesheet" href="styles/photo.css?v=3">
+<link rel="stylesheet" href="styles/report.css?v=3">
+<link rel="stylesheet" href="styles/person-log.css?v=3">
+<link rel="stylesheet" href="styles/responsive.css?v=3">
 </head>
 <body>
 
@@ -154,8 +157,13 @@
         <div class="view-header">
           <div>
             <h1 class="view-title">Report</h1>
-            <p class="view-sub" id="report-sub">Grouped by category · click anyone to open their full log</p>
+            <p class="view-sub" id="report-sub">Pick a category · click anyone to open their full log</p>
           </div>
+        </div>
+        <div class="log-cat-toggle report-cat-toggle">
+          <button class="log-cat-btn" id="report-cat-Employee" onclick="setReportCat('Employee')"><i class="ti ti-id-badge-2"></i> Employees</button>
+          <button class="log-cat-btn" id="report-cat-Visitor" onclick="setReportCat('Visitor')"><i class="ti ti-user"></i> Visitors</button>
+          <button class="log-cat-btn" id="report-cat-Unknown" onclick="setReportCat('Unknown')"><i class="ti ti-help-circle"></i> Unknowns</button>
         </div>
         <div id="report-groups"></div>
       </section>
@@ -226,6 +234,9 @@
       </button>
       <button class="btn plog-rename" id="plog-editprofile" onclick="openEditProfile()" title="Edit photo, name, employee ID and department" style="display:none">
         <i class="ti ti-id-badge-2"></i> Edit profile
+      </button>
+      <button class="btn btn-danger plog-erase" id="plog-erase" onclick="eraseCurrentPerson()" title="Delete this person and all their data" style="display:none">
+        <i class="ti ti-trash"></i> Erase
       </button>
       <span class="plog-promote" id="plog-promote"></span>
       <button class="sidebar-close" onclick="closePersonLog()"><i class="ti ti-x"></i></button>
@@ -364,13 +375,28 @@
   <button class="btn" id="merge-cancel-btn" onclick="exitMergeMode()"><i class="ti ti-x"></i> Cancel</button>
 </div>
 
-<script src="data.js"></script>
-<script src="api.js"></script>
-<script src="app-core.js"></script>
-<script src="app-person.js"></script>
-<script src="app-admin.js"></script>
-<script src="app-log.js"></script>
-<script src="app-report.js"></script>
-<script src="app-boot.js"></script>
+<!-- ===================== Merge-into-employee picker (searchable) ===================== -->
+<div class="modal-backdrop" id="mergeinto-modal" onclick="closeMergeIntoIfBackdrop(event)">
+  <div class="modal modal-mergeinto">
+    <div class="modal-head">
+      <div class="name" id="mergeinto-title">Merge into…</div>
+      <button class="sidebar-close" onclick="closeMergeInto()"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="mergeinto-body">
+      <input type="text" id="mergeinto-search" class="mergeinto-search" placeholder="Search employees by name or ID…"
+             oninput="renderMergeIntoList(this.value)" autocomplete="off">
+      <div class="mergeinto-list" id="mergeinto-list"></div>
+    </div>
+  </div>
+</div>
+
+<script src="data.js?v=3"></script>
+<script src="api.js?v=3"></script>
+<script src="app-core.js?v=3"></script>
+<script src="app-person.js?v=3"></script>
+<script src="app-admin.js?v=3"></script>
+<script src="app-log.js?v=3"></script>
+<script src="app-report.js?v=3"></script>
+<script src="app-boot.js?v=3"></script>
 </body>
 </html>

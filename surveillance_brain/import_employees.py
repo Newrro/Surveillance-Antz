@@ -227,6 +227,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Bulk-import employees (Excel + embedded/foldered photos) with face embeddings.")
     ap.add_argument("--xlsx", default=None, help="path to the .xlsx roster")
     ap.add_argument("--folder", default=None, help="folder holding the .xlsx (and any filename photos)")
+    ap.add_argument("--only", default=None,
+                    help="import ONLY rows whose employee code equals, or whose name contains, "
+                         "this value (case-insensitive) — e.g. --only G338 or --only 'Carol Rebello'")
     ap.add_argument("--apply", action="store_true", help="actually import (default: dry-run preview)")
     args = ap.parse_args()
 
@@ -245,6 +248,12 @@ def main() -> None:
         raise SystemExit(f"xlsx not found: {xlsx}")
 
     rows = read_rows(xlsx, folder)
+    if args.only:
+        q = args.only.strip().lower()
+        rows = [r for r in rows if r["code"].lower() == q or q in r["name"].lower()]
+        if not rows:
+            raise SystemExit(f"--only {args.only!r} matched no rows in the roster.")
+        print(f"--only {args.only!r}: {len(rows)} matching row(s).\n")
     ready = [r for r in rows if not r["errors"]]
     embedded_total = sum(len(r["embedded"]) for r in rows)
     print(f"Roster : {xlsx}")

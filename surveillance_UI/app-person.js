@@ -35,24 +35,43 @@ let plogPersonId = null;
 let plogYear, plogMonth, plogDay;   // selected day inside the modal (month 0-indexed)
 let plogRows = [];                  // the currently-shown sighting rows (index → evidence)
 let photoRowIndex = -1;             // which plogRows entry the evidence popup is showing
+let plogAllDays = true;             // true = show entire history; false = a single selected day
 
 function openPersonLog(userId) {
   plogPersonId = userId;
   const p = PEOPLE[userId];
+  if (!p) return;
+  // First open: pull the person's FULL history (the hydrate only has a recent
+  // window), then re-render so ALL their days are available — this is what keeps
+  // employees' older data visible on the front end.
+  if (p.identityId != null && !p.historyLoaded && typeof Brain !== 'undefined' && Brain.loadPersonHistory) {
+    Brain.loadPersonHistory(userId, CAM_NAME_BY_ID).then(() => {
+      // Only re-render if this person's modal is STILL open. Without the open
+      // check, closing the modal before the async history load returned would
+      // pop it right back open ("keeps opening again and again").
+      if (plogPersonId === userId &&
+          document.getElementById('plog-modal').classList.contains('open')) {
+        openPersonLog(userId);
+      }
+    });
+  }
+  plogAllDays = true;   // default: show ALL logs until the user picks a specific day
   setAvatar(document.getElementById('plog-avatar'), p);
   document.getElementById('plog-name').textContent = personName(p);
   document.getElementById('plog-id').textContent = p.employeeId ? `${p.userId} · ${p.employeeId}` : p.userId;
   document.getElementById('plog-badge').innerHTML = `<span class="badge badge-${p.category}">${p.category}</span>`;
 
-  // Rename only Visitors/Employees (not Unknowns); "Make employee" only for Visitors.
+  // Rename shown for Visitors only. Employees use Edit profile (which covers
+  // renaming), so Rename is hidden for them; Unknowns can't be renamed.
   const renameBtn = document.getElementById('plog-rename');
-  if (renameBtn) renameBtn.style.display = (p.category === 'Unknown') ? 'none' : '';
+  if (renameBtn) renameBtn.style.display = (p.category === 'Visitor') ? '' : 'none';
   // "Edit profile" (photo / name / employee-id / department) — Employees only.
   const editBtn = document.getElementById('plog-editprofile');
   if (editBtn) editBtn.style.display = (p.category === 'Employee') ? '' : 'none';
   renderPlogPromote(p);   // inline "Make employee" control (Visitors only)
 
-  // Default the selected day to the person's most recent sighting (else today).
+  // Selected day (for the month tiles/chart context) defaults to the most recent
+  // sighting — but the row list shows ALL days until a day tile is clicked.
   const dates = p.history.map(h => h.date).sort();
   const latest = dates.length ? dates[dates.length - 1] : TODAY;
   const [ly, lm, ld] = latest.split('-').map(Number);
@@ -86,6 +105,14 @@ function onPlogMonthYear() {
 
 function selectPlogDay(d) {
   plogDay = d;
+  plogAllDays = false;         // clicking a day narrows the list to that day
+  renderPlogSide();
+  renderPersonLog();
+}
+
+/* Back to the full history (all days), newest first. */
+function showAllPlogDays() {
+  plogAllDays = true;
   renderPlogSide();
   renderPersonLog();
 }
@@ -101,7 +128,9 @@ function renderPlogDetails(p) {
   }
   rows.push(['Category', p.category]);
   rows.push(['Gender', p.gender || '—']);
-  rows.push(['Sightings this day', String(dayCount)]);
+  rows.push(plogAllDays
+    ? ['Total sightings', String(p.history.length)]
+    : ['Sightings this day', String(dayCount)]);
   document.getElementById('plog-details').innerHTML =
     `<div class="plog-card-title">Details of the person</div>` +
     rows.map(([k, v]) => `<div class="kv"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('');
@@ -114,10 +143,14 @@ function renderPlogSide() {
 
   renderPlogDetails(p);   // details reflect the selected day's sighting count
 
-  // Selected-day heading (shown on the right).
+  // Selected-day heading (shown on the right). In all-days mode the list shows the
+  // whole history; a "Show all days" button appears once a specific day is picked.
   const dateStr = isoDate(plogYear, plogMonth, plogDay);
-  document.getElementById('plog-sel-date').textContent = dateStr;
-  document.getElementById('plog-sel-day').textContent = WEEKDAYS[new Date(plogYear, plogMonth, plogDay).getDay()];
+  document.getElementById('plog-sel-date').textContent = plogAllDays ? 'All days' : dateStr;
+  document.getElementById('plog-sel-day').textContent =
+    plogAllDays ? `${p.history.length} sighting(s)` : WEEKDAYS[new Date(plogYear, plogMonth, plogDay).getDay()];
+  const showAllBtn = document.getElementById('plog-showall');
+  if (showAllBtn) showAllBtn.style.display = plogAllDays ? 'none' : '';
 
   // Day tiles for the selected month; days with sightings are marked.
   const daysInMonth = new Date(plogYear, plogMonth + 1, 0).getDate();
@@ -197,11 +230,12 @@ function renderPersonLog() {
   const loc     = document.getElementById('plog-loc').value;
 
   plogRows = p.history
-    .filter(h => h.date === dateStr)
+    .filter(h => plogAllDays || h.date === dateStr)     // ALL days unless one is picked
     .filter(h => !loc || h.location === loc)
     .filter(h => fromMin === null || hhmmToMin(h.time) >= fromMin)
     .filter(h => toMin   === null || hhmmToMin(h.time) <= toMin)
-    .sort((a, b) => a.time.localeCompare(b.time));
+    // Most recent first (by date+time when showing all days, else by time).
+    .sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
 
   const body = document.getElementById('plog-body');
   body.innerHTML = plogRows.length ? plogRows.map((h, i) => {
@@ -210,9 +244,10 @@ function renderPersonLog() {
     const faceUrl = h.face || (h.snapshot ? h.snapshot.replace(/\.jpg(\?.*)?$/i, '_face.jpg') : '');
     const thumbCss = faceUrl ? photoCssUrl(faceUrl) : photoCss(p);
     const canAct = h.event_id != null;
+    const when = plogAllDays ? `${h.date} · ${to12h(h.time)}` : to12h(h.time);
     return `
     <tr>
-      <td class="mono">${to12h(h.time)}</td>
+      <td class="mono">${when}</td>
       <td>${h.location}</td>
       <td>
         <div class="avatar plog-face-thumb" title="Click to view evidence · ${h.location}"
@@ -228,7 +263,7 @@ function renderPersonLog() {
       </td>
     </tr>`;
   }).join('')
-    : `<tr><td colspan="4" style="color:var(--text-muted)">No sightings on this day for these filters.</td></tr>`;
+    : `<tr><td colspan="4" style="color:var(--text-muted)">No sightings ${plogAllDays ? 'for these filters' : 'on this day for these filters'}.</td></tr>`;
 }
 
 /* Detach one sighting into a brand-new Unknown case (removes it from this person). */
@@ -276,7 +311,10 @@ function clearPersonLogFilters() {
   document.getElementById('plog-loc').value = '';
   renderPersonLog();
 }
-function closePersonLog() { document.getElementById('plog-modal').classList.remove('open'); }
+function closePersonLog() {
+  plogPersonId = null;   // stop any in-flight history load from re-opening the modal
+  document.getElementById('plog-modal').classList.remove('open');
+}
 function closePersonLogIfBackdrop(e) { if (e.target.id === 'plog-modal') closePersonLog(); }
 
 /* Load <url> into <imgEl> only if it actually exists; otherwise hide <figEl>.

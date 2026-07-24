@@ -29,6 +29,26 @@ async function renameCurrentPerson() {
   if (currentView === 'log') renderLog();
 }
 
+/* Erase the person currently open in the log modal: permanently delete their
+   identity AND all its data (sightings, sessions, embeddings, the row itself) via
+   the Brain, then close the modal and refresh. Wired to POST /identities/delete. */
+async function eraseCurrentPerson() {
+  const p = PEOPLE[plogPersonId];
+  if (!p) return;
+  if (p.identityId == null) { alert('This record has no identity to erase.'); return; }
+  if (!confirm(`Erase ${personName(p)} (${p.userId}) and ALL their data — every sighting, snapshot and face/body vector? This cannot be undone.`)) return;
+  try {
+    if (!BRAIN_ON) throw new Error('Brain not connected');
+    await Brain.deleteIdentities({ user: AUTH.username, pass: AUTH.password }, [p.identityId]);
+    closePersonLog();
+    await connectBrain();                 // re-hydrate so the record is gone
+    renderReport();
+    if (currentView === 'log') renderLog();
+  } catch (e) {
+    alert('Erase failed: ' + e.message);
+  }
+}
+
 /* Promote control in the person-log modal header — shown for Visitors only.
    Clicking "Make employee" swaps the button for an inline name + department form. */
 function renderPlogPromote(p) {

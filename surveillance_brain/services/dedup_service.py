@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import config
 from db.models import DetectionEvent, IdentityType, PresenceSession
 from repositories import embedding_repo, identity_repo
-from services import presence_cache
+from services import media_paths, presence_cache
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +146,8 @@ async def purge_identity(session: AsyncSession, identity_id: int) -> None:
     await embedding_repo.delete_embeddings_for_identity(identity_id)
     await session.delete(identity)
     await session.flush()
-    logger.info("Purged identity %d (events + sessions + vectors + row)", identity_id)
+    media_paths.delete_profile(identity_id)   # drop the durable avatar + lock too
+    logger.info("Purged identity %d (events + sessions + vectors + profile + row)", identity_id)
 
 
 # ---------------------------------------------------------------------------

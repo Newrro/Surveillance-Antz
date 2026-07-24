@@ -220,15 +220,23 @@ const Brain = (() => {
   /* ---------- hydrate: fill PEOPLE / DETECTIONS from the Brain ---------- */
   async function hydrate(camNameById) {
     state._camNames = camNameById || state._camNames || {};
-    if (!(await health())) return false;
+    // No hard /health gate here. /health pings Qdrant, which can HANG when
+    // Qdrant's HTTP port is unreachable — that would block hydrate before it ever
+    // reaches the roster (which reads Postgres and is fine). The roster fetch
+    // below is the real connectivity test: if it fails, hydrate returns false.
 
     // Pull ONE aggregated row per person (their latest sighting + first_seen +
     // sighting_count). Bounded by HEADCOUNT, not event volume — so the whole
     // history never has to live in the browser. Each person's full history is
     // lazy-loaded from /person/{id} the moment their card/modal is opened.
+    // The roster is one row per identity and can be large (hundreds–thousands of
+    // people) → a 1MB+ payload that the Brain takes many seconds to build, made
+    // worse over the mobile reverse-proxy. Give it a generous timeout so the
+    // fetch isn't aborted mid-flight (the 6s default left the site empty on
+    // mobile). Same for /employees.
     let roster = [];
     try {
-      const resp = await getJSON('/identities/roster');
+      const resp = await getJSON('/identities/roster', { timeout: 45000 });
       roster = (resp && resp.people) || [];
     } catch (e) {
       console.warn('[Brain] /identities/roster failed:', e.message);
@@ -239,7 +247,7 @@ const Brain = (() => {
     // show real employee details even before that person is seen on camera.
     let employees = [];
     try {
-      const er = await getJSON('/employees');
+      const er = await getJSON('/employees', { timeout: 20000 });
       employees = (er && er.employees) || [];
     } catch (_) { /* non-fatal */ }
 

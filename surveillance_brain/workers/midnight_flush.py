@@ -98,8 +98,13 @@ async def run_retention() -> None:
         async with get_session() as session:
             result = await session.execute(
                 text(
+                    # Employees' sightings are NEVER pruned — their history is kept
+                    # as-is (NOT EXISTS spares every row of any current employee and
+                    # still lets NULL-identity Unknowns be trimmed).
                     "DELETE FROM detection_events "
-                    "WHERE detected_at < NOW() - make_interval(days => :days)"
+                    "WHERE detected_at < NOW() - make_interval(days => :days) "
+                    "AND NOT EXISTS (SELECT 1 FROM employees e "
+                    "WHERE e.identity_id = detection_events.identity_id)"
                 ),
                 {"days": int(config.EVENT_RETENTION_DAYS)},
             )

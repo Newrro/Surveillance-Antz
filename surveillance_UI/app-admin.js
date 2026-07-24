@@ -220,6 +220,63 @@ async function doEnrollEmployee() {
   }
 }
 
+/* ---------- Merge this person INTO an employee (searchable picker) ----------
+   The current person in the modal (a Visitor, usually) is folded under a chosen
+   employee: all their sightings/history move under the employee, who keeps their
+   identity. Backed by Brain.mergeIdentities(primary=employee, duplicates=[current]). */
+function mergeCurrentPersonInto() {
+  const p = PEOPLE[plogPersonId];
+  if (!p) return;
+  if (p.identityId == null) {
+    alert('This person has no identity yet — name them first (Rename), then merge.');
+    return;
+  }
+  document.getElementById('mergeinto-sub').textContent =
+    `Move ${personName(p)}'s sightings under the selected employee. This can be undone by re-merging.`;
+  document.getElementById('mergeinto-search').value = '';
+  renderMergeIntoList('');
+  document.getElementById('mergeinto-modal').classList.add('open');
+  setTimeout(() => document.getElementById('mergeinto-search')?.focus(), 50);
+}
+function closeMergeInto() { document.getElementById('mergeinto-modal').classList.remove('open'); }
+function closeMergeIntoIfBackdrop(e) { if (e.target.id === 'mergeinto-modal') closeMergeInto(); }
+
+function renderMergeIntoList(q) {
+  const cur = PEOPLE[plogPersonId];
+  const term = (q || '').trim().toLowerCase();
+  const emps = Object.values(PEOPLE)
+    .filter(p => p.category === 'Employee' && p.identityId !== (cur && cur.identityId))
+    .filter(p => !term || (personName(p) + ' ' + (p.employeeId || '') + ' ' + p.userId).toLowerCase().includes(term))
+    .sort((a, b) => personName(a).localeCompare(personName(b), undefined, { sensitivity: 'base' }));
+  const box = document.getElementById('mergeinto-list');
+  box.innerHTML = emps.length ? emps.map(e => `
+    <button class="mergeinto-row" onclick="doMergeInto('${e.userId}')">
+      <div class="avatar mergeinto-av" style="${photoCss(e)}">${e.initials}</div>
+      <div class="mergeinto-who"><div class="name">${personName(e)}</div>
+        <div class="sub">${e.employeeId || e.userId}${e.department ? ' · ' + e.department : ''}</div></div>
+      <i class="ti ti-arrow-merge"></i>
+    </button>`).join('')
+    : `<p class="desc" style="padding:8px 2px">No matching employees.</p>`;
+}
+
+async function doMergeInto(empUserId) {
+  const cur = PEOPLE[plogPersonId];
+  const emp = PEOPLE[empUserId];
+  if (!cur || !emp || cur.identityId == null || emp.identityId == null) return;
+  if (!confirm(`Merge ${personName(cur)} into employee ${personName(emp)}? Their sightings will move under ${personName(emp)}.`)) return;
+  try {
+    if (!BRAIN_ON) throw new Error('Brain not connected');
+    await Brain.mergeIdentities({ user: AUTH.username, pass: AUTH.password }, emp.identityId, [cur.identityId]);
+    closeMergeInto();
+    closePersonLog();
+    await connectBrain();
+    renderReport(); renderRecords();
+    if (currentView === 'log') renderLog();
+  } catch (e) {
+    alert('Merge failed: ' + e.message);
+  }
+}
+
 /* ---------- Edit profile (Employees): photo / name / employee-id / department ----------
    The photo only changes when a new one is uploaded here; it is then LOCKED so the
    pipeline never overwrites it with a captured frame. */

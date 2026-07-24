@@ -77,6 +77,21 @@ def write_profile_from_bytes(identity_id: int, data: bytes) -> Optional[str]:
         return None
 
 
+def delete_profile(identity_id: Optional[int]) -> None:
+    """Remove an identity's durable profile photo AND its lock marker. Called when
+    an identity is erased so no orphan avatar is left behind. Best-effort; never
+    raises (a missing file is fine)."""
+    if identity_id is None:
+        return
+    for p in (_abs(identity_id), lock_path(identity_id)):
+        try:
+            os.remove(p)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            logger.warning("could not delete profile artefact %s: %s", p, e)
+
+
 def write_profile_from_path(identity_id: int, src_abs: Optional[str]) -> Optional[str]:
     """Copy an already-saved image (e.g. the enrollment face crop) into the durable
     profile slot and pin it. Returns the repo-relative path, or None. Never raises."""

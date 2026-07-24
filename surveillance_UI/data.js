@@ -1,7 +1,12 @@
-/* Dummy data — replace with live API / AI pipeline output.
-   Today (for the demo) is 2026-07-02; history spans 2026-07-01..02. */
+/* Dummy data — replace with live API / AI pipeline output. */
 
-const TODAY = '2026-07-02';
+/* "Today" = the viewer's real local date (YYYY-MM-DD). Used for the Log calendar
+   default and the client-side today-based views. en-CA formats as YYYY-MM-DD. */
+const TODAY = new Date().toLocaleDateString('en-CA');
+
+/* Authoritative visit/inside counts from the Brain (GET /stats/occupancy). Null
+   until first fetched — the count/list helpers fall back to client-side logic. */
+let OCCUPANCY = null;
 
 /* Fallback camera list — used only when the page is opened as a plain file
    (file://). When served by server.py the live list comes from /api/cameras,
@@ -162,6 +167,7 @@ function allLocations() {
    leaving through a gate. We treat a gate as an exit point: if someone's most
    recent sighting today is at a "Gate", they're considered to have exited. */
 function countInside() {
+  if (OCCUPANCY && typeof OCCUPANCY.inside === 'number') return OCCUPANCY.inside;
   let n = 0;
   Object.values(PEOPLE).forEach(p => {
     const today = p.history
@@ -174,18 +180,33 @@ function countInside() {
   return n;
 }
 
-/* Count of people who entered the premises today = anyone with at least one
-   sighting dated today. */
+/* Count of people who entered the premises today. */
 function countVisitsToday() {
+  if (OCCUPANCY && typeof OCCUPANCY.visits === 'number') return OCCUPANCY.visits;
   return Object.values(PEOPLE).filter(p => p.history.some(h => h.date === TODAY)).length;
 }
 
-/* People currently inside the premises, with their movement trail for today.
-   Same rule as countInside(): present today and last seen NOT at a gate.
-   Returns [{ p, entry, last, trail }] sorted by entry time (earliest first),
-   where `trail` is today's sightings in chronological order — the path the
-   auto-track simulation follows across cameras. */
+/* Build [{p, entry, last, trail}] from a Brain id list (`ID-<identity_id>` keys),
+   using today's chronological trail (falls back to full history for entry/last so
+   the row still labels even if today's sightings aren't in the loaded window). */
+function _occPeople(ids) {
+  const out = [];
+  (ids || []).forEach(id => {
+    const p = PEOPLE['ID-' + id];
+    if (!p) return;
+    const today = p.history.filter(h => h.date === TODAY).sort((a, b) => a.time.localeCompare(b.time));
+    const t = today.length ? today : p.history.slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+    const entry = t[0] || { time: '', location: '—' };
+    out.push({ p, entry, last: t[t.length - 1] || entry, trail: t });
+  });
+  out.sort((a, b) => a.entry.time.localeCompare(b.entry.time));
+  return out;
+}
+
+/* People currently inside — from the Brain's inside_ids when available, else the
+   client rule (present today, last sighting not at a gate). */
 function peopleInside() {
+  if (OCCUPANCY && Array.isArray(OCCUPANCY.inside_ids)) return _occPeople(OCCUPANCY.inside_ids);
   const out = [];
   Object.values(PEOPLE).forEach(p => {
     const trail = p.history
@@ -200,10 +221,10 @@ function peopleInside() {
   return out;
 }
 
-/* People who ENTERED the premises today = anyone with a sighting today (whether
-   or not they've since left). Returns [{ p, entry, last, trail }] sorted by entry
-   time — backs the clickable "No. of visits today" grid tile. */
+/* People who ENTERED today — from the Brain's entered_ids when available, else
+   anyone with a sighting today. */
 function peopleEnteredToday() {
+  if (OCCUPANCY && Array.isArray(OCCUPANCY.entered_ids)) return _occPeople(OCCUPANCY.entered_ids);
   const out = [];
   Object.values(PEOPLE).forEach(p => {
     const trail = p.history

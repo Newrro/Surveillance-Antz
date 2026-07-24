@@ -86,6 +86,16 @@ const Brain = (() => {
     }
   }
 
+  // Live headcount for the Grid: { visits, inside, entered_ids, inside_ids }.
+  async function occupancy() {
+    try {
+      return await getJSON('/stats/occupancy', { timeout: 5000 });
+    } catch (e) {
+      console.warn('[Brain] /stats/occupancy failed:', e.message);
+      return null;
+    }
+  }
+
   /* ---------- shape mappers: Brain -> UI ---------- */
 
   // "EMP-2026-0001" / "VIS-2026-0007" -> initials-ish token for the avatar.
@@ -291,6 +301,43 @@ const Brain = (() => {
     state.connected = true;
     console.info(`[Brain] hydrated ${Object.keys(PEOPLE).length} people (${events.length} events + ${roster.length} roster rows) @ ${BASE}`);
     return true;
+  }
+
+  /* ---------- lazy per-person FULL history (fetched when a card/modal opens) ----------
+     The hydrate above only pulls a recent event window, so a person's older days
+     (esp. a frequently-seen employee) aren't in p.history. The first time a person
+     is opened we fetch their FULL history from /person/{id} and rebuild p.history via
+     upsertPerson (same dedupe/photo/evidence logic). Unknowns have no identity → their
+     single roster sighting is all there is. */
+  async function loadPersonHistory(userId, camNameById) {
+    const p = PEOPLE[userId];
+    if (!p || p.historyLoaded) return p || null;
+    if (p.identityId == null) { p.historyLoaded = true; return p; }   // Unknown → one sighting only
+    let prof;
+    try {
+      prof = await getJSON(`/person/${p.identityId}`);
+    } catch (e) {
+      console.warn('[Brain] /person failed:', e.message);
+      return p;                       // keep what we have
+    }
+    const hist = (prof && prof.history) || [];
+    p.history = [];                   // rebuild from the authoritative full history
+    p._photoTime = null;
+    hist.forEach(h => {
+      upsertPerson(PEOPLE, {
+        identity_id: p.identityId, person_id: p.displayLabel,
+        label: p.category, name: p.name,
+        camera: h.camera, camera_id: h.camera_id, time: h.time,
+        event_id: h.event_id, detection_id: h.detection_id, track_uuid: h.track_uuid,
+        confidence: h.confidence, similarity: h.similarity, matched_by: h.matched_by,
+        face: h.face, body: h.body,
+        full_frame: h.full_frame, full_frame_annotated: h.full_frame_annotated,
+        snapshot: h.snapshot, clip: h.clip, profile: prof.profile || null,
+      }, camNameById);
+    });
+    if (p.sightingCount == null) p.sightingCount = p.history.length;
+    p.historyLoaded = true;
+    return p;
   }
 
   /* ---------- live WS stream ---------- */
@@ -549,7 +596,7 @@ const Brain = (() => {
   return {
     get base() { return state.base; },
     get connected() { return state.connected; },
-    health, hydrate, connectLive, applyLiveEvent, enrollEmployee, findLive, resetDatabase, setName, promoteToEmployee, clearUnknowns, consolidate, mergeIdentities, deleteIdentities, enrollEmployeePhoto, updateEmployee, setProfilePhoto, attendance, deleteSighting,
+    health, occupancy, hydrate, loadPersonHistory, connectLive, applyLiveEvent, enrollEmployee, findLive, resetDatabase, setName, promoteToEmployee, clearUnknowns, consolidate, mergeIdentities, deleteIdentities, enrollEmployeePhoto, updateEmployee, setProfilePhoto, attendance, deleteSighting,
     searchIdentities, hideSightings, reassignSightings, splitCase, unmerge, importEmployees, importStatus,
     // exposed for reuse/testing
     _map: { splitTime, locationFor, personKey, upsertPerson },
